@@ -23,11 +23,36 @@ class SignalGenerator(ABC):
     
     输入：原始 K 线数据
     输出：Signal / SignalSeries
+    
+    支持：
+    1. 传统技术指标（无需训练，直接计算）
+    2. 机器学习模型（需要训练/拟合）
+    3. 遗传编程（需要进化优化）
     """
     
     def __init__(self, name: str):
         self.name = name
         self.params: Dict[str, Any] = {}
+        self.is_fitted = True  # 默认已拟合（传统指标不需要训练）
+    
+    def fit(self, data: pd.DataFrame, target: pd.Series = None, **kwargs):
+        """
+        训练/拟合信号生成器（可选）
+        
+        对于传统技术指标：不需要实现，保持 is_fitted=True
+        对于机器学习/遗传编程：需要重写此方法实现训练逻辑
+        
+        Args:
+            data: K 线数据（训练集）
+            target: 目标变量（如未来收益率），可选
+            **kwargs: 其他训练参数
+            
+        Returns:
+            self: 返回自身，支持链式调用
+        """
+        # 默认实现：什么也不做，保持 is_fitted=True
+        # 子类可以根据需要重写
+        return self
     
     @abstractmethod
     def generate(self, data: pd.DataFrame) -> pd.Series:
@@ -51,7 +76,17 @@ class SignalGenerator(ABC):
             
         Returns:
             Signal: 最新信号
+            
+        Raises:
+            ValueError: 如果模型未拟合（is_fitted=False）
         """
+        # 检查拟合状态
+        if not self.is_fitted:
+            raise ValueError(
+                f"Signal generator '{self.name}' is not fitted. "
+                f"Call fit() method before generating signals."
+            )
+        
         series = self.generate(data)
         latest_value = series.iloc[-1] if not series.empty else 0
         
@@ -68,8 +103,43 @@ class SignalGenerator(ABC):
             value=latest_value,
             direction=direction,
             timestamp=datetime.now(),
-            metadata={'params': self.params}
+            metadata={
+                'params': self.params,
+                'is_fitted': self.is_fitted
+            }
         )
+    
+    def save(self, path: str):
+        """
+        保存模型到文件
+        
+        Args:
+            path: 文件路径
+        
+        Usage:
+            signal.save('my_model.pkl')
+        """
+        import pickle
+        with open(path, 'wb') as f:
+            pickle.dump(self, f)
+    
+    @classmethod
+    def load(cls, path: str) -> 'SignalGenerator':
+        """
+        从文件加载模型
+        
+        Args:
+            path: 文件路径
+        
+        Returns:
+            SignalGenerator: 加载的模型实例
+        
+        Usage:
+            model = MASignal.load('my_model.pkl')
+        """
+        import pickle
+        with open(path, 'rb') as f:
+            return pickle.load(f)
     
     def __str__(self):
         params_str = ', '.join(f"{k}={v}" for k, v in self.params.items())
