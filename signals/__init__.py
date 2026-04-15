@@ -25,6 +25,7 @@
   ├── combiner.py          # 信号融合器（投票/打分/加权/自适应）
   ├── registry.py          # 信号注册器和模板
   ├── threshold.py         # 阈值策略
+  ├── timeframe.py         # 多周期数据处理（对齐、转换、特征）
   └── examples.py          # 使用示例
 """
 
@@ -76,6 +77,11 @@ from .threshold import (
     get_threshold_preset,
 )
 
+from .timeframe import (
+    MultiTimeframeAligner,  # 多周期数据对齐器
+    FrequencyConverter,     # 频率转换器
+)
+
 __all__ = [
     # 基类
     'Signal',
@@ -115,4 +121,7 @@ __all__ = [
     'DualThreshold',
     'THRESHOLD_PRESETS',
     'get_threshold_preset',
+    # 多周期处理
+    'MultiTimeframeAligner',
+    'FrequencyConverter',
 ]

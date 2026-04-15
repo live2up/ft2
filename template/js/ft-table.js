@@ -1,6 +1,28 @@
 /**
- * FT Table Component v1.5.20260323-1
+ * FT Table Component v1.6.20260331-5
  * 版本号说明：主版本。次版本。日期（YYYYMMDD）-修订号
+ *
+ * 新功能 v1.6：
+ * - 通配符 '*' 支持：显示所有未指定的字段
+ *   用法：:cols="['代码', '涨跌幅', '*']"
+ *   位置决定其他字段的显示位置
+ *
+ * - 通配符排除支持：{ field: '*', exclude: ['字段1', '字段2'] }
+ *   用法：:cols="[
+ *     { field: '名称', title: '股票信息', slot: 'cell-组合' },
+ *     { field: '*', exclude: ['代码', '名称'] }
+ *   ]"
+ *   排除的字段不显示，但数据仍可在插槽中通过 row 访问
+ *
+ * 修复 v1.6.20260331-3：
+ * - 热力图范围计算改为基于完整数据，不受分页、排序影响
+ * - excludeRows 索引改为全局索引（之前是分页索引）
+ *
+ * 优化 v1.6.20260331-4：
+ * - 移除多余的 totalRecords computed，直接使用 props.data.length
+ *
+ * 优化 v1.6.20260331-5：
+ * - 移除字段过滤逻辑，支持操作列等虚拟列（字段不存在于数据但有插槽的列）
  * */
 
 const FtTable = {
@@ -93,36 +115,94 @@ const FtTable = {
       return Math.ceil(props.data.length / pageSize.value) || 1;
     });
 
-    // 总记录数
-    const totalRecords = computed(() => props.data.length);
-
     // 显示的列（处理 cols 格式）
     // cols 可选：不传或无效时自动推断所有字段
+    // 支持通配符 '*'：表示所有未指定的字段，位置决定其他字段的显示位置
+    // 支持对象格式 { field: '*', exclude: ['字段1', '字段2'] }：排除指定字段
     const displayCols = computed(() => {
       // 检查 cols 是否有效数组
       const isValidCols = Array.isArray(props.cols) && props.cols.length > 0;
 
-      if (isValidCols) {
-        // 处理字符串数组格式 ["代码", "名称"] → [{field: "代码", title: "代码", slot: "cell-代码"}]
-        return props.cols.map(col => {
-          if (typeof col === 'string') {
-            return { field: col, title: col, slot: 'cell-' + col };
-          }
-          // 处理对象格式，自动生成 slot 名称
-          const slotName = col.slot || (col.field ? 'cell-' + col.field : null);
-          return { ...col, slot: slotName };
-        });
-      }
+      // 从数据获取所有字段
+      const allFields = (props.data && props.data.length > 0)
+        ? Object.keys(props.data[0])
+        : [];
 
-      // cols 无效或为空：从数据自动推断所有字段
-      if (props.data && props.data.length > 0) {
-        return Object.keys(props.data[0]).map(key => ({
+      if (!isValidCols) {
+        // cols 无效或为空：从数据自动推断所有字段
+        return allFields.map(key => ({
           field: key,
           title: key,
           slot: 'cell-' + key
         }));
       }
-      return [];
+
+      // 查找通配符 '*' 的位置（字符串 '*' 或对象 { field: '*' }）
+      const wildcardIndex = props.cols.findIndex(col => {
+        if (col === '*') return true;
+        if (typeof col === 'object' && col !== null && col.field === '*') return true;
+        return false;
+      });
+
+      if (wildcardIndex === -1) {
+        // 无通配符：只显示 cols 中的字段
+        return props.cols.map(col => {
+          if (typeof col === 'string') {
+            return { field: col, title: col, slot: 'cell-' + col };
+          }
+          const slotName = col.slot || (col.field ? 'cell-' + col.field : null);
+          return { ...col, slot: slotName };
+        });
+      }
+
+      // 有通配符：收集已指定的字段
+      const specifiedFields = new Set();
+      const specifiedCols = [];
+
+      props.cols.forEach((col, index) => {
+        if (col === '*') return;
+        if (typeof col === 'object' && col !== null && col.field === '*') return;
+        const field = typeof col === 'string' ? col : col.field;
+        if (field) {
+          specifiedFields.add(field);
+          if (typeof col === 'string') {
+            specifiedCols.push({ field: col, title: col, slot: 'cell-' + col, _index: index });
+          } else {
+            const slotName = col.slot || (col.field ? 'cell-' + col.field : null);
+            specifiedCols.push({ ...col, title: col.title || field, slot: slotName, _index: index });
+          }
+        }
+      });
+
+      // 获取通配符配置中的 exclude 列表
+      const wildcardCol = props.cols[wildcardIndex];
+      const excludeFields = new Set();
+      if (typeof wildcardCol === 'object' && wildcardCol.exclude) {
+        wildcardCol.exclude.forEach(f => excludeFields.add(f));
+      }
+
+      // 获取未指定的字段（保持数据中的顺序），并排除 exclude 中的字段
+      const unspecifiedFields = allFields.filter(f => !specifiedFields.has(f) && !excludeFields.has(f));
+
+      // 构建最终列配置：按 cols 顺序，'*' 替换为未指定字段
+      const result = [];
+      props.cols.forEach((col, index) => {
+        if (col === '*' || (typeof col === 'object' && col !== null && col.field === '*')) {
+          // 插入所有未指定的字段
+          unspecifiedFields.forEach(f => {
+            result.push({ field: f, title: f, slot: 'cell-' + f });
+          });
+        } else {
+          // 查找对应的列配置
+          const colConfig = specifiedCols.find(c => c._index === index);
+          if (colConfig) {
+            const { _index, ...rest } = colConfig;
+            result.push(rest);
+          }
+        }
+      });
+
+      return result;
     });
 
     // 检查是否有自定义插槽
@@ -184,8 +264,9 @@ const FtTable = {
     });
 
     // 热力图范围缓存（支持分组）
+    // 基于完整数据计算，不受分页、排序影响
     const heatmapRanges = computed(() => {
-      const data = paginatedData.value;
+      const data = props.data;
       const cols = displayCols.value;
 
       if (data.length === 0) return {};
@@ -388,7 +469,7 @@ const FtTable = {
         const newScrollLeft = Math.max(0, colLeft - freezeLeftWidth);
         tableContainer.value.scrollLeft = newScrollLeft;
       } else if (rightOverlap > 10 && rightOverlap > leftOverlap) {
-        // 向右滚动，让列紧贴右侧冻结列（预留 20px 显示排序图标）
+        // 向右滚动，让列紧贴右侧冻结列
         tableContainer.value.scrollLeft = colRight - containerWidth + freezeRightWidth + 20;
       }
     };
@@ -742,13 +823,17 @@ const FtTable = {
       if (!config) return false;
 
       const cols = displayCols.value;
-      const data = paginatedData.value;
+
+      // 将分页索引转换为全局索引
+      const globalRowIndex = pageConfig.value 
+        ? (currentPage.value - 1) * pageSize.value + rowIndex 
+        : rowIndex;
 
       const excludeRowsSet = new Set(
-        (config.excludeRows || []).map(idx => idx < 0 ? data.length + idx : idx)
+        (config.excludeRows || []).map(idx => idx < 0 ? props.data.length + idx : idx)
       );
 
-      if (excludeRowsSet.has(rowIndex)) return false;
+      if (excludeRowsSet.has(globalRowIndex)) return false;
 
       if (config.columns && config.columns.length > 0) {
         return config.columns.includes(col.field);
@@ -984,7 +1069,6 @@ const FtTable = {
       paginatedData,
       currentPage,
       totalPages,
-      totalRecords,
       pageSize,
       pageConfig,
       hasFreeze,
@@ -1087,7 +1171,7 @@ const FtTable = {
       </div>
       
       <!-- 分页：数据量超过每页条数时显示 -->
-      <div v-if="pageConfig !== false && totalRecords > pageSize" class="ft-table-pagination">
+      <div v-if="pageConfig !== false && data.length > pageSize" class="ft-table-pagination">
         <!-- 首页 -->
         <button 
           @click="handlePageChange(1)"
