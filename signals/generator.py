@@ -364,8 +364,11 @@ class RSRSMSignal(SignalGenerator):
             if window_low.std() == 0:
                 slopes.append(np.nan)
             else:
-                cov = np.cov(window_low, window_high)[0, 1]
-                var = np.var(window_low)
+                # 转换为 numpy 数组避免 pandas 兼容性问题
+                low_values = window_low.values
+                high_values = window_high.values
+                cov = np.cov(low_values, high_values)[0, 1]
+                var = np.var(low_values)
                 beta = cov / var
                 slopes.append(beta)
         
@@ -483,3 +486,166 @@ def volatility_signal(data: pd.DataFrame, period: int = 20) -> pd.Series:
     std = close.rolling(period).std()
     bandwidth = (2 * std) / mid
     return bandwidth
+
+
+class CCISignal(SignalGenerator):
+    """CCI 商品通道指数信号
+    
+    信号值：
+    - > 100: 超买，做空信号
+    - < -100: 超卖，做多信号
+    - 0: 多空分界线
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"CCI{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high']
+        low = data['low']
+        close = data['close']
+        
+        # 计算典型价格
+        typical_price = (high + low + close) / 3
+        
+        # 计算 CCI
+        ma = typical_price.rolling(self.period).mean()
+        mad = typical_price.rolling(self.period).apply(lambda x: np.abs(x - x.mean()).mean())
+        
+        cci = (typical_price - ma) / (0.015 * mad)
+        cci = cci.fillna(0)
+        
+        # 信号 = CCI（已经中心化）
+        return cci
+
+
+class WRSignal(SignalGenerator):
+    """威廉指标信号
+    
+    信号值：
+    - > 80: 超卖，做多信号
+    - < 20: 超买，做空信号
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"WR{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high']
+        low = data['low']
+        close = data['close']
+        
+        # 计算 N 日最高价和最低价
+        highest_high = high.rolling(self.period).max()
+        lowest_low = low.rolling(self.period).min()
+        
+        # 计算 WR
+        wr = -100 * (highest_high - close) / (highest_high - lowest_low)
+        wr = wr.fillna(-50)
+        
+        # 信号 = WR + 50（中心化到 0 附近）
+        return wr + 50
+
+
+class ROCSignal(SignalGenerator):
+    """ROC 变化率指标信号
+    
+    信号值：
+    - > 0: 价格上涨，做多信号
+    - < 0: 价格下跌，做空信号
+    """
+    
+    def __init__(self, period: int = 12):
+        super().__init__(f"ROC{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close']
+        
+        # 计算 ROC
+        roc = (close / close.shift(self.period) - 1) * 100
+        roc = roc.fillna(0)
+        
+        # 信号 = ROC（已经中心化）
+        return roc
+
+
+class OBVSignal(SignalGenerator):
+    """OBV 能量潮指标信号
+    
+    信号值：
+    - OBV 上升：资金流入，做多信号
+    - OBV 下降：资金流出，做空信号
+    """
+    
+    def __init__(self, signal_period: int = 10):
+        super().__init__(f"OBV{signal_period}")
+        self.signal_period = signal_period
+        self.params = {'signal_period': signal_period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close']
+        volume = data['volume']
+        
+        # 计算 OBV
+        direction = np.sign(close.diff())
+        obv = (volume * direction).cumsum()
+        
+        # 信号 = OBV 的移动平均变化率
+        obv_ma = obv.rolling(self.signal_period).mean()
+        signal = obv_ma.pct_change() * 100
+        signal = signal.fillna(0)
+        
+        return signal
+
+
+class DMISignal(SignalGenerator):
+    """DMI 趋向指标信号
+    
+    信号值：
+    - +DI > -DI: 多头趋势
+    - +DI < -DI: 空头趋势
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"DMI{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high']
+        low = data['low']
+        close = data['close']
+        
+        # 计算 +DM 和 -DM
+        high_diff = high.diff()
+        low_diff = low.diff()
+        
+        plus_dm = np.where((high_diff > low_diff.diff().abs()) & (high_diff > 0), high_diff, 0)
+        minus_dm = np.where((low_diff.abs() > high_diff) & (low_diff < 0), low_diff.abs(), 0)
+        
+        # 计算 TR
+        tr1 = high - low
+        tr2 = abs(high - close.shift(1))
+        tr3 = abs(low - close.shift(1))
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
+        # 平滑处理
+        plus_dm_smooth = pd.Series(plus_dm, index=data.index).rolling(self.period).sum()
+        minus_dm_smooth = pd.Series(minus_dm, index=data.index).rolling(self.period).sum()
+        tr_smooth = pd.Series(tr).rolling(self.period).sum()
+        
+        # 计算 +DI 和 -DI
+        plus_di = 100 * plus_dm_smooth / tr_smooth
+        minus_di = 100 * minus_dm_smooth / tr_smooth
+        
+        # 信号 = +DI - -DI
+        signal = plus_di - minus_di
+        signal = signal.fillna(0)
+        
+        return signal
