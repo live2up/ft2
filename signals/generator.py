@@ -649,3 +649,155 @@ class DMISignal(SignalGenerator):
         signal = signal.fillna(0)
         
         return signal
+
+
+# =============================================================================
+# 通用指标信号生成器
+# =============================================================================
+
+class IndicatorSignal(SignalGenerator):
+    """
+    通用指标信号生成器
+    
+    通过注入计算函数，支持任意指标。
+    无需为每个指标编写完整类。
+    
+    用法:
+        from ft2.signals.indicators import calc_kama_cross
+        
+        signal = IndicatorSignal(
+            name="KAMA10_30",
+            calc_func=calc_kama_cross,
+            params={'short': 10, 'long': 30},
+            normalize=True
+        )
+    """
+    
+    def __init__(
+        self,
+        name: str,
+        calc_func: Callable[[pd.DataFrame, Dict[str, Any]], pd.Series],
+        params: Dict[str, Any] = None,
+        normalize: bool = True,
+        threshold: float = 0.0
+    ):
+        """
+        Args:
+            name: 信号名称（如 "KAMA10_30"）
+            calc_func: 计算函数，签名: func(data: DataFrame, params: dict) -> Series
+            params: 计算参数（如 {'short': 10, 'long': 30}）
+            normalize: 是否标准化信号（使 0 为多空分界线）
+            threshold: 做多阈值（默认 >0 做多）
+        """
+        super().__init__(name)
+        self.calc_func = calc_func
+        self.params = params or {}
+        self.normalize = normalize
+        self.threshold = threshold
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        signal = self.calc_func(data, self.params)
+        
+        if self.normalize:
+            signal = self._normalize(signal)
+        
+        return signal
+    
+    def _normalize(self, signal: pd.Series) -> pd.Series:
+        """标准化信号，使 0 为多空分界线"""
+        median = signal.median()
+        return signal - median
+
+
+# =============================================================================
+# 工厂函数
+# =============================================================================
+
+def create_signal(
+    indicator: str,
+    short: int = None,
+    long: int = None,
+    period: int = None,
+    **kwargs
+) -> SignalGenerator:
+    """
+    快速创建信号生成器
+    
+    Args:
+        indicator: 指标名称（'ma', 'ema', 'kama', 't3', 'trima', 等）
+        short: 短期参数
+        long: 长期参数
+        period: 单参数指标（如 RSI 的 period）
+        **kwargs: 其他参数
+    
+    Returns:
+        SignalGenerator: 信号生成器实例
+    
+    Examples:
+        >>> create_signal('ma', short=5, long=20)
+        >>> create_signal('kama', short=10, long=30)
+        >>> create_signal('rsi', period=14)
+    """
+    from .indicators import (
+        calc_ma_cross, calc_ema_cross, calc_wma_cross,
+        calc_dema_cross, calc_tema_cross, calc_kama_cross,
+        calc_t3_cross, calc_trima_cross, calc_accbands
+    )
+    
+    factory = {
+        'ma': lambda: MASignal(short_period=short, long_period=long),
+        'macd': lambda: MACDSignal(fast=short, slow=long, signal=kwargs.get('signal', 9)),
+        'rsi': lambda: RSISignal(period=period),
+        'kdj': lambda: KDJSignal(n=period or 9),
+        'boll': lambda: BOLLSignal(period=period or 20),
+        'cci': lambda: CCISignal(period=period or 20),
+        'wr': lambda: WRSignal(period=period or 14),
+        'roc': lambda: ROCSignal(period=period or 12),
+        'obv': lambda: OBVSignal(signal_period=period or 10),
+        'dmi': lambda: DMISignal(period=period or 14),
+        'ema': lambda: IndicatorSignal(
+            f"EMA{short}_{long}",
+            calc_ema_cross,
+            {'short': short, 'long': long}
+        ),
+        'wma': lambda: IndicatorSignal(
+            f"WMA{short}_{long}",
+            calc_wma_cross,
+            {'short': short, 'long': long}
+        ),
+        'dema': lambda: IndicatorSignal(
+            f"DEMA{short}_{long}",
+            calc_dema_cross,
+            {'short': short, 'long': long}
+        ),
+        'tema': lambda: IndicatorSignal(
+            f"TEMA{short}_{long}",
+            calc_tema_cross,
+            {'short': short, 'long': long}
+        ),
+        'kama': lambda: IndicatorSignal(
+            f"KAMA{short}_{long}",
+            calc_kama_cross,
+            {'short': short, 'long': long}
+        ),
+        't3': lambda: IndicatorSignal(
+            f"T3{short}_{long}",
+            calc_t3_cross,
+            {'short': short, 'long': long, 'vf': kwargs.get('vf', 0.7)}
+        ),
+        'trima': lambda: IndicatorSignal(
+            f"TRIMA{short}_{long}",
+            calc_trima_cross,
+            {'short': short, 'long': long}
+        ),
+        'accbands': lambda: IndicatorSignal(
+            f"ACCBANDS{period or 20}",
+            calc_accbands,
+            {'period': period or 20}
+        ),
+    }
+    
+    if indicator not in factory:
+        raise ValueError(f"Unsupported indicator: {indicator}. Available: {list(factory.keys())}")
+    
+    return factory[indicator]()

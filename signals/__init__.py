@@ -48,6 +48,13 @@ from .generator import (
     RSRSMSignal,               # RSRS 信号
     CompositeSignal,           # 组合信号
     FunctionSignal,            # 函数式信号
+    CCISignal,                 # CCI 信号
+    WRSignal,                  # 威廉指标信号
+    ROCSignal,                 # ROC 信号
+    OBVSignal,                 # OBV 信号
+    DMISignal,                 # DMI 信号
+    IndicatorSignal,           # 通用指标信号（新增）
+    create_signal,             # 工厂函数（新增）
 )
 
 from .combiner import (
@@ -100,6 +107,13 @@ __all__ = [
     'RSRSMSignal',
     'CompositeSignal',
     'FunctionSignal',
+    'CCISignal',
+    'WRSignal',
+    'ROCSignal',
+    'OBVSignal',
+    'DMISignal',
+    'IndicatorSignal',            # 通用指标信号
+    'create_signal',              # 工厂函数
     # 融合器
     'SignalCombiner',
     'VotingCombiner',
