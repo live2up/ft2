@@ -2,8 +2,18 @@
 """
 信号生成器：指标计算 → 信号
 
+TA-Lib 分类：
+1. Overlap Studies (重叠研究/趋势指标)
+2. Momentum Indicators (动量指标)
+3. Volume Indicators (成交量指标)
+4. Volatility Indicators (波动率指标)
+5. Price Transform (价格转换)
+6. Cycle Indicators (周期指标)
+7. Pattern Recognition (形态识别)
+8. Statistic Functions (统计函数)
+
 支持：
-1. 内置信号生成器（MA、MACD、RSI、KDJ、BOLL、VOL、RSRS）
+1. 内置信号生成器（按 TA-Lib 分类组织）
 2. 自定义信号生成器（函数式）
 3. 可组合信号（多个生成器组合）
 """
@@ -13,6 +23,7 @@ from typing import Dict, List, Optional, Callable, Any
 from datetime import datetime
 import pandas as pd
 import numpy as np
+import talib
 
 from .base import Signal, SignalType, SignalDirection, SignalSeries
 
@@ -50,8 +61,6 @@ class SignalGenerator(ABC):
         Returns:
             self: 返回自身，支持链式调用
         """
-        # 默认实现：什么也不做，保持 is_fitted=True
-        # 子类可以根据需要重写
         return self
     
     @abstractmethod
@@ -80,7 +89,6 @@ class SignalGenerator(ABC):
         Raises:
             ValueError: 如果模型未拟合（is_fitted=False）
         """
-        # 检查拟合状态
         if not self.is_fitted:
             raise ValueError(
                 f"Signal generator '{self.name}' is not fitted. "
@@ -90,7 +98,6 @@ class SignalGenerator(ABC):
         series = self.generate(data)
         latest_value = series.iloc[-1] if not series.empty else 0
         
-        # 判断方向
         if latest_value > 0:
             direction = SignalDirection.LONG
         elif latest_value < 0:
@@ -110,33 +117,14 @@ class SignalGenerator(ABC):
         )
     
     def save(self, path: str):
-        """
-        保存模型到文件
-        
-        Args:
-            path: 文件路径
-        
-        Usage:
-            signal.save('my_model.pkl')
-        """
+        """保存模型到文件"""
         import pickle
         with open(path, 'wb') as f:
             pickle.dump(self, f)
     
     @classmethod
     def load(cls, path: str) -> 'SignalGenerator':
-        """
-        从文件加载模型
-        
-        Args:
-            path: 文件路径
-        
-        Returns:
-            SignalGenerator: 加载的模型实例
-        
-        Usage:
-            model = MASignal.load('my_model.pkl')
-        """
+        """从文件加载模型"""
         import pickle
         with open(path, 'rb') as f:
             return pickle.load(f)
@@ -147,7 +135,7 @@ class SignalGenerator(ABC):
 
 
 # =============================================================================
-# 内置信号生成器
+# 1. Overlap Studies (重叠研究/趋势指标)
 # =============================================================================
 
 class MASignal(SignalGenerator):
@@ -156,7 +144,6 @@ class MASignal(SignalGenerator):
     信号值：
     - > 0: 短期均线 > 长期均线（金叉）
     - < 0: 短期均线 < 长期均线（死叉）
-    - 绝对值越大，趋势越强
     """
     
     def __init__(self, short_period: int = 5, long_period: int = 20):
@@ -169,11 +156,507 @@ class MASignal(SignalGenerator):
         close = data['close']
         short_ma = close.rolling(self.short_period).mean()
         long_ma = close.rolling(self.long_period).mean()
-        
-        # 信号 = (短期 - 长期) / 长期（标准化）
         signal = (short_ma - long_ma) / long_ma
         return signal
 
+
+class BOLLSignal(SignalGenerator):
+    """布林带信号
+    
+    信号值：
+    - 价格 < 下轨: 超卖，做多信号
+    - 价格 > 上轨: 超买，做空信号
+    """
+    
+    def __init__(self, period: int = 20, std_dev: float = 2.0):
+        super().__init__(f"BOLL{period}_{std_dev}")
+        self.period = period
+        self.std_dev = std_dev
+        self.params = {'period': period, 'std_dev': std_dev}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close']
+        mid = close.rolling(self.period).mean()
+        std = close.rolling(self.period).std()
+        upper = mid + self.std_dev * std
+        lower = mid - self.std_dev * std
+        signal = (close - lower) / (upper - lower)
+        signal = signal.fillna(0.5)
+        return signal - 0.5
+
+
+class SARSignal(SignalGenerator):
+    """SAR 抛物线转向指标信号
+    
+    信号值：价格与 SAR 的差距
+    - 正值: SAR 在价格下方（多头）
+    - 负值: SAR 在价格上方（空头）
+    """
+    
+    def __init__(self, acceleration: float = 0.02, maximum: float = 0.2):
+        super().__init__(f"SAR")
+        self.acceleration = acceleration
+        self.maximum = maximum
+        self.params = {'acceleration': acceleration, 'maximum': maximum}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        sar = talib.SAR(high, low, acceleration=self.acceleration, maximum=self.maximum)
+        signal = pd.Series((close - sar) / close * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class MIDPOINTSignal(SignalGenerator):
+    """MIDPOINT 中点指标信号
+    
+    信号值：价格偏离中点的百分比
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"MIDPOINT{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        midpoint = talib.MIDPOINT(close, timeperiod=self.period)
+        signal = pd.Series((close - midpoint) / midpoint * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class DMISignal(SignalGenerator):
+    """DMI 趋向指标信号
+    
+    信号值：
+    - +DI > -DI: 多头趋势
+    - +DI < -DI: 空头趋势
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"DMI{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high']
+        low = data['low']
+        close = data['close']
+        
+        high_diff = high.diff()
+        low_diff = low.diff()
+        
+        plus_dm = np.where((high_diff > low_diff.diff().abs()) & (high_diff > 0), high_diff, 0)
+        minus_dm = np.where((low_diff.abs() > high_diff) & (low_diff < 0), low_diff.abs(), 0)
+        
+        tr1 = high - low
+        tr2 = abs(high - close.shift(1))
+        tr3 = abs(low - close.shift(1))
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
+        plus_dm_smooth = pd.Series(plus_dm, index=data.index).rolling(self.period).sum()
+        minus_dm_smooth = pd.Series(minus_dm, index=data.index).rolling(self.period).sum()
+        tr_smooth = pd.Series(tr).rolling(self.period).sum()
+        
+        plus_di = 100 * plus_dm_smooth / tr_smooth
+        minus_di = 100 * minus_dm_smooth / tr_smooth
+        
+        signal = plus_di - minus_di
+        signal = signal.fillna(0)
+        
+        return signal
+
+
+class AROONSignal(SignalGenerator):
+    """AROON 阿隆指标信号
+    
+    信号值：Aroon_Up - Aroon_Down
+    - 正值: 上升趋势
+    - 负值: 下降趋势
+    """
+    
+    def __init__(self, period: int = 25):
+        super().__init__(f"AROON{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high']
+        low = data['low']
+        
+        aroon_up = high.rolling(self.period + 1).apply(lambda x: x.argmax(), raw=True)
+        aroon_up = 100 * (self.period - aroon_up) / self.period
+        
+        aroon_down = low.rolling(self.period + 1).apply(lambda x: x.argmin(), raw=True)
+        aroon_down = 100 * (self.period - aroon_down) / self.period
+        
+        signal = aroon_up - aroon_down
+        signal = signal.fillna(0)
+        
+        return signal
+
+
+class SMASignal(SignalGenerator):
+    """SMA 简单移动平均信号
+    
+    信号值：价格偏离 SMA 的百分比
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"SMA{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        sma = talib.SMA(close, timeperiod=self.period)
+        signal = pd.Series((close - sma) / sma * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class EMASignal(SignalGenerator):
+    """EMA 指数移动平均信号
+    
+    信号值：价格偏离 EMA 的百分比
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"EMA{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        ema = talib.EMA(close, timeperiod=self.period)
+        signal = pd.Series((close - ema) / ema * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class WMASignal(SignalGenerator):
+    """WMA 加权移动平均信号
+    
+    信号值：价格偏离 WMA 的百分比
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"WMA{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        wma = talib.WMA(close, timeperiod=self.period)
+        signal = pd.Series((close - wma) / wma * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class DEMASignal(SignalGenerator):
+    """DEMA 双指数移动平均信号
+    
+    信号值：价格偏离 DEMA 的百分比
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"DEMA{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        dema = talib.DEMA(close, timeperiod=self.period)
+        signal = pd.Series((close - dema) / dema * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class TEMASignal(SignalGenerator):
+    """TEMA 三重指数移动平均信号
+    
+    信号值：价格偏离 TEMA 的百分比
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"TEMA{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        tema = talib.TEMA(close, timeperiod=self.period)
+        signal = pd.Series((close - tema) / tema * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class KAMASignal(SignalGenerator):
+    """KAMA 考夫曼自适应移动平均信号
+    
+    信号值：价格偏离 KAMA 的百分比
+    """
+    
+    def __init__(self, period: int = 30):
+        super().__init__(f"KAMA{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        kama = talib.KAMA(close, timeperiod=self.period)
+        signal = pd.Series((close - kama) / kama * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class T3Signal(SignalGenerator):
+    """T3 三重指数平滑移动平均信号
+    
+    信号值：价格偏离 T3 的百分比
+    """
+    
+    def __init__(self, period: int = 5, vfactor: float = 0.7):
+        super().__init__(f"T3{period}")
+        self.period = period
+        self.vfactor = vfactor
+        self.params = {'period': period, 'vfactor': vfactor}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        t3 = talib.T3(close, timeperiod=self.period, vfactor=self.vfactor)
+        signal = pd.Series((close - t3) / t3 * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class TRIMASignal(SignalGenerator):
+    """TRIMA 三角移动平均信号
+    
+    信号值：价格偏离 TRIMA 的百分比
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"TRIMA{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        trima = talib.TRIMA(close, timeperiod=self.period)
+        signal = pd.Series((close - trima) / trima * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class MAMASignal(SignalGenerator):
+    """MAMA 梅斯自适应移动平均信号
+    
+    信号值：价格偏离 MAMA 的百分比
+    """
+    
+    def __init__(self, fastlimit: float = 0.5, slowlimit: float = 0.05):
+        super().__init__("MAMA")
+        self.fastlimit = fastlimit
+        self.slowlimit = slowlimit
+        self.params = {'fastlimit': fastlimit, 'slowlimit': slowlimit}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        mama, fama = talib.MAMA(close, fastlimit=self.fastlimit, slowlimit=self.slowlimit)
+        signal = pd.Series((close - mama) / mama * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class MAVPSignal(SignalGenerator):
+    """MAVP 可变周期移动平均信号
+    
+    信号值：价格偏离 MAVP 的百分比
+    """
+    
+    def __init__(self, minperiod: int = 2, maxperiod: int = 30, matype: int = 0):
+        super().__init__("MAVP")
+        self.minperiod = minperiod
+        self.maxperiod = maxperiod
+        self.matype = matype
+        self.params = {'minperiod': minperiod, 'maxperiod': maxperiod, 'matype': matype}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        periods = np.linspace(self.minperiod, self.maxperiod, len(close))
+        mavp = talib.MAVP(close, periods, minperiod=self.minperiod, maxperiod=self.maxperiod, matype=self.matype)
+        signal = pd.Series((close - mavp) / mavp * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class AVGPRICESignal(SignalGenerator):
+    """AVGPRICE 平均价格信号
+    
+    信号值：(开盘+最高+最低+收盘)/4 与实际收盘价的差值百分比
+    """
+    
+    def __init__(self):
+        super().__init__("AVGPRICE")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        open_p = data['open'].values.astype(float)
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        avgprice = talib.AVGPRICE(open_p, high, low, close)
+        signal = pd.Series((close - avgprice) / avgprice * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class MEDPRICESignal(SignalGenerator):
+    """MEDPRICE 中间价格信号
+    
+    信号值：(最高+最低)/2 与实际收盘价的差值百分比
+    """
+    
+    def __init__(self):
+        super().__init__("MEDPRICE")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        medprice = talib.MEDPRICE(high, low)
+        signal = pd.Series((close - medprice) / medprice * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class TYPPRICESignal(SignalGenerator):
+    """TYPPRICE 典型价格信号
+    
+    信号值：(最高+最低+收盘)/3 与实际收盘价的差值百分比
+    """
+    
+    def __init__(self):
+        super().__init__("TYPPRICE")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        typprice = talib.TYPPRICE(high, low, close)
+        signal = pd.Series((close - typprice) / typprice * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class WCLPRICESignal(SignalGenerator):
+    """WCLPRICE 加权收盘价信号
+    
+    信号值：(最高+最低+2*收盘)/4 与实际收盘价的差值百分比
+    """
+    
+    def __init__(self):
+        super().__init__("WCLPRICE")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        wclprice = talib.WCLPRICE(high, low, close)
+        signal = pd.Series((close - wclprice) / wclprice * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class HTTRENDLINESignal(SignalGenerator):
+    """HT_TRENDLINE 希尔伯特瞬时趋势线信号
+    
+    信号值：价格偏离趋势线的百分比
+    """
+    
+    def __init__(self):
+        super().__init__("HT_TRENDLINE")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        ht_trendline = talib.HT_TRENDLINE(close)
+        signal = pd.Series((close - ht_trendline) / ht_trendline * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class MIDPRICESignal(SignalGenerator):
+    """MIDPRICE 中间价信号
+    
+    信号值：价格偏离中间价的百分比
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"MIDPRICE{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        midprice = talib.MIDPRICE(high, low, timeperiod=self.period)
+        signal = pd.Series((close - midprice) / midprice * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class SAREXTSignal(SignalGenerator):
+    """SAREXT SAR 扩展版信号
+    
+    信号值：价格与 SAR 的差距
+    """
+    
+    def __init__(self, start: float = 0.0, offset_on_reverse: float = 0.0, 
+                 acceleration_init_long: float = 0.02, acceleration_long: float = 0.02, 
+                 acceleration_max_long: float = 0.2, acceleration_init_short: float = 0.02, 
+                 acceleration_short: float = 0.02, acceleration_max_short: float = 0.2):
+        super().__init__("SAREXT")
+        self.start = start
+        self.offset_on_reverse = offset_on_reverse
+        self.acceleration_init_long = acceleration_init_long
+        self.acceleration_long = acceleration_long
+        self.acceleration_max_long = acceleration_max_long
+        self.acceleration_init_short = acceleration_init_short
+        self.acceleration_short = acceleration_short
+        self.acceleration_max_short = acceleration_max_short
+        self.params = {'start': start, 'offset_on_reverse': offset_on_reverse}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        sarext = talib.SAREXT(high, low, 
+                              startvalue=self.start, 
+                              offsetonreverse=self.offset_on_reverse,
+                              accelerationinitlong=self.acceleration_init_long,
+                              accelerationlong=self.acceleration_long,
+                              accelerationmaxlong=self.acceleration_max_long,
+                              accelerationinitshort=self.acceleration_init_short,
+                              accelerationshort=self.acceleration_short,
+                              accelerationmaxshort=self.acceleration_max_short)
+        signal = pd.Series((close - sarext) / close * 100, index=data.index)
+        return signal.fillna(0)
+
+
+class ACCBANDSSignal(SignalGenerator):
+    """ACCBANDS 加速度带信号
+    
+    信号值：价格在带中的位置（0-1 归一化）
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"ACCBANDS{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        upper, mid, lower = talib.ACCBANDS(high, low, close, timeperiod=self.period)
+        signal = pd.Series((close - lower) / (upper - lower), index=data.index)
+        return signal.fillna(0.5) - 0.5
+
+
+# =============================================================================
+# 2. Momentum Indicators (动量指标)
+# =============================================================================
 
 class MACDSignal(SignalGenerator):
     """MACD 信号
@@ -192,15 +675,10 @@ class MACDSignal(SignalGenerator):
     
     def generate(self, data: pd.DataFrame) -> pd.Series:
         close = data['close']
-        
         ema_fast = close.ewm(span=self.fast).mean()
         ema_slow = close.ewm(span=self.slow).mean()
         dif = ema_fast - ema_slow
         dea = dif.ewm(span=self.signal_period).mean()
-        macd = (dif - dea) * 2
-        
-        # 信号 = DIF - DEA（macd 柱）
-        # 也可以用标准化 DIF
         return dif - dea
 
 
@@ -210,7 +688,6 @@ class RSISignal(SignalGenerator):
     信号值：
     - > 70: 超买，做空信号
     - < 30: 超卖，做多信号
-    - 50: 多空分界线
     """
     
     def __init__(self, period: int = 14):
@@ -220,19 +697,14 @@ class RSISignal(SignalGenerator):
     
     def generate(self, data: pd.DataFrame) -> pd.Series:
         close = data['close']
-        
         delta = close.diff()
         gain = delta.where(delta > 0, 0)
         loss = -delta.where(delta < 0, 0)
-        
         avg_gain = gain.rolling(self.period).mean()
         avg_loss = loss.rolling(self.period).mean()
-        
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
         rsi = rsi.fillna(50)
-        
-        # 信号 = RSI - 50（中心化）
         return rsi - 50
 
 
@@ -264,228 +736,8 @@ class KDJSignal(SignalGenerator):
         
         k = rsv.ewm(com=self.m1 - 1).mean()
         d = k.ewm(com=self.m2 - 1).mean()
-        j = 3 * k - 2 * d
         
-        # 信号 = K - D
         return k - d
-
-
-class BOLLSignal(SignalGenerator):
-    """布林带信号
-    
-    信号值：
-    - 价格 < 下轨: 超卖，做多信号
-    - 价格 > 上轨: 超买，做空信号
-    """
-    
-    def __init__(self, period: int = 20, std_dev: float = 2.0):
-        super().__init__(f"BOLL{period}_{std_dev}")
-        self.period = period
-        self.std_dev = std_dev
-        self.params = {'period': period, 'std_dev': std_dev}
-    
-    def generate(self, data: pd.DataFrame) -> pd.Series:
-        close = data['close']
-        
-        mid = close.rolling(self.period).mean()
-        std = close.rolling(self.period).std()
-        
-        upper = mid + self.std_dev * std
-        lower = mid - self.std_dev * std
-        
-        # 信号 = (close - lower) / (upper - lower)
-        # 接近 0: 接近下轨；接近 1: 接近上轨
-        signal = (close - lower) / (upper - lower)
-        signal = signal.fillna(0.5)
-        
-        # 中心化：-0.5，这样 < -0.3 做多，> 0.3 做空
-        return signal - 0.5
-
-
-class VOLSignal(SignalGenerator):
-    """量能信号
-    
-    信号值：
-    - 量比 > 1: 放量，趋势可能延续
-    - 量比 < 1: 缩量，趋势可能反转
-    """
-    
-    def __init__(self, period: int = 5):
-        super().__init__(f"VOL{period}")
-        self.period = period
-        self.params = {'period': period}
-    
-    def generate(self, data: pd.DataFrame) -> pd.Series:
-        volume = data['volume']
-        
-        avg_volume = volume.rolling(self.period).mean()
-        vol_ratio = volume / avg_volume
-        
-        # 信号 = (量比 - 1)
-        return vol_ratio - 1
-
-
-class RSRSMSignal(SignalGenerator):
-    """
-    RSRS 信号（阻力支撑相对强度 - 上海证券版本）
-    
-    计算方法：
-    1. 取前 N 日最高价、最低价
-    2. 最高价对最低价做线性回归，得到斜率 β
-    3. 计算前 M 日斜率的标准化分 z
-    4. RSRS = z × R²
-    
-    信号值：
-    - > 0: 支撑 > 阻力，多头
-    - < 0: 支撑 < 阻力，空头
-    """
-    
-    def __init__(self, n: int = 18, m: int = 600):
-        super().__init__(f"RSRS{n}_{m}")
-        self.n = n      # 计算斜率的窗口
-        self.m = m      # 计算标准分的窗口
-        self.params = {'n': n, 'm': m}
-    
-    def generate(self, data: pd.DataFrame) -> pd.Series:
-        high = data['high']
-        low = data['low']
-        
-        # 计算每日的斜率
-        slopes = []
-        for i in range(len(high)):
-            if i < self.n - 1:
-                slopes.append(np.nan)
-                continue
-            
-            window_high = high.iloc[i - self.n + 1:i + 1]
-            window_low = low.iloc[i - self.n + 1:i + 1]
-            
-            # 线性回归：high = α + β × low
-            if window_low.std() == 0:
-                slopes.append(np.nan)
-            else:
-                # 转换为 numpy 数组避免 pandas 兼容性问题
-                low_values = window_low.values
-                high_values = window_high.values
-                cov = np.cov(low_values, high_values)[0, 1]
-                var = np.var(low_values)
-                beta = cov / var
-                slopes.append(beta)
-        
-        slope_series = pd.Series(slopes, index=data.index)
-        
-        # 计算标准分
-        if len(slope_series.dropna()) < self.m:
-            return slope_series.fillna(0)
-        
-        rolling_mean = slope_series.rolling(self.m).mean()
-        rolling_std = slope_series.rolling(self.m).std()
-        
-        z_score = (slope_series - rolling_mean) / rolling_std
-        z_score = z_score.fillna(0)
-        
-        return z_score
-
-
-class CompositeSignal(SignalGenerator):
-    """
-    组合信号生成器
-    
-    将多个信号生成器组合成一个
-    """
-    
-    def __init__(self, generators: List[SignalGenerator], name: str = None):
-        self.generators = generators
-        self._name = name or '_'.join([g.name for g in generators])
-        super().__init__(self._name)
-        self.params = {'generators': [g.name for g in generators]}
-    
-    def generate(self, data: pd.DataFrame) -> pd.Series:
-        all_signals = []
-        
-        for gen in self.generators:
-            signal = gen.generate(data)
-            all_signals.append(signal)
-        
-        # 等权平均
-        combined = pd.concat(all_signals, axis=1).mean(axis=1)
-        return combined
-    
-    def generate_latest(self, data: pd.DataFrame) -> Signal:
-        series = self.generate(data)
-        latest_value = series.iloc[-1] if not series.empty else 0
-        
-        # 获取所有生成器的最新信号
-        signals = [gen.generate_latest(data) for gen in self.generators]
-        
-        if latest_value > 0:
-            direction = SignalDirection.LONG
-        elif latest_value < 0:
-            direction = SignalDirection.SHORT
-        else:
-            direction = SignalDirection.NEUTRAL
-        
-        return Signal(
-            name=self.name,
-            value=latest_value,
-            direction=direction,
-            timestamp=datetime.now(),
-            metadata={'params': self.params, 'components': [s.to_dict() for s in signals]}
-        )
-
-
-# =============================================================================
-# 函数式信号生成器
-# =============================================================================
-
-class FunctionSignal(SignalGenerator):
-    """
-    函数式信号生成器
-    
-    通过函数定义信号
-    """
-    
-    def __init__(
-        self,
-        name: str,
-        func: Callable[[pd.DataFrame], pd.Series],
-        params: Dict[str, Any] = None
-    ):
-        super().__init__(name)
-        self.func = func
-        self.params = params or {}
-    
-    def generate(self, data: pd.DataFrame) -> pd.Series:
-        return self.func(data)
-
-
-def ma_cross_signal(data: pd.DataFrame, short: int = 5, long: int = 20) -> pd.Series:
-    """
-    均线交叉信号（函数形式）
-    """
-    close = data['close']
-    short_ma = close.rolling(short).mean()
-    long_ma = close.rolling(long).mean()
-    return (short_ma - long_ma) / long_ma
-
-
-def momentum_signal(data: pd.DataFrame, period: int = 20) -> pd.Series:
-    """
-    动量信号
-    """
-    close = data['close']
-    return close / close.shift(period) - 1
-
-
-def volatility_signal(data: pd.DataFrame, period: int = 20) -> pd.Series:
-    """
-    波动率信号（布林带宽度）
-    """
-    close = data['close']
-    mid = close.rolling(period).mean()
-    std = close.rolling(period).std()
-    bandwidth = (2 * std) / mid
-    return bandwidth
 
 
 class CCISignal(SignalGenerator):
@@ -494,7 +746,6 @@ class CCISignal(SignalGenerator):
     信号值：
     - > 100: 超买，做空信号
     - < -100: 超卖，做多信号
-    - 0: 多空分界线
     """
     
     def __init__(self, period: int = 20):
@@ -507,17 +758,13 @@ class CCISignal(SignalGenerator):
         low = data['low']
         close = data['close']
         
-        # 计算典型价格
         typical_price = (high + low + close) / 3
-        
-        # 计算 CCI
         ma = typical_price.rolling(self.period).mean()
         mad = typical_price.rolling(self.period).apply(lambda x: np.abs(x - x.mean()).mean())
         
         cci = (typical_price - ma) / (0.015 * mad)
         cci = cci.fillna(0)
         
-        # 信号 = CCI（已经中心化）
         return cci
 
 
@@ -539,15 +786,12 @@ class WRSignal(SignalGenerator):
         low = data['low']
         close = data['close']
         
-        # 计算 N 日最高价和最低价
         highest_high = high.rolling(self.period).max()
         lowest_low = low.rolling(self.period).min()
         
-        # 计算 WR
         wr = -100 * (highest_high - close) / (highest_high - lowest_low)
         wr = wr.fillna(-50)
         
-        # 信号 = WR + 50（中心化到 0 附近）
         return wr + 50
 
 
@@ -566,21 +810,556 @@ class ROCSignal(SignalGenerator):
     
     def generate(self, data: pd.DataFrame) -> pd.Series:
         close = data['close']
-        
-        # 计算 ROC
         roc = (close / close.shift(self.period) - 1) * 100
         roc = roc.fillna(0)
-        
-        # 信号 = ROC（已经中心化）
         return roc
 
+
+class STOCHFSignal(SignalGenerator):
+    """STOCHF 快速随机指标信号
+    
+    信号值：%K 值（归一化到 -50 ~ 50）
+    - < -30: 超卖
+    - > 30: 超买
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"STOCHF{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        
+        fastk, fastd = talib.STOCHF(high, low, close,
+                                     fastk_period=self.period,
+                                     fastd_period=1,
+                                     fastd_matype=0)
+        
+        signal = pd.Series(fastk - 50, index=data.index)
+        return signal.fillna(0)
+
+
+class CMOSignal(SignalGenerator):
+    """CMO 钱德动量指标信号
+    
+    信号值：CMO（归一化到 -100 ~ 100）
+    - > 50: 超买
+    - < -50: 超卖
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"CMO{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        cmo = talib.CMO(close, timeperiod=self.period)
+        return pd.Series(cmo, index=data.index).fillna(0)
+
+
+class MFISignal(SignalGenerator):
+    """MFI 资金流量指标信号
+    
+    信号值：MFI - 50
+    - > 30: 超买
+    - < -30: 超卖
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"MFI{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        volume = data['volume'].values.astype(float)
+        mfi = talib.MFI(high, low, close, volume, timeperiod=self.period)
+        return pd.Series(mfi - 50, index=data.index).fillna(0)
+
+
+class MOMSignal(SignalGenerator):
+    """MOM 动量指标信号
+    
+    信号值：价格变化率（百分比）
+    - 正值: 上升动量
+    - 负值: 下降动量
+    """
+    
+    def __init__(self, period: int = 10):
+        super().__init__(f"MOM{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        mom = talib.MOM(close, timeperiod=self.period)
+        signal = pd.Series(mom / close, index=data.index) * 100
+        return signal.fillna(0)
+
+
+class PPOSignal(SignalGenerator):
+    """PPO 比例 MACD 信号
+    
+    信号值：PPO 线（百分比 MACD）
+    - 正值: 多头趋势
+    - 负值: 空头趋势
+    """
+    
+    def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
+        super().__init__(f"PPO{fast}_{slow}_{signal}")
+        self.fast = fast
+        self.slow = slow
+        self.signal_period = signal
+        self.params = {'fast': fast, 'slow': slow, 'signal': signal}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        ppo, ppo_signal, _ = talib.PPO(close, fastperiod=self.fast, slowperiod=self.slow, matype=0)
+        return pd.Series(ppo, index=data.index).fillna(0)
+
+
+class STOCHRSISignal(SignalGenerator):
+    """STOCHRSI 随机 RSI 信号
+    
+    信号值：%K 值（归一化到 -50 ~ 50）
+    - < -30: 超卖
+    - > 30: 超买
+    """
+    
+    def __init__(self, period: int = 14, fastk: int = 5, fastd: int = 3):
+        super().__init__(f"STOCHRSI{period}")
+        self.period = period
+        self.fastk = fastk
+        self.fastd = fastd
+        self.params = {'period': period, 'fastk': fastk, 'fastd': fastd}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        fastk, fastd = talib.STOCHRSI(close, timeperiod=self.period, 
+                                       fastk_period=self.fastk, fastd_period=self.fastd)
+        return pd.Series(fastk - 50, index=data.index).fillna(0)
+
+
+class TRIXSignal(SignalGenerator):
+    """TRIX 三重指数平滑信号
+    
+    信号值：TRIX 变化率（放大 1000 倍）
+    - 正值: 上升动量
+    - 负值: 下降动量
+    """
+    
+    def __init__(self, period: int = 30):
+        super().__init__(f"TRIX{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        trix = talib.TRIX(close, timeperiod=self.period)
+        return pd.Series(trix, index=data.index).fillna(0) * 1000
+
+
+class ULTOSCSignal(SignalGenerator):
+    """ULTOSC 终极振荡器信号
+    
+    信号值：ULTOSC - 50
+    - < -20: 超卖
+    - > 20: 超买
+    """
+    
+    def __init__(self, period1: int = 7, period2: int = 14, period3: int = 28):
+        super().__init__(f"ULTOSC{period1}_{period2}_{period3}")
+        self.period1 = period1
+        self.period2 = period2
+        self.period3 = period3
+        self.params = {'period1': period1, 'period2': period2, 'period3': period3}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        ultosc = talib.ULTOSC(high, low, close, 
+                              timeperiod1=self.period1, 
+                              timeperiod2=self.period2, 
+                              timeperiod3=self.period3)
+        return pd.Series(ultosc - 50, index=data.index).fillna(0)
+
+
+class WILLRSignal(SignalGenerator):
+    """WILLR 威廉指标信号（TA-Lib 版本）
+    
+    信号值：W%R（-100 ~ 0）
+    - < -80: 超卖
+    - > -20: 超买
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"WILLR{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        willr = talib.WILLR(high, low, close, timeperiod=self.period)
+        return pd.Series(willr, index=data.index).fillna(0)
+
+
+class ADXSignal(SignalGenerator):
+    """ADX 平均趋向指数信号
+    
+    信号值：ADX（0-100）
+    - > 25: 强趋势
+    - < 20: 弱趋势/震荡
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"ADX{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        adx = talib.ADX(high, low, close, timeperiod=self.period)
+        return pd.Series(adx - 50, index=data.index).fillna(0)
+
+
+class ADXRSignal(SignalGenerator):
+    """ADXR 平均趋向指数评估信号
+    
+    信号值：ADXR（0-100）
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"ADXR{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        adxr = talib.ADXR(high, low, close, timeperiod=self.period)
+        return pd.Series(adxr - 50, index=data.index).fillna(0)
+
+
+class AROONOSCSignal(SignalGenerator):
+    """AROONOSC 阿隆振荡器信号
+    
+    信号值：Aroon Oscillator（-100 ~ +100）
+    - 正值: 上升趋势
+    - 负值: 下降趋势
+    """
+    
+    def __init__(self, period: int = 25):
+        super().__init__(f"AROONOSC{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        aroonosc = talib.AROONOSC(high, low, timeperiod=self.period)
+        return pd.Series(aroonosc, index=data.index).fillna(0)
+
+
+class APOSignal(SignalGenerator):
+    """APO 绝对价格振荡器信号
+    
+    信号值：快线 - 慢线（百分比）
+    """
+    
+    def __init__(self, fast: int = 12, slow: int = 26, matype: int = 0):
+        super().__init__(f"APO{fast}_{slow}")
+        self.fast = fast
+        self.slow = slow
+        self.matype = matype
+        self.params = {'fast': fast, 'slow': slow, 'matype': matype}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        apo = talib.APO(close, fastperiod=self.fast, slowperiod=self.slow, matype=self.matype)
+        return pd.Series(apo / close * 100, index=data.index).fillna(0)
+
+
+class DXSignal(SignalGenerator):
+    """DX 趋向指数信号
+    
+    信号值：DX（0-100）
+    - > 25: 强趋势
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"DX{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        dx = talib.DX(high, low, close, timeperiod=self.period)
+        return pd.Series(dx - 50, index=data.index).fillna(0)
+
+
+class IMISignal(SignalGenerator):
+    """IMI 日内动量指数信号
+    
+    信号值：IMI - 50
+    - > 20: 多头动量
+    - < -20: 空头动量
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"IMI{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        open_p = data['open'].values.astype(float)
+        close = data['close'].values.astype(float)
+        imi = talib.IMI(open_p, close, timeperiod=self.period)
+        return pd.Series(imi - 50, index=data.index).fillna(0)
+
+
+class MACDEXTSignal(SignalGenerator):
+    """MACDEXT MACD 扩展信号
+    
+    信号值：MACD 柱状图
+    """
+    
+    def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9, 
+                 fast_matype: int = 0, slow_matype: int = 0, signal_matype: int = 0):
+        super().__init__(f"MACDEXT{fast}_{slow}_{signal}")
+        self.fast = fast
+        self.slow = slow
+        self.signal_period = signal
+        self.fast_matype = fast_matype
+        self.slow_matype = slow_matype
+        self.signal_matype = signal_matype
+        self.params = {'fast': fast, 'slow': slow, 'signal': signal}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        macd, macdsignal, macdhist = talib.MACDEXT(
+            close, fastperiod=self.fast, slowperiod=self.slow, signalperiod=self.signal_period,
+            fastmatype=self.fast_matype, slowmatype=self.slow_matype, signalmatype=self.signal_matype
+        )
+        return pd.Series(macdhist, index=data.index).fillna(0)
+
+
+class MACDFIXSignal(SignalGenerator):
+    """MACDFIX MACD 固定参数信号
+    
+    信号值：MACD 柱状图
+    """
+    
+    def __init__(self, period: int = 30):
+        super().__init__(f"MACDFIX{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        macd, macdsignal, macdhist = talib.MACDFIX(close, timeperiod=self.period)
+        return pd.Series(macdhist, index=data.index).fillna(0)
+
+
+class PLUSDISignal(SignalGenerator):
+    """PLUS_DI 正向趋向指标信号
+    
+    信号值：+DI - 50
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"PLUS_DI{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        plus_di = talib.PLUS_DI(high, low, close, timeperiod=self.period)
+        return pd.Series(plus_di - 50, index=data.index).fillna(0)
+
+
+class MINUSDISignal(SignalGenerator):
+    """MINUS_DI 负向趋向指标信号
+    
+    信号值：-DI - 50
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"MINUS_DI{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        minus_di = talib.MINUS_DI(high, low, close, timeperiod=self.period)
+        return pd.Series(minus_di - 50, index=data.index).fillna(0)
+
+
+class PLUSDMSignal(SignalGenerator):
+    """PLUS_DM 正向趋向动量信号
+    
+    信号值：+DM
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"PLUS_DM{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        plus_dm = talib.PLUS_DM(high, low, timeperiod=self.period)
+        return pd.Series(plus_dm, index=data.index).fillna(0)
+
+
+class MINUSDMSignal(SignalGenerator):
+    """MINUS_DM 负向趋向动量信号
+    
+    信号值：-DM
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"MINUS_DM{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        minus_dm = talib.MINUS_DM(high, low, timeperiod=self.period)
+        return pd.Series(minus_dm, index=data.index).fillna(0)
+
+
+class ROCPSignal(SignalGenerator):
+    """ROCP 价格变化率信号（百分比）
+    
+    信号值：(价格 - N日前价格) / N日前价格 * 100
+    """
+    
+    def __init__(self, period: int = 10):
+        super().__init__(f"ROCP{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        rocp = talib.ROCP(close, timeperiod=self.period)
+        return pd.Series(rocp * 100, index=data.index).fillna(0)
+
+
+class ROCRSignal(SignalGenerator):
+    """ROCR 价格变化比率信号
+    
+    信号值：价格 / N日前价格
+    """
+    
+    def __init__(self, period: int = 10):
+        super().__init__(f"ROCR{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        rocr = talib.ROCR(close, timeperiod=self.period)
+        return pd.Series((rocr - 1) * 100, index=data.index).fillna(0)
+
+
+class ROCR100Signal(SignalGenerator):
+    """ROCR100 价格变化比率信号（100 基准）
+    
+    信号值：价格 / N日前价格 * 100
+    """
+    
+    def __init__(self, period: int = 10):
+        super().__init__(f"ROCR100{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        rocr100 = talib.ROCR100(close, timeperiod=self.period)
+        return pd.Series(rocr100 - 100, index=data.index).fillna(0)
+
+
+class STOCHSignal(SignalGenerator):
+    """STOCH 慢速随机指标信号
+    
+    信号值：%K - 50
+    - < -30: 超卖
+    - > 30: 超买
+    """
+    
+    def __init__(self, fastk: int = 5, slowk: int = 3, slowd: int = 3, 
+                 slowk_matype: int = 0, slowd_matype: int = 0):
+        super().__init__(f"STOCH{fastk}_{slowk}_{slowd}")
+        self.fastk = fastk
+        self.slowk = slowk
+        self.slowd = slowd
+        self.slowk_matype = slowk_matype
+        self.slowd_matype = slowd_matype
+        self.params = {'fastk': fastk, 'slowk': slowk, 'slowd': slowd}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        slowk, slowd = talib.STOCH(
+            high, low, close,
+            fastk_period=self.fastk, slowk_period=self.slowk, slowk_matype=self.slowk_matype,
+            slowd_period=self.slowd, slowd_matype=self.slowd_matype
+        )
+        return pd.Series(slowk - 50, index=data.index).fillna(0)
+
+
+class BOPSignal(SignalGenerator):
+    """BOP 均势信号
+    
+    信号值：均势（-1 ~ 1）
+    - > 0: 多方占优
+    - < 0: 空方占优
+    """
+    
+    def __init__(self):
+        super().__init__("BOP")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        open_p = data['open'].values.astype(float)
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        bop = talib.BOP(open_p, high, low, close)
+        return pd.Series(bop, index=data.index).fillna(0)
+
+
+# =============================================================================
+# 3. Volume Indicators (成交量指标)
+# =============================================================================
 
 class OBVSignal(SignalGenerator):
     """OBV 能量潮指标信号
     
-    信号值：
-    - OBV 上升：资金流入，做多信号
-    - OBV 下降：资金流出，做空信号
+    信号值：OBV 的移动平均变化率
+    - 正值: 资金流入
+    - 负值: 资金流出
     """
     
     def __init__(self, signal_period: int = 10):
@@ -592,68 +1371,931 @@ class OBVSignal(SignalGenerator):
         close = data['close']
         volume = data['volume']
         
-        # 计算 OBV
         direction = np.sign(close.diff())
         obv = (volume * direction).cumsum()
         
-        # 信号 = OBV 的移动平均变化率
         obv_ma = obv.rolling(self.signal_period).mean()
         signal = obv_ma.pct_change() * 100
-        signal = signal.fillna(0)
-        
-        return signal
+        return signal.fillna(0)
 
 
-class DMISignal(SignalGenerator):
-    """DMI 趋向指标信号
+class VOLSignal(SignalGenerator):
+    """量能信号
     
     信号值：
-    - +DI > -DI: 多头趋势
-    - +DI < -DI: 空头趋势
+    - 量比 > 1: 放量，趋势可能延续
+    - 量比 < 1: 缩量，趋势可能反转
     """
     
-    def __init__(self, period: int = 14):
-        super().__init__(f"DMI{period}")
+    def __init__(self, period: int = 5):
+        super().__init__(f"VOL{period}")
         self.period = period
         self.params = {'period': period}
     
     def generate(self, data: pd.DataFrame) -> pd.Series:
+        volume = data['volume']
+        avg_volume = volume.rolling(self.period).mean()
+        vol_ratio = volume / avg_volume
+        return vol_ratio - 1
+
+
+class ADSignal(SignalGenerator):
+    """AD 蔡金线信号
+    
+    信号值：AD 线的变化率
+    """
+    
+    def __init__(self):
+        super().__init__("AD")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        volume = data['volume'].values.astype(float)
+        ad = talib.AD(high, low, close, volume)
+        return pd.Series(ad, index=data.index).fillna(0)
+
+
+class ADOSCSignal(SignalGenerator):
+    """ADOSC 蔡金振荡器信号
+    
+    信号值：AD 线的短期 EMA - 长期 EMA
+    - 正值: 资金流入
+    - 负值: 资金流出
+    """
+    
+    def __init__(self, fast: int = 3, slow: int = 10):
+        super().__init__(f"ADOSC{fast}_{slow}")
+        self.fast = fast
+        self.slow = slow
+        self.params = {'fast': fast, 'slow': slow}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        volume = data['volume'].values.astype(float)
+        adosc = talib.ADOSC(high, low, close, volume, 
+                            fastperiod=self.fast, slowperiod=self.slow)
+        signal = pd.Series(adosc / volume, index=data.index) * 100
+        return signal.fillna(0)
+
+
+# =============================================================================
+# 4. Volatility Indicators (波动率指标)
+# =============================================================================
+
+class ATRSignal(SignalGenerator):
+    """ATR 平均真实波幅信号
+    
+    信号值：ATR 相对价格的比例（百分比）
+    - 高值: 波动率高
+    - 低值: 波动率低
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"ATR{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        atr = talib.ATR(high, low, close, timeperiod=self.period)
+        return pd.Series(atr / close * 100, index=data.index).fillna(0)
+
+
+class STDDEVSignal(SignalGenerator):
+    """STDDEV 标准差信号
+    
+    信号值：价格波动标准差（相对价格百分比）
+    - 高值: 波动率高
+    - 低值: 波动率低
+    """
+    
+    def __init__(self, period: int = 20, nbdev: float = 1.0):
+        super().__init__(f"STDDEV{period}")
+        self.period = period
+        self.nbdev = nbdev
+        self.params = {'period': period, 'nbdev': nbdev}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        stddev = talib.STDDEV(close, timeperiod=self.period, nbdev=self.nbdev)
+        return pd.Series(stddev / close * 100, index=data.index).fillna(0)
+
+
+class NATRSignal(SignalGenerator):
+    """NATR 归一化平均真实波幅信号
+    
+    信号值：NATR（归一化 ATR）
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"NATR{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        natr = talib.NATR(high, low, close, timeperiod=self.period)
+        return pd.Series(natr, index=data.index).fillna(0)
+
+
+class TRANGESignal(SignalGenerator):
+    """TRANGE 真实波幅信号
+    
+    信号值：真实波幅（相对价格百分比）
+    """
+    
+    def __init__(self):
+        super().__init__("TRANGE")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        trange = talib.TRANGE(high, low, close)
+        return pd.Series(trange / close * 100, index=data.index).fillna(0)
+
+
+class AVGDEVSignal(SignalGenerator):
+    """AVGDEV 平均偏差信号
+    
+    信号值：平均偏差（相对价格百分比）
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"AVGDEV{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        avgdev = talib.AVGDEV(close, timeperiod=self.period)
+        return pd.Series(avgdev / close * 100, index=data.index).fillna(0)
+
+
+# =============================================================================
+# 5. Price Transform (价格转换)
+# =============================================================================
+
+# 价格转换指标通常不生成交易信号，而是作为其他指标的输入
+# 已在 Overlap Studies 中添加了 AVGPRICE、MEDPRICE、TYPPRICE、WCLPRICE
+
+
+# =============================================================================
+# 6. Cycle Indicators (周期指标)
+# =============================================================================
+
+class HTDCCPERIODSignal(SignalGenerator):
+    """HT_DCPERIOD 希尔伯特变换主导周期信号
+    
+    信号值：当前市场周期长度（天数）
+    - 高值: 长周期
+    - 低值: 短周期
+    """
+    
+    def __init__(self):
+        super().__init__("HT_DCPERIOD")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        ht_dcperiod = talib.HT_DCPERIOD(close)
+        return pd.Series(ht_dcperiod, index=data.index).fillna(0)
+
+
+class HTDCPHASESignal(SignalGenerator):
+    """HT_DCPHASE 希尔伯特变换主导相位信号
+    
+    信号值：主导相位角度
+    """
+    
+    def __init__(self):
+        super().__init__("HT_DCPHASE")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        ht_dcphase = talib.HT_DCPHASE(close)
+        return pd.Series(ht_dcphase, index=data.index).fillna(0)
+
+
+class HTPHASORSignal(SignalGenerator):
+    """HT_PHASOR 希尔伯特变换相量信号
+    
+    信号值：同相分量 - 正交分量
+    """
+    
+    def __init__(self):
+        super().__init__("HT_PHASOR")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        inphase, quadrature = talib.HT_PHASOR(close)
+        return pd.Series(inphase - quadrature, index=data.index).fillna(0)
+
+
+class HTSINESignal(SignalGenerator):
+    """HT_SINE 希尔伯特变换正弦信号
+    
+    信号值：正弦线 - 导引线
+    """
+    
+    def __init__(self):
+        super().__init__("HT_SINE")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        sine, leadsine = talib.HT_SINE(close)
+        return pd.Series(sine - leadsine, index=data.index).fillna(0)
+
+
+class HTTRENDMODESignal(SignalGenerator):
+    """HT_TRENDMODE 希尔伯特变换趋势/周期模式信号
+    
+    信号值：模式标记（1=趋势，0=周期）- 0.5
+    """
+    
+    def __init__(self):
+        super().__init__("HT_TRENDMODE")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        ht_trendmode = talib.HT_TRENDMODE(close)
+        return pd.Series(ht_trendmode - 0.5, index=data.index).fillna(0)
+
+
+# =============================================================================
+# 7. Pattern Recognition (形态识别)
+# =============================================================================
+
+# 形态识别指标（如十字星、锤子线等）通常生成离散信号（-100, 0, 100）
+# 如需要，可以在此添加特定的形态识别信号类
+
+
+# =============================================================================
+# 8. Statistic Functions (统计函数)
+# =============================================================================
+
+class BETASignal(SignalGenerator):
+    """BETA 贝塔系数信号
+    
+    信号值：相对于基准的贝塔系数 - 1
+    - > 0: 波动性高于市场
+    - < 0: 波动性低于市场
+    """
+    
+    def __init__(self, period: int = 5):
+        super().__init__(f"BETA{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        returns = np.diff(close) / close[:-1] * 100
+        returns = np.concatenate([[0], returns])
+        beta = talib.BETA(returns, returns, timeperiod=self.period)
+        return pd.Series(beta - 1, index=data.index).fillna(0)
+
+
+class RSRSMSignal(SignalGenerator):
+    """RSRS 信号（阻力支撑相对强度 - 上海证券版本）
+    
+    计算方法：
+    1. 取前 N 日最高价、最低价
+    2. 最高价对最低价做线性回归，得到斜率 β
+    3. 计算前 M 日斜率的标准化分 z
+    4. RSRS = z × R²
+    
+    信号值：
+    - > 0: 支撑 > 阻力，多头
+    - < 0: 支撑 < 阻力，空头
+    """
+    
+    def __init__(self, n: int = 18, m: int = 600):
+        super().__init__(f"RSRS{n}_{m}")
+        self.n = n
+        self.m = m
+        self.params = {'n': n, 'm': m}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
         high = data['high']
         low = data['low']
-        close = data['close']
         
-        # 计算 +DM 和 -DM
-        high_diff = high.diff()
-        low_diff = low.diff()
+        slopes = []
+        for i in range(len(high)):
+            if i < self.n - 1:
+                slopes.append(np.nan)
+                continue
+            
+            window_high = high.iloc[i - self.n + 1:i + 1]
+            window_low = low.iloc[i - self.n + 1:i + 1]
+            
+            if window_low.std() == 0:
+                slopes.append(np.nan)
+            else:
+                low_values = window_low.values
+                high_values = window_high.values
+                cov = np.cov(low_values, high_values)[0, 1]
+                var = np.var(low_values)
+                beta = cov / var
+                slopes.append(beta)
         
-        plus_dm = np.where((high_diff > low_diff.diff().abs()) & (high_diff > 0), high_diff, 0)
-        minus_dm = np.where((low_diff.abs() > high_diff) & (low_diff < 0), low_diff.abs(), 0)
+        slope_series = pd.Series(slopes, index=data.index)
         
-        # 计算 TR
-        tr1 = high - low
-        tr2 = abs(high - close.shift(1))
-        tr3 = abs(low - close.shift(1))
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        if len(slope_series.dropna()) < self.m:
+            return slope_series.fillna(0)
         
-        # 平滑处理
-        plus_dm_smooth = pd.Series(plus_dm, index=data.index).rolling(self.period).sum()
-        minus_dm_smooth = pd.Series(minus_dm, index=data.index).rolling(self.period).sum()
-        tr_smooth = pd.Series(tr).rolling(self.period).sum()
+        rolling_mean = slope_series.rolling(self.m).mean()
+        rolling_std = slope_series.rolling(self.m).std()
         
-        # 计算 +DI 和 -DI
-        plus_di = 100 * plus_dm_smooth / tr_smooth
-        minus_di = 100 * minus_dm_smooth / tr_smooth
-        
-        # 信号 = +DI - -DI
-        signal = plus_di - minus_di
-        signal = signal.fillna(0)
-        
-        return signal
+        z_score = (slope_series - rolling_mean) / rolling_std
+        return z_score.fillna(0)
+
+
+class CORRELSignal(SignalGenerator):
+    """CORREL 相关系数信号
+    
+    信号值：最高价与最低价的相关系数 - 1
+    - 接近 0: 高度相关
+    """
+    
+    def __init__(self, period: int = 30):
+        super().__init__(f"CORREL{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        correl = talib.CORREL(high, low, timeperiod=self.period)
+        return pd.Series(correl - 1, index=data.index).fillna(0)
+
+
+class LINEARREGSignal(SignalGenerator):
+    """LINEARREG 线性回归信号
+    
+    信号值：价格偏离线性回归线的百分比
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"LINEARREG{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        linearreg = talib.LINEARREG(close, timeperiod=self.period)
+        return pd.Series((close - linearreg) / linearreg * 100, index=data.index).fillna(0)
+
+
+class LINEARREGANGLESignal(SignalGenerator):
+    """LINEARREG_ANGLE 线性回归角度信号
+    
+    信号值：线性回归角度
+    - 正值: 上升角度
+    - 负值: 下降角度
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"LINEARREG_ANGLE{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        angle = talib.LINEARREG_ANGLE(close, timeperiod=self.period)
+        return pd.Series(angle, index=data.index).fillna(0)
+
+
+class LINEARREGINTERCEPTSignal(SignalGenerator):
+    """LINEARREG_INTERCEPT 线性回归截距信号
+    
+    信号值：价格偏离截距的百分比
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"LINEARREG_INTERCEPT{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        intercept = talib.LINEARREG_INTERCEPT(close, timeperiod=self.period)
+        return pd.Series((close - intercept) / intercept * 100, index=data.index).fillna(0)
+
+
+class LINEARREGSLOPESignal(SignalGenerator):
+    """LINEARREG_SLOPE 线性回归斜率信号
+    
+    信号值：线性回归斜率
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"LINEARREG_SLOPE{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        slope = talib.LINEARREG_SLOPE(close, timeperiod=self.period)
+        return pd.Series(slope, index=data.index).fillna(0)
+
+
+class TSFSignal(SignalGenerator):
+    """TSF 时间序列预测信号
+    
+    信号值：价格偏离 TSF 的百分比
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"TSF{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        tsf = talib.TSF(close, timeperiod=self.period)
+        return pd.Series((close - tsf) / tsf * 100, index=data.index).fillna(0)
+
+
+class VARSignal(SignalGenerator):
+    """VAR 方差信号
+    
+    信号值：价格方差（相对价格百分比）
+    """
+    
+    def __init__(self, period: int = 5, nbdev: float = 1.0):
+        super().__init__(f"VAR{period}")
+        self.period = period
+        self.nbdev = nbdev
+        self.params = {'period': period, 'nbdev': nbdev}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        var = talib.VAR(close, timeperiod=self.period, nbdev=self.nbdev)
+        return pd.Series(var / close * 100, index=data.index).fillna(0)
 
 
 # =============================================================================
-# 通用指标信号生成器
+# 9. Math Operators (数学运算函数)
 # =============================================================================
+
+class ADDSignal(SignalGenerator):
+    """ADD 加法信号
+    
+    信号值：最高价 + 最低价
+    """
+    
+    def __init__(self):
+        super().__init__("ADD")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        result = talib.ADD(high, low)
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class SUBSignal(SignalGenerator):
+    """SUB 减法信号
+    
+    信号值：最高价 - 最低价（价格区间）
+    """
+    
+    def __init__(self):
+        super().__init__("SUB")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        result = talib.SUB(high, low)
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class MULTSignal(SignalGenerator):
+    """MULT 乘法信号
+    
+    信号值：收盘价 * 成交量（标准化）
+    """
+    
+    def __init__(self):
+        super().__init__("MULT")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        volume = data['volume'].values.astype(float)
+        result = talib.MULT(close, volume)
+        return pd.Series(result / result.mean(), index=data.index).fillna(0) if result.mean() != 0 else pd.Series(result, index=data.index).fillna(0)
+
+
+class DIVSignal(SignalGenerator):
+    """DIV 除法信号
+    
+    信号值：最高价 / 最低价
+    """
+    
+    def __init__(self):
+        super().__init__("DIV")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        result = talib.DIV(high, low)
+        return pd.Series(result - 1, index=data.index).fillna(0)
+
+
+class SUMSignal(SignalGenerator):
+    """SUM 求和信号
+    
+    信号值：收盘价的 N 日累计
+    """
+    
+    def __init__(self, period: int = 10):
+        super().__init__(f"SUM{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.SUM(close, timeperiod=self.period)
+        return pd.Series(result / self.period, index=data.index).fillna(0)
+
+
+class MAXSignal(SignalGenerator):
+    """MAX 最大值信号
+    
+    信号值：价格偏离 N 日最高价的百分比
+    """
+    
+    def __init__(self, period: int = 10):
+        super().__init__(f"MAX{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.MAX(close, timeperiod=self.period)
+        return pd.Series((close - result) / result * 100, index=data.index).fillna(0)
+
+
+class MINSignal(SignalGenerator):
+    """MIN 最小值信号
+    
+    信号值：价格偏离 N 日最低价的百分比
+    """
+    
+    def __init__(self, period: int = 10):
+        super().__init__(f"MIN{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.MIN(close, timeperiod=self.period)
+        return pd.Series((close - result) / result * 100, index=data.index).fillna(0)
+
+
+class MAXINDEXSignal(SignalGenerator):
+    """MAXINDEX 最大值索引信号
+    
+    信号值：N 日内最高价的索引位置（天数）
+    """
+    
+    def __init__(self, period: int = 10):
+        super().__init__(f"MAXINDEX{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.MAXINDEX(close, timeperiod=self.period)
+        return pd.Series(result / self.period - 0.5, index=data.index).fillna(0)
+
+
+class MININDEXSignal(SignalGenerator):
+    """MININDEX 最小值索引信号
+    
+    信号值：N 日内最低价的索引位置（天数）
+    """
+    
+    def __init__(self, period: int = 10):
+        super().__init__(f"MININDEX{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.MININDEX(close, timeperiod=self.period)
+        return pd.Series(result / self.period - 0.5, index=data.index).fillna(0)
+
+
+class MINMAXSignal(SignalGenerator):
+    """MINMAX 最大值最小值信号
+    
+    信号值：(价格 - 最小值) / (最大值 - 最小值) - 0.5
+    """
+    
+    def __init__(self, period: int = 10):
+        super().__init__(f"MINMAX{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        minval, maxval = talib.MINMAX(close, timeperiod=self.period)
+        result = (close - minval) / (maxval - minval)
+        return pd.Series(result - 0.5, index=data.index).fillna(0)
+
+
+class MINMAXINDEXSignal(SignalGenerator):
+    """MINMAXINDEX 最大值最小值索引信号
+    
+    信号值：最高索引 - 最低索引
+    """
+    
+    def __init__(self, period: int = 10):
+        super().__init__(f"MINMAXINDEX{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        minidx, maxidx = talib.MINMAXINDEX(close, timeperiod=self.period)
+        return pd.Series((maxidx - minidx) / self.period, index=data.index).fillna(0)
+
+
+# =============================================================================
+# 10. Math Transform (数学变换函数)
+# =============================================================================
+
+class ACOSSignal(SignalGenerator):
+    """ACOS 反余弦变换信号"""
+    
+    def __init__(self):
+        super().__init__("ACOS")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.ACOS(close / close.max())
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class ASINSignal(SignalGenerator):
+    """ASIN 反正弦变换信号"""
+    
+    def __init__(self):
+        super().__init__("ASIN")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.ASIN(close / close.max())
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class ATANSignal(SignalGenerator):
+    """ATAN 反正切变换信号"""
+    
+    def __init__(self):
+        super().__init__("ATAN")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.ATAN(close.pct_change().fillna(0).values.astype(float))
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class CEILSignal(SignalGenerator):
+    """CEIL 向上取整信号"""
+    
+    def __init__(self):
+        super().__init__("CEIL")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.CEIL(close)
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class COSSignal(SignalGenerator):
+    """COS 余弦变换信号"""
+    
+    def __init__(self):
+        super().__init__("COS")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.COS(close.pct_change().fillna(0).values.astype(float))
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class COSHSignal(SignalGenerator):
+    """COSH 双曲余弦变换信号"""
+    
+    def __init__(self):
+        super().__init__("COSH")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.COSH(close.pct_change().fillna(0).values.astype(float))
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class EXPSignal(SignalGenerator):
+    """EXP 指数变换信号"""
+    
+    def __init__(self):
+        super().__init__("EXP")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.EXP(close.pct_change().fillna(0).values.astype(float))
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class FLOORSignal(SignalGenerator):
+    """FLOOR 向下取整信号"""
+    
+    def __init__(self):
+        super().__init__("FLOOR")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.FLOOR(close)
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class LNSignal(SignalGenerator):
+    """LN 自然对数变换信号"""
+    
+    def __init__(self):
+        super().__init__("LN")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.LN(close)
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class LOG10Signal(SignalGenerator):
+    """LOG10 以 10 为底对数变换信号"""
+    
+    def __init__(self):
+        super().__init__("LOG10")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.LOG10(close)
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class SINSignal(SignalGenerator):
+    """SIN 正弦变换信号"""
+    
+    def __init__(self):
+        super().__init__("SIN")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.SIN(close.pct_change().fillna(0).values.astype(float))
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class SINHSignal(SignalGenerator):
+    """SINH 双曲正弦变换信号"""
+    
+    def __init__(self):
+        super().__init__("SINH")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.SINH(close.pct_change().fillna(0).values.astype(float))
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class SQRTSignal(SignalGenerator):
+    """SQRT 平方根变换信号"""
+    
+    def __init__(self):
+        super().__init__("SQRT")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.SQRT(close)
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class TANSignal(SignalGenerator):
+    """TAN 正切变换信号"""
+    
+    def __init__(self):
+        super().__init__("TAN")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.TAN(close.pct_change().fillna(0).values.astype(float))
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+class TANHSignal(SignalGenerator):
+    """TANH 双曲正切变换信号"""
+    
+    def __init__(self):
+        super().__init__("TANH")
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        result = talib.TANH(close.pct_change().fillna(0).values.astype(float))
+        return pd.Series(result, index=data.index).fillna(0)
+
+
+# =============================================================================
+# 11. 组合信号与函数式信号
+# =============================================================================
+class CompositeSignal(SignalGenerator):
+    """组合信号生成器"""
+    
+    def __init__(self, generators: List[SignalGenerator], name: str = None):
+        self.generators = generators
+        self._name = name or '_'.join([g.name for g in generators])
+        super().__init__(self._name)
+        self.params = {'generators': [g.name for g in generators]}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        all_signals = []
+        for gen in self.generators:
+            signal = gen.generate(data)
+            all_signals.append(signal)
+        combined = pd.concat(all_signals, axis=1).mean(axis=1)
+        return combined
+    
+    def generate_latest(self, data: pd.DataFrame) -> Signal:
+        series = self.generate(data)
+        latest_value = series.iloc[-1] if not series.empty else 0
+        signals = [gen.generate_latest(data) for gen in self.generators]
+        
+        if latest_value > 0:
+            direction = SignalDirection.LONG
+        elif latest_value < 0:
+            direction = SignalDirection.SHORT
+        else:
+            direction = SignalDirection.NEUTRAL
+        
+        return Signal(
+            name=self.name,
+            value=latest_value,
+            direction=direction,
+            timestamp=datetime.now(),
+            metadata={'params': self.params, 'components': [s.to_dict() for s in signals]}
+        )
+
+
+class FunctionSignal(SignalGenerator):
+    """函数式信号生成器"""
+    
+    def __init__(
+        self,
+        name: str,
+        func: Callable[[pd.DataFrame], pd.Series],
+        params: Dict[str, Any] = None
+    ):
+        super().__init__(name)
+        self.func = func
+        self.params = params or {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        return self.func(data)
+
 
 class IndicatorSignal(SignalGenerator):
     """
@@ -661,16 +2303,6 @@ class IndicatorSignal(SignalGenerator):
     
     通过注入计算函数，支持任意指标。
     无需为每个指标编写完整类。
-    
-    用法:
-        from ft2.signals.indicators import calc_kama_cross
-        
-        signal = IndicatorSignal(
-            name="KAMA10_30",
-            calc_func=calc_kama_cross,
-            params={'short': 10, 'long': 30},
-            normalize=True
-        )
     """
     
     def __init__(
@@ -681,14 +2313,6 @@ class IndicatorSignal(SignalGenerator):
         normalize: bool = True,
         threshold: float = 0.0
     ):
-        """
-        Args:
-            name: 信号名称（如 "KAMA10_30"）
-            calc_func: 计算函数，签名: func(data: DataFrame, params: dict) -> Series
-            params: 计算参数（如 {'short': 10, 'long': 30}）
-            normalize: 是否标准化信号（使 0 为多空分界线）
-            threshold: 做多阈值（默认 >0 做多）
-        """
         super().__init__(name)
         self.calc_func = calc_func
         self.params = params or {}
@@ -697,16 +2321,36 @@ class IndicatorSignal(SignalGenerator):
     
     def generate(self, data: pd.DataFrame) -> pd.Series:
         signal = self.calc_func(data, self.params)
-        
         if self.normalize:
             signal = self._normalize(signal)
-        
         return signal
     
     def _normalize(self, signal: pd.Series) -> pd.Series:
-        """标准化信号，使 0 为多空分界线"""
         median = signal.median()
         return signal - median
+
+
+def ma_cross_signal(data: pd.DataFrame, short: int = 5, long: int = 20) -> pd.Series:
+    """均线交叉信号（函数形式）"""
+    close = data['close']
+    short_ma = close.rolling(short).mean()
+    long_ma = close.rolling(long).mean()
+    return (short_ma - long_ma) / long_ma
+
+
+def momentum_signal(data: pd.DataFrame, period: int = 20) -> pd.Series:
+    """动量信号"""
+    close = data['close']
+    return close / close.shift(period) - 1
+
+
+def volatility_signal(data: pd.DataFrame, period: int = 20) -> pd.Series:
+    """波动率信号（布林带宽度）"""
+    close = data['close']
+    mid = close.rolling(period).mean()
+    std = close.rolling(period).std()
+    bandwidth = (2 * std) / mid
+    return bandwidth
 
 
 # =============================================================================
@@ -724,7 +2368,7 @@ def create_signal(
     快速创建信号生成器
     
     Args:
-        indicator: 指标名称（'ma', 'ema', 'kama', 't3', 'trima', 等）
+        indicator: 指标名称（'ma', 'macd', 'rsi', 等）
         short: 短期参数
         long: 长期参数
         period: 单参数指标（如 RSI 的 period）
@@ -732,11 +2376,6 @@ def create_signal(
     
     Returns:
         SignalGenerator: 信号生成器实例
-    
-    Examples:
-        >>> create_signal('ma', short=5, long=20)
-        >>> create_signal('kama', short=10, long=30)
-        >>> create_signal('rsi', period=14)
     """
     from .indicators import (
         calc_ma_cross, calc_ema_cross, calc_wma_cross,
@@ -745,56 +2384,119 @@ def create_signal(
     )
     
     factory = {
+        # 1. Overlap Studies (重叠研究/趋势指标)
         'ma': lambda: MASignal(short_period=short, long_period=long),
-        'macd': lambda: MACDSignal(fast=short, slow=long, signal=kwargs.get('signal', 9)),
-        'rsi': lambda: RSISignal(period=period),
-        'kdj': lambda: KDJSignal(n=period or 9),
         'boll': lambda: BOLLSignal(period=period or 20),
+        'sar': lambda: SARSignal(),
+        'midpoint': lambda: MIDPOINTSignal(period=period or 14),
+        'dmi': lambda: DMISignal(period=period or 14),
+        'aroon': lambda: AROONSignal(period=period or 25),
+        'sma': lambda: SMASignal(period=period or 20),
+        'ema': lambda: EMASignal(period=period or 20),
+        'wma': lambda: WMASignal(period=period or 20),
+        'dema': lambda: DEMASignal(period=period or 20),
+        'tema': lambda: TEMASignal(period=period or 20),
+        'kama': lambda: KAMASignal(period=period or 30),
+        't3': lambda: T3Signal(period=period or 5),
+        'trima': lambda: TRIMASignal(period=period or 20),
+        'mama': lambda: MAMASignal(),
+        'mavp': lambda: MAVPSignal(),
+        'avgprice': lambda: AVGPRICESignal(),
+        'medprice': lambda: MEDPRICESignal(),
+        'typprice': lambda: TYPPRICESignal(),
+        'wclprice': lambda: WCLPRICESignal(),
+        'ht_trendline': lambda: HTTRENDLINESignal(),
+        'midprice': lambda: MIDPRICESignal(period=period or 14),
+        'sarext': lambda: SAREXTSignal(),
+        'accbands': lambda: ACCBANDSSignal(period=period or 20),
+        # 2. Momentum Indicators (动量指标)
+        'macd': lambda: MACDSignal(fast=short or 12, slow=long or 26, signal=kwargs.get('signal', 9)),
+        'rsi': lambda: RSISignal(period=period or 14),
+        'kdj': lambda: KDJSignal(n=period or 9),
         'cci': lambda: CCISignal(period=period or 20),
         'wr': lambda: WRSignal(period=period or 14),
         'roc': lambda: ROCSignal(period=period or 12),
+        'stochf': lambda: STOCHFSignal(period=period or 14),
+        'cmo': lambda: CMOSignal(period=period or 14),
+        'mfi': lambda: MFISignal(period=period or 14),
+        'mom': lambda: MOMSignal(period=period or 10),
+        'ppo': lambda: PPOSignal(fast=short or 12, slow=long or 26, signal=kwargs.get('signal', 9)),
+        'stochrsi': lambda: STOCHRSISignal(period=period or 14),
+        'trix': lambda: TRIXSignal(period=period or 30),
+        'ultosc': lambda: ULTOSCSignal(),
+        'willr': lambda: WILLRSignal(period=period or 14),
+        'adx': lambda: ADXSignal(period=period or 14),
+        'adxr': lambda: ADXRSignal(period=period or 14),
+        'aroonosc': lambda: AROONOSCSignal(period=period or 25),
+        'apo': lambda: APOSignal(fast=short or 12, slow=long or 26),
+        'dx': lambda: DXSignal(period=period or 14),
+        'imi': lambda: IMISignal(period=period or 14),
+        'macdext': lambda: MACDEXTSignal(fast=short or 12, slow=long or 26, signal=kwargs.get('signal', 9)),
+        'macdfix': lambda: MACDFIXSignal(period=period or 30),
+        'plus_di': lambda: PLUSDISignal(period=period or 14),
+        'minus_di': lambda: MINUSDISignal(period=period or 14),
+        'plus_dm': lambda: PLUSDMSignal(period=period or 14),
+        'minus_dm': lambda: MINUSDMSignal(period=period or 14),
+        'rocp': lambda: ROCPSignal(period=period or 10),
+        'rocr': lambda: ROCRSignal(period=period or 10),
+        'rocr100': lambda: ROCR100Signal(period=period or 10),
+        'stoch': lambda: STOCHSignal(),
+        'bop': lambda: BOPSignal(),
+        # 3. Volume Indicators (成交量指标)
         'obv': lambda: OBVSignal(signal_period=period or 10),
-        'dmi': lambda: DMISignal(period=period or 14),
-        'ema': lambda: IndicatorSignal(
-            f"EMA{short}_{long}",
-            calc_ema_cross,
-            {'short': short, 'long': long}
-        ),
-        'wma': lambda: IndicatorSignal(
-            f"WMA{short}_{long}",
-            calc_wma_cross,
-            {'short': short, 'long': long}
-        ),
-        'dema': lambda: IndicatorSignal(
-            f"DEMA{short}_{long}",
-            calc_dema_cross,
-            {'short': short, 'long': long}
-        ),
-        'tema': lambda: IndicatorSignal(
-            f"TEMA{short}_{long}",
-            calc_tema_cross,
-            {'short': short, 'long': long}
-        ),
-        'kama': lambda: IndicatorSignal(
-            f"KAMA{short}_{long}",
-            calc_kama_cross,
-            {'short': short, 'long': long}
-        ),
-        't3': lambda: IndicatorSignal(
-            f"T3{short}_{long}",
-            calc_t3_cross,
-            {'short': short, 'long': long, 'vf': kwargs.get('vf', 0.7)}
-        ),
-        'trima': lambda: IndicatorSignal(
-            f"TRIMA{short}_{long}",
-            calc_trima_cross,
-            {'short': short, 'long': long}
-        ),
-        'accbands': lambda: IndicatorSignal(
-            f"ACCBANDS{period or 20}",
-            calc_accbands,
-            {'period': period or 20}
-        ),
+        'vol': lambda: VOLSignal(period=period or 5),
+        'adosc': lambda: ADOSCSignal(fast=short or 3, slow=long or 10),
+        'ad': lambda: ADSignal(),
+        # 4. Volatility Indicators (波动率指标)
+        'atr': lambda: ATRSignal(period=period or 14),
+        'stddev': lambda: STDDEVSignal(period=period or 20),
+        'natr': lambda: NATRSignal(period=period or 14),
+        'trange': lambda: TRANGESignal(),
+        'avgdev': lambda: AVGDEVSignal(period=period or 14),
+        # 6. Cycle Indicators (周期指标)
+        'ht_dcperiod': lambda: HTDCCPERIODSignal(),
+        'ht_dcphase': lambda: HTDCPHASESignal(),
+        'ht_phasor': lambda: HTPHASORSignal(),
+        'ht_sine': lambda: HTSINESignal(),
+        'ht_trendmode': lambda: HTTRENDMODESignal(),
+        # 8. Statistic Functions (统计函数)
+        'beta': lambda: BETASignal(period=period or 5),
+        'rsrs': lambda: RSRSMSignal(n=period or 18, m=kwargs.get('m', 600)),
+        'correl': lambda: CORRELSignal(period=period or 30),
+        'linearreg': lambda: LINEARREGSignal(period=period or 14),
+        'linearreg_angle': lambda: LINEARREGANGLESignal(period=period or 14),
+        'linearreg_intercept': lambda: LINEARREGINTERCEPTSignal(period=period or 14),
+        'linearreg_slope': lambda: LINEARREGSLOPESignal(period=period or 14),
+        'tsf': lambda: TSFSignal(period=period or 14),
+        'var': lambda: VARSignal(period=period or 5),
+        # 9. Math Operators (数学运算)
+        'add': lambda: ADDSignal(),
+        'sub': lambda: SUBSignal(),
+        'mult': lambda: MULTSignal(),
+        'div': lambda: DIVSignal(),
+        'sum': lambda: SUMSignal(period=period or 10),
+        'max': lambda: MAXSignal(period=period or 10),
+        'min': lambda: MINSignal(period=period or 10),
+        'maxindex': lambda: MAXINDEXSignal(period=period or 10),
+        'minindex': lambda: MININDEXSignal(period=period or 10),
+        'minmax': lambda: MINMAXSignal(period=period or 10),
+        'minmaxindex': lambda: MINMAXINDEXSignal(period=period or 10),
+        # 10. Math Transform (数学变换)
+        'acos': lambda: ACOSSignal(),
+        'asin': lambda: ASINSignal(),
+        'atan': lambda: ATANSignal(),
+        'ceil': lambda: CEILSignal(),
+        'cos': lambda: COSSignal(),
+        'cosh': lambda: COSHSignal(),
+        'exp': lambda: EXPSignal(),
+        'floor': lambda: FLOORSignal(),
+        'ln': lambda: LNSignal(),
+        'log10': lambda: LOG10Signal(),
+        'sin': lambda: SINSignal(),
+        'sinh': lambda: SINHSignal(),
+        'sqrt': lambda: SQRTSignal(),
+        'tan': lambda: TANSignal(),
+        'tanh': lambda: TANHSignal(),
     }
     
     if indicator not in factory:

@@ -13,11 +13,15 @@
 signals/
 ├── signal.py           # Signal 基础类
 ├── generator.py        # 13种信号生成器
-├── combiner.py         # 5种信号融合器
+├── combiner.py         # 6种信号融合器
 ├── threshold.py        # 5种阈值策略
 ├── backtest.py         # 轻量回测（纯计算）
 ├── ic_analyzer.py      # IC分析器（纯计算）
 └── examples.py         # 使用示例
+
+base/ (基础设施，跨项目共享)
+├── report_template.py  # 择时报告统一输出模板 (TimingReport)
+└── pgdb_kline.py       # K线数据库模块
 ```
 
 ## 核心 API
@@ -45,6 +49,25 @@ ic = ICAnalyzer.analyze(signals, df['close'])
 # ic['basic']['summary']['ic_mean']
 # ic['significance']['p_value']
 # ic['annual'], ic['turnover'], ic['distribution']
+```
+
+### 4. 统一报告输出
+```python
+from base.report_template import TimingReport
+
+report = TimingReport("MA5_20", "399317_SZ", output_dir=output_dir)
+report.add_header("MA5_20 均线择时", {'short': 5, 'long': 20})
+report.add_performance(result, df)
+report.add_nav_comparison(result)
+report.add_ic_analysis(ic)
+report.add_trade_quality(result, df)
+report.add_signal_grid(df, result.signals, result.positions, periods=[5, 20])
+report.add_trade_records(result, df)
+report.export()
+
+# 机器学习扩展（预留）
+# report.add_ml_analysis(feature_importance, model_metrics)
+# report.add_learning_curve(train_scores, val_scores)
 ```
 
 ## BacktestResult 字段
