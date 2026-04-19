@@ -50,8 +50,10 @@ class Engine:
             else:
                 self.timeline[eob] = [bar]
 
-    def run(self,strategy_class,start_time, end_time):
-        strategy = strategy_class()
+    def run(self, strategy, start_time, end_time):
+        # 支持策略实例或策略类
+        if callable(strategy) and not hasattr(strategy, 'on_bar'):
+            strategy = strategy()
         
         _add_bar = context._add_bar2bar_data_cache
         _snapshot = account.take_snapshot

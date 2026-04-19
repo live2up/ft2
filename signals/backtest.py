@@ -22,6 +22,17 @@
     print(f"收益率: {result.total_return:.2f}%")
     print(f"夏普: {result.sharpe:.2f}")
     result.export_report("MA5_20报告")
+
+开发方向（TODO）：
+    1. 增加 run_backtest_from_signal() 函数
+       - 支持直接传入 pd.Series 信号序列进行回测
+       - 适用于多指标融合后的综合信号回测
+       - 代码逻辑复用现有仓位计算部分
+       - 优先级：中，多指标择时需要时再实现
+    2. 增加批量回测工具
+       - 遍历多个信号/参数组合
+       - 返回排序后的结果列表
+       - 优先级：低，参数优化阶段需要时再实现
 """
 
 from typing import Dict, List, Optional, Callable

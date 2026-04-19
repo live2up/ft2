@@ -1,11 +1,12 @@
 # ft2/signals/indicators.py - 指标计算函数库
 """
-纯指标计算函数库
+指标计算函数库（基于 TA-Lib 实现）
 
 所有函数签名统一为: calc_xxx(data: pd.DataFrame, params: dict) -> pd.Series
 或: calc_xxx_single(series: pd.Series, params: dict) -> pd.Series
 
 特点:
+- 基于 TA-Lib C 库，计算速度快
 - 只负责数学计算，不涉及信号标准化
 - 返回原始指标值
 - 可独立使用（无需加载 signals 模块）
@@ -13,6 +14,7 @@
 
 import pandas as pd
 import numpy as np
+import talib
 from typing import Dict, Any
 
 
@@ -25,10 +27,11 @@ def calc_ma_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
     short = params.get('short', 5)
     long = params.get('long', 20)
     
-    ma_short = data['close'].rolling(short).mean()
-    ma_long = data['close'].rolling(long).mean()
+    close = data['close'].values.astype(float)
+    ma_short = talib.SMA(close, timeperiod=short)
+    ma_long = talib.SMA(close, timeperiod=long)
     
-    return (ma_short - ma_long) / ma_long
+    return pd.Series((ma_short - ma_long) / ma_long, index=data.index)
 
 
 def calc_ema_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
@@ -36,10 +39,11 @@ def calc_ema_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
     short = params.get('short', 12)
     long = params.get('long', 26)
     
-    ema_short = data['close'].ewm(span=short).mean()
-    ema_long = data['close'].ewm(span=long).mean()
+    close = data['close'].values.astype(float)
+    ema_short = talib.EMA(close, timeperiod=short)
+    ema_long = talib.EMA(close, timeperiod=long)
     
-    return (ema_short - ema_long) / ema_long
+    return pd.Series((ema_short - ema_long) / ema_long, index=data.index)
 
 
 def calc_wma_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
@@ -47,10 +51,11 @@ def calc_wma_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
     short = params.get('short', 5)
     long = params.get('long', 20)
     
-    wma_short = _calc_wma(data['close'], short)
-    wma_long = _calc_wma(data['close'], long)
+    close = data['close'].values.astype(float)
+    wma_short = talib.WMA(close, timeperiod=short)
+    wma_long = talib.WMA(close, timeperiod=long)
     
-    return (wma_short - wma_long) / wma_long
+    return pd.Series((wma_short - wma_long) / wma_long, index=data.index)
 
 
 def calc_dema_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
@@ -58,10 +63,11 @@ def calc_dema_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
     short = params.get('short', 12)
     long = params.get('long', 26)
     
-    dema_short = _calc_dema(data['close'], short)
-    dema_long = _calc_dema(data['close'], long)
+    close = data['close'].values.astype(float)
+    dema_short = talib.DEMA(close, timeperiod=short)
+    dema_long = talib.DEMA(close, timeperiod=long)
     
-    return (dema_short - dema_long) / dema_long
+    return pd.Series((dema_short - dema_long) / dema_long, index=data.index)
 
 
 def calc_tema_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
@@ -69,10 +75,11 @@ def calc_tema_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
     short = params.get('short', 12)
     long = params.get('long', 26)
     
-    tema_short = _calc_tema(data['close'], short)
-    tema_long = _calc_tema(data['close'], long)
+    close = data['close'].values.astype(float)
+    tema_short = talib.TEMA(close, timeperiod=short)
+    tema_long = talib.TEMA(close, timeperiod=long)
     
-    return (tema_short - tema_long) / tema_long
+    return pd.Series((tema_short - tema_long) / tema_long, index=data.index)
 
 
 def calc_kama_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
@@ -80,10 +87,11 @@ def calc_kama_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
     short = params.get('short', 10)
     long = params.get('long', 30)
     
-    kama_short = calc_kama_single(data['close'], short)
-    kama_long = calc_kama_single(data['close'], long)
+    close = data['close'].values.astype(float)
+    kama_short = talib.KAMA(close, timeperiod=short)
+    kama_long = talib.KAMA(close, timeperiod=long)
     
-    return (kama_short - kama_long) / kama_long
+    return pd.Series((kama_short - kama_long) / kama_long, index=data.index)
 
 
 def calc_t3_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
@@ -92,10 +100,11 @@ def calc_t3_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
     long = params.get('long', 26)
     vf = params.get('vf', 0.7)
     
-    t3_short = calc_t3_single(data['close'], short, vf)
-    t3_long = calc_t3_single(data['close'], long, vf)
+    close = data['close'].values.astype(float)
+    t3_short = talib.T3(close, timeperiod=short, vfactor=vf)
+    t3_long = talib.T3(close, timeperiod=long, vfactor=vf)
     
-    return (t3_short - t3_long) / t3_long
+    return pd.Series((t3_short - t3_long) / t3_long, index=data.index)
 
 
 def calc_trima_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
@@ -103,10 +112,11 @@ def calc_trima_cross(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
     short = params.get('short', 12)
     long = params.get('long', 26)
     
-    trima_short = calc_trima_single(data['close'], short)
-    trima_long = calc_trima_single(data['close'], long)
+    close = data['close'].values.astype(float)
+    trima_short = talib.TRIMA(close, timeperiod=short)
+    trima_long = talib.TRIMA(close, timeperiod=long)
     
-    return (trima_short - trima_long) / trima_long
+    return pd.Series((trima_short - trima_long) / trima_long, index=data.index)
 
 
 # =============================================================================
@@ -128,64 +138,55 @@ def calc_midpoint(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
     """中点价格指标"""
     period = params.get('period', 20)
     
-    highest = data['high'].rolling(period).max()
-    lowest = data['low'].rolling(period).min()
+    close = data['close'].values.astype(float)
+    result = talib.MIDPOINT(close, timeperiod=period)
     
-    return (data['close'] - (highest + lowest) / 2) / data['close']
+    return pd.Series((data['close'] - result) / data['close'], index=data.index)
 
 
 def calc_midprice(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
-    """中点价格指标（另一种算法）"""
+    """中点价格指标（高低价中点）"""
     period = params.get('period', 20)
     
-    highest = data['high'].rolling(period).max()
-    lowest = data['low'].rolling(period).min()
+    high = data['high'].values.astype(float)
+    low = data['low'].values.astype(float)
+    result = talib.MIDPRICE(high, low, timeperiod=period)
     
-    return (highest + lowest) / 2
+    return pd.Series((data['close'] - result) / data['close'], index=data.index)
+
+
+def calc_bbands(data: pd.DataFrame, params: Dict[str, Any]) -> pd.Series:
+    """布林带指标"""
+    period = params.get('period', 20)
+    std_dev = params.get('std_dev', 2.0)
+    
+    close = data['close'].values.astype(float)
+    upper, middle, lower = talib.BBANDS(close, timeperiod=period, nbdevup=std_dev, nbdevdn=std_dev)
+    
+    return pd.Series((close - lower) / (upper - lower) - 0.5, index=data.index)
 
 
 # =============================================================================
-# 核心算法函数（可独立使用）
+# 核心算法函数（可独立使用，返回 numpy 数组）
 # =============================================================================
 
-def calc_kama_single(series: pd.Series, period: int = 30, eff_period: int = 10, 
-                     fast_len: int = 2, slow_len: int = 30) -> pd.Series:
+def calc_kama_single(series: pd.Series, period: int = 30) -> np.ndarray:
     """
-    考夫曼自适应移动平均
+    考夫曼自适应移动平均（TA-Lib 版）
     
     Args:
         series: 价格序列
         period: 计算周期
-        eff_period: 效率比率周期
-        fast_len: 快速平滑系数
-        slow_len: 慢速平滑系数
     
     Returns:
-        KAMA 值序列
+        KAMA 值数组
     """
-    change = series.diff(period)
-    volatility = series.diff().abs().rolling(eff_period).sum()
-    er = change.abs() / volatility
-    er = er.fillna(0)
-    
-    fast_sc = 2.0 / (fast_len + 1)
-    slow_sc = 2.0 / (slow_len + 1)
-    sc = (er * (fast_sc - slow_sc) + slow_sc) ** 2
-    
-    kama = pd.Series(index=series.index, dtype=float)
-    kama.iloc[0] = series.iloc[0]
-    for i in range(1, len(series)):
-        if pd.isna(series.iloc[i]):
-            kama.iloc[i] = kama.iloc[i-1]
-        else:
-            kama.iloc[i] = kama.iloc[i-1] + sc.iloc[i] * (series.iloc[i] - kama.iloc[i-1])
-    
-    return kama
+    return talib.KAMA(series.values.astype(float), timeperiod=period)
 
 
-def calc_t3_single(series: pd.Series, period: int, vf: float = 0.7) -> pd.Series:
+def calc_t3_single(series: pd.Series, period: int, vf: float = 0.7) -> np.ndarray:
     """
-    T3 超平滑均线
+    T3 超平滑均线（TA-Lib 版）
     
     Args:
         series: 价格序列
@@ -193,70 +194,20 @@ def calc_t3_single(series: pd.Series, period: int, vf: float = 0.7) -> pd.Series
         vf: 体积因子（默认 0.7）
     
     Returns:
-        T3 值序列
+        T3 值数组
     """
-    c1 = -vf * vf * vf
-    c2 = 3 * vf * vf + 3 * vf * vf * vf
-    c3 = -6 * vf * vf - 3 * vf - 3 * vf * vf * vf
-    c4 = 1 + 3 * vf + vf * vf * vf + 3 * vf * vf
-    
-    e1 = series.ewm(span=period).mean()
-    e2 = e1.ewm(span=period).mean()
-    e3 = e2.ewm(span=period).mean()
-    e4 = e3.ewm(span=period).mean()
-    e5 = e4.ewm(span=period).mean()
-    e6 = e5.ewm(span=period).mean()
-    
-    return c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3
+    return talib.T3(series.values.astype(float), timeperiod=period, vfactor=vf)
 
 
-def calc_trima_single(series: pd.Series, period: int) -> pd.Series:
+def calc_trima_single(series: pd.Series, period: int) -> np.ndarray:
     """
-    三角移动平均
+    三角移动平均（TA-Lib 版）
     
     Args:
         series: 价格序列
         period: 计算周期
     
     Returns:
-        TRIMA 值序列
+        TRIMA 值数组
     """
-    if period % 2 == 0:
-        n = period + 1
-        weights = np.arange(1, n // 2 + 1)
-        weights = np.concatenate([weights, weights[::-1]])
-    else:
-        n = period
-        weights = np.arange(1, n // 2 + 1)
-        weights = np.concatenate([weights, [n // 2 + 1], weights[::-1]])
-    
-    weights = weights / weights.sum()
-    return series.rolling(period).apply(lambda x: np.dot(x, weights), raw=True)
-
-
-# =============================================================================
-# 辅助函数
-# =============================================================================
-
-def _calc_wma(series: pd.Series, period: int) -> pd.Series:
-    """加权移动平均（内部使用）"""
-    weights = np.arange(1, period + 1)
-    wma = series.rolling(period).apply(
-        lambda x: np.dot(x, weights) / weights.sum(), raw=True
-    )
-    return wma
-
-
-def _calc_dema(series: pd.Series, period: int) -> pd.Series:
-    """双指数移动平均（内部使用）"""
-    ema = series.ewm(span=period).mean()
-    ema_of_ema = ema.ewm(span=period).mean()
-    return 2 * ema - ema_of_ema
-
-
-def _calc_tema(series: pd.Series, period: int) -> pd.Series:
-    """三重指数移动平均（内部使用）"""
-    ema = series.ewm(span=period).mean()
-    ema_of_ema = ema.ewm(span=period).mean()
-    ema_of_ema_of_ema = ema_of_ema.ewm(span=period).mean()
-    return 3 * ema - 3 * ema_of_ema + ema_of_ema_of_ema
+    return talib.TRIMA(series.values.astype(float), timeperiod=period)

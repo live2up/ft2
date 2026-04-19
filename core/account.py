@@ -272,7 +272,7 @@ class AccountManager:
         if price <= 0:
             raise ValueError(f"Invalid price {price} for {symbol}")
 
-        order_id = f"order_{len(self._trade_records)+1}"
+        order_id = f"order_{len(self.trade_records)+1}"
 
         executed_volume = self._process_order(
             symbol, volume, side, position_effect, order_type, price, order_id
@@ -329,7 +329,7 @@ class AccountManager:
             self.cash = round(self.cash + volume * price - total_fee, 2)
             self._update_position(symbol, volume, price, total_fee, OrderSide.Sell)
 
-        self._trade_records.append(TradeRecord(
+        self.trade_records.append(TradeRecord(
             created_at=context.now,
             symbol=symbol,
             price=price,

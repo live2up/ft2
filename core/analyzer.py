@@ -882,8 +882,8 @@ class AccountAnalyzer:
             'createdAt': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'metrics': metrics,
             'dailyAssets': [
-                {'date': d.strftime('%Y-%m-%d'), 'assets': v} 
-                for d, v in self._daily_assets.items()
+                {'date': d.strftime('%Y-%m-%d'), 'assets': v if not (isinstance(v, float) and (v != v or abs(v) == float('inf'))) else 0} 
+                for d, v in sorted(self._daily_assets.items())
             ],
             'trades': [self._to_dict(t) for t in self.account.trade_records],
             'topProfits': [self._to_dict(t, exclude='original_trade') for t in self.get_largest_profit_trades(20)],
@@ -896,7 +896,17 @@ class AccountAnalyzer:
         env = Environment(loader=FileSystemLoader(template_dir))
         template = env.get_template("analyzer.html")
 
-        html_content = template.render(data=json.dumps(data, ensure_ascii=False, default=str))
+        def json_serializer(obj):
+            """处理 NaN/Inf 等无法序列化的值"""
+            import math
+            if isinstance(obj, float):
+                if math.isnan(obj):
+                    return 0
+                if math.isinf(obj):
+                    return 0
+            return str(obj)
+
+        html_content = template.render(data=json.dumps(data, ensure_ascii=False, default=json_serializer))
 
         current_datetime = datetime.now().strftime("%Y%m%d_%H%M")
         output_path = Path(self.base_dir) / output_dir / f"{report_name}_{current_datetime}.html"
