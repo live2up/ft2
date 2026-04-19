@@ -1,6 +1,6 @@
 # signals 模块 - 择时信号层
 """
-信号层：指标 → 信号 → 融合 → 择时
+信号层：指标 → 信号 → 融合 → 择时 → 策略执行
 
 架构：
   原始数据 (K线)
@@ -16,17 +16,21 @@
   ThresholdPolicy (阈值化)
        ↓
   TradingSignal (买入/持有/卖出)
+       ↓
+  SignalStrategy (策略适配器 → 调用 core 引擎)
 
 目录：
   signals/
   ├── __init__.py          # 模块入口
   ├── base.py              # Signal 基类和枚举
-  ├── generator.py         # 信号生成器（8种内置 + 组合 + 函数式）
-  ├── combiner.py          # 信号融合器（投票/打分/加权/自适应）
+  ├── generator.py         # 信号生成器（14种内置 + 组合 + 函数式）
+  ├── combiner.py          # 信号融合器（投票/打分/加权/自适应/时序）
+  ├── threshold.py         # 阈值策略（简单/分位数/Z-Score/双阈值）
   ├── registry.py          # 信号注册器和模板
-  ├── threshold.py         # 阈值策略
   ├── timeframe.py         # 多周期数据处理（对齐、转换、特征）
-  └── examples.py          # 使用示例
+  ├── strategy.py          # 策略适配器（连接 signals 和 core 引擎）
+  ├── examples.py          # 使用示例
+  └── test_strategy.py     # 策略适配器测试
 """
 
 from .base import (
@@ -64,6 +68,7 @@ from .combiner import (
     WeightedCombiner,   # 加权融合
     EqualWeightCombiner,# 等权融合
     AdaptiveCombiner,   # 自适应融合
+    SequenceCombiner,   # 时序融合（新增）
 )
 
 from .registry import (
@@ -87,6 +92,15 @@ from .threshold import (
 from .timeframe import (
     MultiTimeframeAligner,  # 多周期数据对齐器
     FrequencyConverter,     # 频率转换器
+)
+
+from .backtest import (
+    run_backtest,           # 轻量回测函数
+    BacktestResult,         # 回测结果对象
+)
+
+from .ic_analyzer import (
+    ICAnalyzer,             # 通用IC分析器
 )
 
 __all__ = [
@@ -121,6 +135,7 @@ __all__ = [
     'WeightedCombiner',
     'EqualWeightCombiner',
     'AdaptiveCombiner',
+    'SequenceCombiner',    # 时序融合
     # 注册器
     'SignalRegistry',
     'SIGNAL_TEMPLATES',
@@ -138,4 +153,9 @@ __all__ = [
     # 多周期处理
     'MultiTimeframeAligner',
     'FrequencyConverter',
+    # 轻量回测
+    'run_backtest',
+    'BacktestResult',
+    # IC分析器
+    'ICAnalyzer',
 ]
