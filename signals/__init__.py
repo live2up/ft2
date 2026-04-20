@@ -111,6 +111,8 @@ from .generator import (
     NATRSignal,                # NATR 归一化 ATR
     TRANGESignal,              # TRANGE 真实波幅
     AVGDEVSignal,              # AVGDEV 平均偏差
+    BBWidthSignal,             # BBWidth 布林带宽
+    RealizedVolatilitySignal,  # RealizedVolatility 真实波动率
     # Cycle Indicators
     HTDCCPERIODSignal,         # HT_DCPERIOD 希尔伯特周期
     HTDCPHASESignal,           # HT_DCPHASE 希尔伯特相位

@@ -46,6 +46,20 @@ class SignalGenerator(ABC):
         self.params: Dict[str, Any] = {}
         self.is_fitted = True  # 默认已拟合（传统指标不需要训练）
     
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]):
+        """
+        从配置字典创建信号生成器实例
+        
+        Args:
+            config: 配置字典，包含 'period', 'nbdev' 等参数
+            
+        Returns:
+            SignalGenerator: 信号生成器实例
+        """
+        # 子类可以重写此方法以支持自定义参数映射
+        return cls(**config)
+    
     def fit(self, data: pd.DataFrame, target: pd.Series = None, **kwargs):
         """
         训练/拟合信号生成器（可选）
@@ -909,6 +923,11 @@ class PPOSignal(SignalGenerator):
     信号值：PPO 线（百分比 MACD）
     - 正值: 多头趋势
     - 负值: 空头趋势
+    
+    【与 TA-Lib 差异说明】
+    TA-Lib PPO 函数只返回 1 个值（PPO 线），不像 MACD 返回 3 个值。
+    原始调用方式：ppo = talib.PPO(close, fastperiod, slowperiod, matype)
+    注意：signal 参数仅用于命名，不参与 TA-Lib 计算。
     """
     
     def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
@@ -920,7 +939,7 @@ class PPOSignal(SignalGenerator):
     
     def generate(self, data: pd.DataFrame) -> pd.Series:
         close = data['close'].values.astype(float)
-        ppo, ppo_signal, _ = talib.PPO(close, fastperiod=self.fast, slowperiod=self.slow, matype=0)
+        ppo = talib.PPO(close, fastperiod=self.fast, slowperiod=self.slow, matype=0)
         return pd.Series(ppo, index=data.index).fillna(0)
 
 
@@ -994,9 +1013,16 @@ class ULTOSCSignal(SignalGenerator):
 class WILLRSignal(SignalGenerator):
     """WILLR 威廉指标信号（TA-Lib 版本）
     
-    信号值：W%R（-100 ~ 0）
-    - < -80: 超卖
-    - > -20: 超买
+    信号值：W%R 转换后（-50 ~ 50）
+    - 原始 W%R 范围：-100 ~ 0
+    - 转换后：W%R + 50，范围变为 -50 ~ 50
+    - < -30（原始 < -80）: 超卖，做多信号
+    - > 30（原始 > -20）: 超买，做空信号
+    
+    【与 TA-Lib 差异说明】
+    TA-Lib WILLR 返回值范围：-100 ~ 0（负值）
+    本类做了转换：willr + 50，使范围变为 -50 ~ 50
+    原因：回测逻辑判断 signal > 0 才持仓，原始值永远 ≤ 0 导致无法交易
     """
     
     def __init__(self, period: int = 14):
@@ -1009,7 +1035,7 @@ class WILLRSignal(SignalGenerator):
         low = data['low'].values.astype(float)
         close = data['close'].values.astype(float)
         willr = talib.WILLR(high, low, close, timeperiod=self.period)
-        return pd.Series(willr, index=data.index).fillna(0)
+        return pd.Series(willr + 50, index=data.index).fillna(0)
 
 
 class ADXSignal(SignalGenerator):
@@ -1543,6 +1569,83 @@ class AVGDEVSignal(SignalGenerator):
 
 
 # =============================================================================
+# 4. Volatility Indicators (波动率指标) - 补充
+# =============================================================================
+
+class BBWidthSignal(SignalGenerator):
+    """BBWidth 布林带宽信号
+    
+    信号值：布林带宽（百分比）
+    - 高值: 波动率高（带宽扩张）
+    - 低值: 波动率低（带宽收窄）
+    
+    特点：
+    - 直接输出带宽序列
+    - 可配合带宽变化率生成信号
+    """
+    
+    def __init__(self, period: int = 20, nbdev: float = 2.0):
+        super().__init__(f"BBWidth{period}")
+        self.period = period
+        self.nbdev = nbdev
+        self.params = {'period': period, 'nbdev': nbdev}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close']
+        mid = close.rolling(self.period).mean()
+        std = close.rolling(self.period).std()
+        
+        # 布林带宽 = (上轨 - 下轨) / 中轨 * 100
+        upper = mid + self.nbdev * std
+        lower = mid - self.nbdev * std
+        bandwidth = (upper - lower) / mid * 100
+        
+        return bandwidth.fillna(0)
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]):
+        """从配置字典创建 BBWidthSignal 实例"""
+        period = config.get('period', 20)
+        nbdev = config.get('std_dev', config.get('nbdev', 2.0))
+        return cls(period=period, nbdev=nbdev)
+
+
+class RealizedVolatilitySignal(SignalGenerator):
+    """RealizedVolatility 真实波动率信号
+    
+    信号值：历史波动率（年化百分比）
+    - 高值: 高波动率
+    - 低值: 低波动率
+    
+    计算方式：
+    - 计算对数收益率
+    - 滚动标准差（年化）
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"RealizedVol{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close']
+        
+        # 计算对数收益率
+        log_return = np.log(close / close.shift(1))
+        
+        # 计算滚动标准差（年化）
+        hv = log_return.rolling(self.period).std() * np.sqrt(252) * 100
+        
+        return hv.fillna(0)
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]):
+        """从配置字典创建 RealizedVolatilitySignal 实例"""
+        period = config.get('period', 20)
+        return cls(period=period)
+
+
+# =============================================================================
 # 5. Price Transform (价格转换)
 # =============================================================================
 
@@ -1640,8 +1743,129 @@ class HTTRENDMODESignal(SignalGenerator):
 # 7. Pattern Recognition (形态识别)
 # =============================================================================
 
-# 形态识别指标（如十字星、锤子线等）通常生成离散信号（-100, 0, 100）
-# 如需要，可以在此添加特定的形态识别信号类
+class PatternSignal(SignalGenerator):
+    """形态识别信号基类
+    
+    形态识别指标通常生成离散信号：
+    - 100: 看涨形态
+    - -100: 看跌形态
+    - 0: 无形态
+    
+    信号值归一化为：
+    - 1.0: 看涨信号
+    - -1.0: 看跌信号
+    - 0.0: 无信号
+    """
+    
+    # 子类需要定义的类属性
+    talib_func = None  # TA-Lib 形态识别函数
+    
+    def __init__(self):
+        super().__init__(self.__class__.__name__.replace('Signal', ''))
+        self.params = {}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        """生成形态识别信号
+        
+        Args:
+            data: K线数据，必须包含 open/high/low/close
+            
+        Returns:
+            pd.Series: 信号值序列，值为 -1.0, 0.0, 1.0
+        """
+        open_price = data['open'].values.astype(float)
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        
+        # 调用 TA-Lib 形态识别函数
+        pattern = self.talib_func(open_price, high, low, close)
+        
+        # 归一化为 -1.0, 0.0, 1.0
+        signal = pattern.astype(float) / 100.0
+        
+        return pd.Series(signal, index=data.index)
+
+
+class CDLDOJISignal(PatternSignal):
+    """十字星形态信号
+    
+    特征：开盘价≈收盘价，上下影线较长
+    含义：市场犹豫不决，可能反转
+    """
+    talib_func = talib.CDLDOJI
+
+
+class CDLHAMMERSignal(PatternSignal):
+    """锤子线形态信号
+    
+    特征：实体小，下影线长（至少是实体2倍），上影线短或无
+    含义：下跌后的反转信号（看涨）
+    """
+    talib_func = talib.CDLHAMMER
+
+
+class CDLENGULFINGSignal(PatternSignal):
+    """吞没形态信号
+    
+    特征：一根K线完全吞没前一根K线
+    含义：看涨吞没（阳包阴）或看跌吞没（阴包阳），强反转信号
+    """
+    talib_func = talib.CDLENGULFING
+
+
+class CDLMORNINGSTARSignal(PatternSignal):
+    """启明星形态信号
+    
+    特征：三根K线组成，下跌趋势中：大阴线→小实体→大阳线
+    含义：底部反转信号（看涨）
+    """
+    talib_func = talib.CDLMORNINGSTAR
+
+
+class CDLEVENINGSTARSignal(PatternSignal):
+    """黄昏星形态信号
+    
+    特征：三根K线组成，上涨趋势中：大阳线→小实体→大阴线
+    含义：顶部反转信号（看跌）
+    """
+    talib_func = talib.CDLEVENINGSTAR
+
+
+class CDL3BLACKCROWSSignal(PatternSignal):
+    """三只乌鸦形态信号
+    
+    特征：连续三根下跌阴线，每根收盘价低于前一根
+    含义：顶部反转信号（看跌）
+    """
+    talib_func = talib.CDL3BLACKCROWS
+
+
+class CDL3WHITESOLDIERSSignal(PatternSignal):
+    """三白兵形态信号
+    
+    特征：连续三根上涨阳线，每根收盘价高于前一根
+    含义：底部反转信号（看涨）
+    """
+    talib_func = talib.CDL3WHITESOLDIERS
+
+
+class CDLSHOOTINGSTARSignal(PatternSignal):
+    """流星线形态信号
+    
+    特征：实体小，上影线长（至少是实体2倍），下影线短或无
+    含义：上涨后的反转信号（看跌）
+    """
+    talib_func = talib.CDLSHOOTINGSTAR
+
+
+class CDLHARAMISignal(PatternSignal):
+    """孕线形态信号
+    
+    特征：第二根K线实体完全在第一根实体范围内
+    含义：趋势减弱，可能反转
+    """
+    talib_func = talib.CDLHARAMI
 
 
 # =============================================================================
