@@ -131,13 +131,16 @@ def run_backtest(
         positions = np.sign(signal_values)
     
     # 仓位延迟1天（避免未来函数）
+    # 信号在T日生成，仓位在T+1日开盘执行，收益在T+1日实现
     positions = positions.shift(1).fillna(0)
     
-    # 3. 计算收益（仓位再延迟1天，信号发生后才交易）
+    # 3. 计算收益
+    # 注意：positions已经过shift(1)，信号T日→仓位T+1日→收益T+1日
+    # 不需要再次shift，否则会造成双重延迟（信号延迟2天）
     df = data.copy()
     df['return'] = df['close'].pct_change()
     
-    strategy_returns = positions.shift(1) * df['return']
+    strategy_returns = positions * df['return']
     benchmark_returns = df['return']
     
     nav = initial_capital * (1 + strategy_returns).cumprod()

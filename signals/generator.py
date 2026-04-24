@@ -1040,23 +1040,25 @@ class WILLRSignal(SignalGenerator):
 
 class ADXSignal(SignalGenerator):
     """ADX 平均趋向指数信号
-    
-    信号值：ADX（0-100）
-    - > 25: 强趋势
-    - < 20: 弱趋势/震荡
+
+    信号值：ADX偏离历史均值的百分比
+    - > 0: 趋势强度高于均值，做多
+    - < 0: 趋势强度低于均值，空仓
     """
-    
+
     def __init__(self, period: int = 14):
         super().__init__(f"ADX{period}")
         self.period = period
         self.params = {'period': period}
-    
+
     def generate(self, data: pd.DataFrame) -> pd.Series:
         high = data['high'].values.astype(float)
         low = data['low'].values.astype(float)
         close = data['close'].values.astype(float)
         adx = talib.ADX(high, low, close, timeperiod=self.period)
-        return pd.Series(adx - 50, index=data.index).fillna(0)
+        adx_ma = talib.SMA(adx, timeperiod=self.period)
+        signal = np.where(adx_ma > 0, (adx - adx_ma) / adx_ma * 100, 0)
+        return pd.Series(signal, index=data.index).fillna(0)
 
 
 class ADXRSignal(SignalGenerator):
@@ -1475,31 +1477,33 @@ class ADOSCSignal(SignalGenerator):
 
 class ATRSignal(SignalGenerator):
     """ATR 平均真实波幅信号
-    
-    信号值：ATR 相对价格的比例（百分比）
-    - 高值: 波动率高
-    - 低值: 波动率低
+
+    信号值：ATR偏离历史均值的百分比
+    - > 0: 波动率高于均值（异常扩张），做多
+    - < 0: 波动率低于均值（收缩），空仓
     """
-    
+
     def __init__(self, period: int = 14):
         super().__init__(f"ATR{period}")
         self.period = period
         self.params = {'period': period}
-    
+
     def generate(self, data: pd.DataFrame) -> pd.Series:
         high = data['high'].values.astype(float)
         low = data['low'].values.astype(float)
         close = data['close'].values.astype(float)
         atr = talib.ATR(high, low, close, timeperiod=self.period)
-        return pd.Series(atr / close * 100, index=data.index).fillna(0)
+        atr_ma = talib.SMA(atr, timeperiod=self.period)
+        signal = np.where(atr_ma > 0, (atr - atr_ma) / atr_ma * 100, 0)
+        return pd.Series(signal, index=data.index).fillna(0)
 
 
 class STDDEVSignal(SignalGenerator):
     """STDDEV 标准差信号
     
-    信号值：价格波动标准差（相对价格百分比）
-    - 高值: 波动率高
-    - 低值: 波动率低
+    信号值：当前标准差偏离历史均值的百分比
+    - > 0: 波动率高于均值
+    - < 0: 波动率低于均值
     """
     
     def __init__(self, period: int = 20, nbdev: float = 1.0):
@@ -1511,26 +1515,32 @@ class STDDEVSignal(SignalGenerator):
     def generate(self, data: pd.DataFrame) -> pd.Series:
         close = data['close'].values.astype(float)
         stddev = talib.STDDEV(close, timeperiod=self.period, nbdev=self.nbdev)
-        return pd.Series(stddev / close * 100, index=data.index).fillna(0)
+        stddev_ma = talib.SMA(stddev, timeperiod=self.period)
+        signal = np.where(stddev_ma > 0, (stddev - stddev_ma) / stddev_ma * 100, 0)
+        return pd.Series(signal, index=data.index).fillna(0)
 
 
 class NATRSignal(SignalGenerator):
     """NATR 归一化平均真实波幅信号
-    
-    信号值：NATR（归一化 ATR）
+
+    信号值：NATR偏离历史均值的百分比
+    - > 0: 波动率高于均值（异常扩张），做多
+    - < 0: 波动率低于均值（收缩），空仓
     """
-    
+
     def __init__(self, period: int = 14):
         super().__init__(f"NATR{period}")
         self.period = period
         self.params = {'period': period}
-    
+
     def generate(self, data: pd.DataFrame) -> pd.Series:
         high = data['high'].values.astype(float)
         low = data['low'].values.astype(float)
         close = data['close'].values.astype(float)
         natr = talib.NATR(high, low, close, timeperiod=self.period)
-        return pd.Series(natr, index=data.index).fillna(0)
+        natr_ma = talib.SMA(natr, timeperiod=self.period)
+        signal = np.where(natr_ma > 0, (natr - natr_ma) / natr_ma * 100, 0)
+        return pd.Series(signal, index=data.index).fillna(0)
 
 
 class TRANGESignal(SignalGenerator):
@@ -1568,24 +1578,409 @@ class AVGDEVSignal(SignalGenerator):
         return pd.Series(avgdev / close * 100, index=data.index).fillna(0)
 
 
-# =============================================================================
-# 4. Volatility Indicators (波动率指标) - 补充
-# =============================================================================
+class TrueVolSignal(SignalGenerator):
+    """TrueVol 真实波动率信号
+    
+    信号值：ATR / Close × 100（百分比）
+    - 高值: 高波动率
+    - 低值: 低波动率
+    
+    计算方式：基于 ATR 计算真实波动率百分比
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"TrueVol{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        atr = talib.ATR(high, low, close, timeperiod=self.period)
+        return pd.Series(atr / close * 100, index=data.index).fillna(0)
 
-class BBWidthSignal(SignalGenerator):
-    """BBWidth 布林带宽信号
+
+class ATRPercentSignal(SignalGenerator):
+    """ATR% 平均真实波幅百分比信号
     
-    信号值：布林带宽（百分比）
-    - 高值: 波动率高（带宽扩张）
-    - 低值: 波动率低（带宽收窄）
+    信号值：ATR / Close（小数形式）
+    - 高值: 波动率大
+    - 低值: 波动率小
     
-    特点：
-    - 直接输出带宽序列
-    - 可配合带宽变化率生成信号
+    与 TrueVol 的区别：输出小数而非百分比
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"ATR%{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        atr = talib.ATR(high, low, close, timeperiod=self.period)
+        return pd.Series(atr / close, index=data.index).fillna(0)
+
+
+class BBPercentSignal(SignalGenerator):
+    """BB% 布林带位置百分比信号
+    
+    信号值：(Close - 下轨) / (上轨 - 下轨)
+    - > 1: 价格突破上轨
+    - 0.5: 价格在中轨
+    - < 0: 价格突破下轨
+    
+    计算方式：基于布林带计算价格在通道中的相对位置
     """
     
     def __init__(self, period: int = 20, nbdev: float = 2.0):
-        super().__init__(f"BBWidth{period}")
+        super().__init__(f"BB%{period}")
+        self.period = period
+        self.nbdev = nbdev
+        self.params = {'period': period, 'nbdev': nbdev}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close'].values.astype(float)
+        upper, middle, lower = talib.BBANDS(
+            close, timeperiod=self.period, 
+            nbdevup=self.nbdev, nbdevdn=self.nbdev
+        )
+        bandwidth = upper - lower
+        bbp = (close - lower) / bandwidth
+        return pd.Series(bbp, index=data.index).fillna(0.5)
+
+
+class KeltnerWidthSignal(SignalGenerator):
+    """KeltnerWidth 肯特纳通道宽度信号
+    
+    信号值：(上轨 - 下轨) / 中轨 × 100
+    - 高值: 波动率高（通道扩张）
+    - 低值: 波动率低（通道收窄）
+    
+    计算方式：基于 ATR 的肯特纳通道宽度
+    """
+    
+    def __init__(self, period: int = 20, atr_period: int = 20, multiplier: float = 2.0):
+        super().__init__(f"KeltnerWidth{period}")
+        self.period = period
+        self.atr_period = atr_period
+        self.multiplier = multiplier
+        self.params = {'period': period, 'atr_period': atr_period, 'multiplier': multiplier}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high'].values.astype(float)
+        low = data['low'].values.astype(float)
+        close = data['close'].values.astype(float)
+        
+        mid = talib.EMA(close, timeperiod=self.period)
+        atr = talib.ATR(high, low, close, timeperiod=self.atr_period)
+        
+        upper = mid + self.multiplier * atr
+        lower = mid - self.multiplier * atr
+        
+        keltner_width = (upper - lower) / mid * 100
+        return pd.Series(keltner_width, index=data.index).fillna(0)
+
+
+class DonchianWidthSignal(SignalGenerator):
+    """DonchianWidth 唐奇安通道宽度信号
+    
+    信号值：(Highest High - Lowest Low) / Midpoint × 100
+    - 高值: 波动率高（通道宽）
+    - 低值: 波动率低（通道窄）
+    
+    计算方式：纯 pandas 计算唐奇安通道宽度
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"DonchianWidth{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high']
+        low = data['low']
+        
+        highest_high = high.rolling(self.period).max()
+        lowest_low = low.rolling(self.period).min()
+        midpoint = (highest_high + lowest_low) / 2
+        
+        donchian_width = (highest_high - lowest_low) / midpoint * 100
+        return pd.Series(donchian_width, index=data.index).fillna(0)
+
+
+class ParkinsonVolSignal(SignalGenerator):
+    """ParkinsonVol 帕金森波动率信号
+    
+    信号值：年化帕金森波动率（百分比）
+    - 高值: 高波动率
+    - 低值: 低波动率
+    
+    计算方式：基于 High-Low 范围估计波动率
+    公式：σ = sqrt(1/(4*ln(2)) * avg(ln(H/L)^2)) * sqrt(252)
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"ParkinsonVol{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high']
+        low = data['low']
+        
+        log_hl = np.log(high / low)
+        variance = (log_hl ** 2) / (4 * np.log(2))
+        
+        parkinson_vol = variance.rolling(self.period).mean() ** 0.5 * np.sqrt(252) * 100
+        return pd.Series(parkinson_vol, index=data.index).fillna(0)
+
+
+class GarmanKlassVolSignal(SignalGenerator):
+    """GarmanKlassVol 加曼-克莱斯波动率信号
+    
+    信号值：年化 Garman-Klass 波动率（百分比）
+    - 高值: 高波动率
+    - 低值: 低波动率
+    
+    计算方式：基于 OHLC 四价计算波动率
+    公式：σ = sqrt(0.5 * avg(ln(H/L)^2) - (2*ln(2) - 1) * avg(ln(C/O)^2)) * sqrt(252)
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"GarmanKlassVol{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        open_p = data['open']
+        high = data['high']
+        low = data['low']
+        close = data['close']
+        
+        log_hl = np.log(high / low)
+        log_co = np.log(close / open_p)
+        
+        variance = 0.5 * (log_hl ** 2) - (2 * np.log(2) - 1) * (log_co ** 2)
+        
+        gk_vol = variance.rolling(self.period).mean() ** 0.5 * np.sqrt(252) * 100
+        return pd.Series(gk_vol, index=data.index).fillna(0)
+
+
+class RVISignal(SignalGenerator):
+    """RVI 相对波动率指标信号
+    
+    信号值：log(StdDev(上涨日) / StdDev(下跌日))
+    - > 0: 上涨日波动率 > 下跌日波动率
+    - < 0: 下跌日波动率 > 上涨日波动率
+    
+    计算方式：分别计算上涨日和下跌日的波动率，然后求比值
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"RVI{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close']
+        returns = close.pct_change()
+        
+        up_days = returns.where(returns > 0)
+        down_days = returns.where(returns < 0)
+        
+        up_std = up_days.rolling(self.period).std()
+        down_std = down_days.rolling(self.period).std()
+        
+        rvi = np.log(up_std / down_std)
+        return pd.Series(rvi, index=data.index).fillna(0)
+
+
+class UlcerIndexSignal(SignalGenerator):
+    """UlcerIndex 溃疡指数信号
+    
+    信号值：溃疡指数（百分比）
+    - 高值: 深度回撤，高风险
+    - 低值: 浅度回撤，低风险
+    
+    计算方式：基于 N 日内收盘价相对于最高价的回撤计算
+    公式：UI = sqrt(avg(回撤百分比^2))
+    """
+    
+    def __init__(self, period: int = 14):
+        super().__init__(f"UlcerIndex{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close']
+        
+        highest_close = close.rolling(self.period).max()
+        drawdown_pct = (close - highest_close) / highest_close * 100
+        
+        ulcer_index = (drawdown_pct ** 2).rolling(self.period).mean() ** 0.5
+        return pd.Series(ulcer_index, index=data.index).fillna(0)
+
+
+class YangZhangVolSignal(SignalGenerator):
+    """YangZhangVol 杨张波动率信号
+    
+    信号值：年化杨张波动率（百分比）
+    - 高值: 高波动率
+    - 低值: 低波动率
+    
+    计算方式：最稳健的OHLC波动率估计量
+    公式：σ² = σ²_overnight + k * σ²_open + (1-k) * σ²_rogers_satchell
+    特点：考虑隔夜跳空、开盘价漂移和日内波动
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"YangZhangVol{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        open_p = data['open']
+        high = data['high']
+        low = data['low']
+        close = data['close']
+        
+        # 隔夜收益率（收盘到开盘）
+        log_oc = np.log(open_p / close.shift(1))
+        sigma_overnight = log_oc.rolling(self.period).var()
+        
+        # 开盘价波动率
+        log_o_c = np.log(open_p / close)
+        sigma_open = log_o_c.rolling(self.period).var()
+        
+        # Rogers-Satchell 波动率
+        log_ho = np.log(high / open_p)
+        log_lo = np.log(low / open_p)
+        log_hc = np.log(high / close)
+        log_lc = np.log(low / close)
+        
+        rs_var = log_ho * log_hc + log_lo * log_lc
+        sigma_rs = rs_var.rolling(self.period).mean()
+        
+        # 最优权重 k = 0.34 / (1.34 + (period + 1) / (period - 1))
+        k = 0.34 / (1.34 + (self.period + 1) / (self.period - 1))
+        
+        # 综合波动率
+        variance = sigma_overnight + k * sigma_open + (1 - k) * sigma_rs
+        yz_vol = variance ** 0.5 * np.sqrt(252) * 100
+        
+        return pd.Series(yz_vol, index=data.index).fillna(0)
+
+
+class RogersSatchellVolSignal(SignalGenerator):
+    """RogersSatchellVol 罗杰斯-萨切尔波动率信号
+    
+    信号值：年化 Rogers-Satchell 波动率（百分比）
+    - 高值: 高波动率
+    - 低值: 低波动率
+    
+    计算方式：带漂移校正的OHLC波动率估计
+    公式：σ² = avg(ln(H/O)·ln(H/C) + ln(L/O)·ln(L/C))
+    特点：对趋势市场中的波动率估计更准确
+    """
+    
+    def __init__(self, period: int = 20):
+        super().__init__(f"RogersSatchellVol{period}")
+        self.period = period
+        self.params = {'period': period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        open_p = data['open']
+        high = data['high']
+        low = data['low']
+        close = data['close']
+        
+        # Rogers-Satchell 方差估计
+        log_ho = np.log(high / open_p)
+        log_lo = np.log(low / open_p)
+        log_hc = np.log(high / close)
+        log_lc = np.log(low / close)
+        
+        rs_variance = (log_ho * log_hc + log_lo * log_lc).rolling(self.period).mean()
+        
+        rs_vol = rs_variance ** 0.5 * np.sqrt(252) * 100
+        return pd.Series(rs_vol, index=data.index).fillna(0)
+
+
+class ChaikinVolatilitySignal(SignalGenerator):
+    """ChaikinVolatility 蔡金波动率信号
+    
+    信号值：蔡金波动率变化率（百分比）
+    - 正值: 波动率扩张
+    - 负值: 波动率收缩
+    
+    计算方式：基于 High-Low 差值的 EMA 变化率
+    公式：(EMA(HL, N) - EMA(HL, N)[N天前]) / EMA(HL, N)[N天前] * 100
+    """
+    
+    def __init__(self, period: int = 10, roc_period: int = 10):
+        super().__init__(f"ChaikinVol{period}")
+        self.period = period
+        self.roc_period = roc_period
+        self.params = {'period': period, 'roc_period': roc_period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        high = data['high']
+        low = data['low']
+        
+        # High-Low 差值
+        hl = high - low
+        
+        # EMA 平滑
+        hl_ema = hl.ewm(span=self.period, adjust=False).mean()
+        
+        # 变化率
+        chaikin_vol = hl_ema.pct_change(self.roc_period) * 100
+        return pd.Series(chaikin_vol, index=data.index).fillna(0)
+
+
+class VolatilityRatioSignal(SignalGenerator):
+    """VolatilityRatio 波动率比率信号
+    
+    信号值：短期波动率 / 长期波动率
+    - > 1: 短期波动率高于长期（波动率扩张）
+    - < 1: 短期波动率低于长期（波动率收缩）
+    
+    计算方式：比较不同时间窗口的波动率
+    """
+    
+    def __init__(self, short_period: int = 10, long_period: int = 20):
+        super().__init__(f"VolRatio{short_period}_{long_period}")
+        self.short_period = short_period
+        self.long_period = long_period
+        self.params = {'short_period': short_period, 'long_period': long_period}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close']
+        log_return = np.log(close / close.shift(1))
+        
+        short_vol = log_return.rolling(self.short_period).std() * np.sqrt(252)
+        long_vol = log_return.rolling(self.long_period).std() * np.sqrt(252)
+        
+        vol_ratio = short_vol / long_vol
+        return pd.Series(vol_ratio, index=data.index).fillna(1)
+
+
+class BBBreakoutSignal(SignalGenerator):
+    """BBBreakout 布林带突破信号
+    
+    信号值：突破强度（百分比）
+    - > 0: 突破上轨
+    - < 0: 突破下轨
+    - 0: 在布林带内部
+    
+    计算方式：计算价格突破布林带的百分比距离
+    """
+    
+    def __init__(self, period: int = 20, nbdev: float = 2.0):
+        super().__init__(f"BBBreakout{period}")
         self.period = period
         self.nbdev = nbdev
         self.params = {'period': period, 'nbdev': nbdev}
@@ -1595,12 +1990,107 @@ class BBWidthSignal(SignalGenerator):
         mid = close.rolling(self.period).mean()
         std = close.rolling(self.period).std()
         
-        # 布林带宽 = (上轨 - 下轨) / 中轨 * 100
+        upper = mid + self.nbdev * std
+        lower = mid - self.nbdev * std
+        
+        # 突破上轨：正值，突破下轨：负值
+        breakout_upper = (close - upper) / upper * 100
+        breakout_lower = (close - lower) / lower * 100
+        
+        # 合并：只保留突破方向
+        breakout = pd.Series(0.0, index=data.index)
+        breakout[close > upper] = breakout_upper[close > upper]
+        breakout[close < lower] = breakout_lower[close < lower]
+        
+        return breakout
+
+
+class VaRSignal(SignalGenerator):
+    """VaR 风险价值信号
+    
+    信号值：N% 置信水平下的风险价值（百分比）
+    - 负值越大：潜在亏损越大
+    - 用于衡量下行风险
+    
+    计算方式：基于历史模拟法计算 VaR
+    """
+    
+    def __init__(self, period: int = 20, confidence: float = 0.05):
+        super().__init__(f"VaR{period}")
+        self.period = period
+        self.confidence = confidence
+        self.params = {'period': period, 'confidence': confidence}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close']
+        returns = close.pct_change()
+        
+        def calc_var(x):
+            return np.percentile(x, self.confidence * 100)
+        
+        var = returns.rolling(self.period).apply(calc_var, raw=True) * 100
+        return pd.Series(var, index=data.index).fillna(0)
+
+
+class CVaRSignal(SignalGenerator):
+    """CVaR 条件风险价值信号（Expected Shortfall）
+    
+    信号值：N% 置信水平下的条件风险价值（百分比）
+    - 负值越大：尾部风险越大
+    - 比 VaR 更保守，考虑极端亏损
+    
+    计算方式：计算低于 VaR 的平均收益率
+    """
+    
+    def __init__(self, period: int = 20, confidence: float = 0.05):
+        super().__init__(f"CVaR{period}")
+        self.period = period
+        self.confidence = confidence
+        self.params = {'period': period, 'confidence': confidence}
+    
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close']
+        returns = close.pct_change()
+        
+        def calc_cvar(x):
+            var = np.percentile(x, self.confidence * 100)
+            return x[x <= var].mean() if len(x[x <= var]) > 0 else var
+        
+        cvar = returns.rolling(self.period).apply(calc_cvar, raw=True) * 100
+        return pd.Series(cvar, index=data.index).fillna(0)
+
+
+# =============================================================================
+# 4. Volatility Indicators (波动率指标) - 补充
+# =============================================================================
+
+class BBWidthSignal(SignalGenerator):
+    """BBWidth 布林带宽信号
+
+    信号值：布林带宽偏离历史均值的百分比
+    - > 0: 带宽高于均值（波动率扩张），做多
+    - < 0: 带宽低于均值（波动率收缩），空仓
+    """
+
+    def __init__(self, period: int = 20, nbdev: float = 2.0):
+        super().__init__(f"BBWidth{period}")
+        self.period = period
+        self.nbdev = nbdev
+        self.params = {'period': period, 'nbdev': nbdev}
+
+    def generate(self, data: pd.DataFrame) -> pd.Series:
+        close = data['close']
+        mid = close.rolling(self.period).mean()
+        std = close.rolling(self.period).std()
+
         upper = mid + self.nbdev * std
         lower = mid - self.nbdev * std
         bandwidth = (upper - lower) / mid * 100
-        
-        return bandwidth.fillna(0)
+
+        bw_ma = bandwidth.rolling(self.period).mean()
+        signal = np.where(bw_ma > 0, (bandwidth - bw_ma) / bw_ma * 100, 0)
+
+        return pd.Series(signal, index=data.index).fillna(0)
     
     @classmethod
     def from_config(cls, config: Dict[str, Any]):
@@ -1612,31 +2102,27 @@ class BBWidthSignal(SignalGenerator):
 
 class RealizedVolatilitySignal(SignalGenerator):
     """RealizedVolatility 真实波动率信号
-    
-    信号值：历史波动率（年化百分比）
-    - 高值: 高波动率
-    - 低值: 低波动率
-    
-    计算方式：
-    - 计算对数收益率
-    - 滚动标准差（年化）
+
+    信号值：HV偏离历史均值的百分比
+    - > 0: 波动率高于均值（异常扩张），做多
+    - < 0: 波动率低于均值（收缩），空仓
     """
-    
+
     def __init__(self, period: int = 20):
         super().__init__(f"RealizedVol{period}")
         self.period = period
         self.params = {'period': period}
-    
+
     def generate(self, data: pd.DataFrame) -> pd.Series:
         close = data['close']
-        
-        # 计算对数收益率
+
         log_return = np.log(close / close.shift(1))
-        
-        # 计算滚动标准差（年化）
+
         hv = log_return.rolling(self.period).std() * np.sqrt(252) * 100
-        
-        return hv.fillna(0)
+        hv_ma = hv.rolling(self.period).mean()
+        signal = np.where(hv_ma > 0, (hv - hv_ma) / hv_ma * 100, 0)
+
+        return pd.Series(signal, index=data.index).fillna(0)
     
     @classmethod
     def from_config(cls, config: Dict[str, Any]):
@@ -1875,9 +2361,9 @@ class CDLHARAMISignal(PatternSignal):
 class BETASignal(SignalGenerator):
     """BETA 贝塔系数信号
     
-    信号值：相对于基准的贝塔系数 - 1
-    - > 0: 波动性高于市场
-    - < 0: 波动性低于市场
+    信号值：收益率的自回归系数（动量beta）
+    - > 0: 动量效应（收益延续），做多
+    - < 0: 均值回归（收益反转），空仓
     """
     
     def __init__(self, period: int = 5):
@@ -1887,10 +2373,11 @@ class BETASignal(SignalGenerator):
     
     def generate(self, data: pd.DataFrame) -> pd.Series:
         close = data['close'].values.astype(float)
-        returns = np.diff(close) / close[:-1] * 100
-        returns = np.concatenate([[0], returns])
-        beta = talib.BETA(returns, returns, timeperiod=self.period)
-        return pd.Series(beta - 1, index=data.index).fillna(0)
+        returns = np.concatenate([[0], np.diff(close) / close[:-1]])
+        lagged_returns = np.zeros_like(returns)
+        lagged_returns[1:] = returns[:-1]
+        beta = talib.BETA(returns, lagged_returns, timeperiod=self.period)
+        return pd.Series(beta, index=data.index).fillna(0)
 
 
 class RSRSMSignal(SignalGenerator):
@@ -1951,8 +2438,9 @@ class RSRSMSignal(SignalGenerator):
 class CORRELSignal(SignalGenerator):
     """CORREL 相关系数信号
     
-    信号值：最高价与最低价的相关系数 - 1
-    - 接近 0: 高度相关
+    信号值：收盘价与时间序列的相关系数（趋势方向）
+    - > 0: 正相关，上升趋势
+    - < 0: 负相关，下降趋势
     """
     
     def __init__(self, period: int = 30):
@@ -1961,10 +2449,10 @@ class CORRELSignal(SignalGenerator):
         self.params = {'period': period}
     
     def generate(self, data: pd.DataFrame) -> pd.Series:
-        high = data['high'].values.astype(float)
-        low = data['low'].values.astype(float)
-        correl = talib.CORREL(high, low, timeperiod=self.period)
-        return pd.Series(correl - 1, index=data.index).fillna(0)
+        close = data['close'].values.astype(float)
+        time_seq = np.arange(len(close), dtype=float)
+        correl = talib.CORREL(close, time_seq, timeperiod=self.period)
+        return pd.Series(correl, index=data.index).fillna(0)
 
 
 class LINEARREGSignal(SignalGenerator):
@@ -2006,7 +2494,9 @@ class LINEARREGANGLESignal(SignalGenerator):
 class LINEARREGINTERCEPTSignal(SignalGenerator):
     """LINEARREG_INTERCEPT 线性回归截距信号
     
-    信号值：价格偏离截距的百分比
+    信号值：截距的变化率
+    - > 0: 截距上升，趋势增强
+    - < 0: 截距下降，趋势减弱
     """
     
     def __init__(self, period: int = 14):
@@ -2017,7 +2507,12 @@ class LINEARREGINTERCEPTSignal(SignalGenerator):
     def generate(self, data: pd.DataFrame) -> pd.Series:
         close = data['close'].values.astype(float)
         intercept = talib.LINEARREG_INTERCEPT(close, timeperiod=self.period)
-        return pd.Series((close - intercept) / intercept * 100, index=data.index).fillna(0)
+        intercept_prev = np.roll(intercept, 1)
+        intercept_prev[0] = intercept[0]
+        signal = np.where(np.abs(intercept_prev) > 1e-10,
+                          (intercept - intercept_prev) / np.abs(intercept_prev) * 100,
+                          0)
+        return pd.Series(signal, index=data.index).fillna(0)
 
 
 class LINEARREGSLOPESignal(SignalGenerator):
@@ -2057,7 +2552,9 @@ class TSFSignal(SignalGenerator):
 class VARSignal(SignalGenerator):
     """VAR 方差信号
     
-    信号值：价格方差（相对价格百分比）
+    信号值：当前方差偏离历史均值的百分比
+    - > 0: 方差高于均值
+    - < 0: 方差低于均值
     """
     
     def __init__(self, period: int = 5, nbdev: float = 1.0):
@@ -2069,7 +2566,9 @@ class VARSignal(SignalGenerator):
     def generate(self, data: pd.DataFrame) -> pd.Series:
         close = data['close'].values.astype(float)
         var = talib.VAR(close, timeperiod=self.period, nbdev=self.nbdev)
-        return pd.Series(var / close * 100, index=data.index).fillna(0)
+        var_ma = talib.SMA(var, timeperiod=self.period)
+        signal = np.where(var_ma > 0, (var - var_ma) / var_ma * 100, 0)
+        return pd.Series(signal, index=data.index).fillna(0)
 
 
 # =============================================================================
@@ -2677,6 +3176,24 @@ def create_signal(
         'natr': lambda: NATRSignal(period=period or 14),
         'trange': lambda: TRANGESignal(),
         'avgdev': lambda: AVGDEVSignal(period=period or 14),
+        'bbwidth': lambda: BBWidthSignal(period=period or 20),
+        'bbpct': lambda: BBPercentSignal(period=period or 20),
+        'truevol': lambda: TrueVolSignal(period=period or 14),
+        'atrpct': lambda: ATRPercentSignal(period=period or 14),
+        'keltnerwidth': lambda: KeltnerWidthSignal(period=period or 20),
+        'donchianwidth': lambda: DonchianWidthSignal(period=period or 20),
+        'parkinsonvol': lambda: ParkinsonVolSignal(period=period or 20),
+        'garklassvol': lambda: GarmanKlassVolSignal(period=period or 20),
+        'rvi': lambda: RVISignal(period=period or 20),
+        'ulcerindex': lambda: UlcerIndexSignal(period=period or 14),
+        'realizedvol': lambda: RealizedVolatilitySignal(period=period or 20),
+        'yangzhangvol': lambda: YangZhangVolSignal(period=period or 20),
+        'rogerssatchellvol': lambda: RogersSatchellVolSignal(period=period or 20),
+        'chaikinvol': lambda: ChaikinVolatilitySignal(period=period or 10),
+        'volratio': lambda: VolatilityRatioSignal(short_period=short or 10, long_period=long or 20),
+        'bbbreakout': lambda: BBBreakoutSignal(period=period or 20),
+        'histvar': lambda: VaRSignal(period=period or 20),
+        'histcvar': lambda: CVaRSignal(period=period or 20),
         # 6. Cycle Indicators (周期指标)
         'ht_dcperiod': lambda: HTDCCPERIODSignal(),
         'ht_dcphase': lambda: HTDCPHASESignal(),
