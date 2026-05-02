@@ -143,38 +143,38 @@ def _init_chart_registry():
     if CHART_REGISTRY is not None:
         return
     
-    from pyecharts.charts import Line, Bar, Pie, HeatMap, Kline, Scatter
+    from .min_pyecharts import MinLine, MinBar, MinPie, MinHeatMap, MinKline, MinScatter
     
     CHART_REGISTRY = {
         # ---------- XY 轴系列（通用构建器）----------
         'line': {
-            'class': Line,
-            'builder': lambda data, opts: _build_xy_chart(Line, data, opts)
+            'class': MinLine,
+            'builder': lambda data, opts: _build_xy_chart(MinLine, data, opts)
         },
         'bar': {
-            'class': Bar,
-            'builder': lambda data, opts: _build_xy_chart(Bar, data, opts)
+            'class': MinBar,
+            'builder': lambda data, opts: _build_xy_chart(MinBar, data, opts)
         },
         'area': {
-            'class': Line,
-            'builder': lambda data, opts: _build_xy_chart(Line, data, opts, is_area=True)
+            'class': MinLine,
+            'builder': lambda data, opts: _build_xy_chart(MinLine, data, opts, is_area=True)
         },
         'scatter': {
-            'class': Scatter,
+            'class': MinScatter,
             'builder': _build_scatter
         },
         'kline': {
-            'class': Kline,
+            'class': MinKline,
             'builder': _build_kline
         },
         
         # ---------- 特殊类型（独立构建器）----------
         'pie': {
-            'class': Pie,
+            'class': MinPie,
             'builder': _build_pie
         },
         'heatmap': {
-            'class': HeatMap,
+            'class': MinHeatMap,
             'builder': _build_heatmap
         },
     }
@@ -275,10 +275,10 @@ def _build_scatter(data, series_opts):
     Returns:
         pyecharts Scatter 对象
     """
-    from pyecharts.charts import Scatter
+    from .min_pyecharts import MinScatter
     from pyecharts import options as opts
     
-    chart = Scatter()
+    chart = MinScatter()
     
     # 散点图仅支持标准格式
     if not (isinstance(data, dict) and 'xAxis' in data and 'series' in data):
@@ -318,8 +318,8 @@ def _build_kline(data, series_opts):
     Returns:
         pyecharts Kline 对象
     """
-    from pyecharts.charts import Kline
-    chart = Kline()
+    from .min_pyecharts import MinKline
+    chart = MinKline()
     
     # 判断是否为标准格式
     is_standard_format = isinstance(data, dict) and 'xAxis' in data and 'series' in data
@@ -405,8 +405,8 @@ def _build_pie(data, series_opts):
     Returns:
         pyecharts Pie 对象
     """
-    from pyecharts.charts import Pie
-    chart = Pie()
+    from .min_pyecharts import MinPie
+    chart = MinPie()
     
     # DataFrame 转换：第一列 → name，第二列 → value
     if isinstance(data, pd.DataFrame):
@@ -433,8 +433,8 @@ def _build_heatmap(data, series_opts):
     Returns:
         pyecharts HeatMap 对象
     """
-    from pyecharts.charts import HeatMap
-    chart = HeatMap()
+    from .min_pyecharts import MinHeatMap
+    chart = MinHeatMap()
     
     # 【核心逻辑】
     # 1. 字典格式：{Y: {X: value}} → 提取 X/Y 轴，转换为 [[x_idx, y_idx, value], ...]
@@ -622,14 +622,16 @@ class CellBuilder:
     @staticmethod
     def pyecharts(chart, height: str = '400px', width: str = '100%') -> Cell:
         """
-        创建 pyecharts 图表单元格（高级需求）
-        
+        创建 pyecharts/min_pyecharts 图表单元格（高级需求，输出自动精简）
+
         Args:
-            chart: pyecharts 图表对象
+            chart: pyecharts 或 min_pyecharts 图表对象
             height: 容器高度
             width: 容器宽度
         """
+        from .min_pyecharts import minimize_option
         option_dict = json.loads(chart.dump_options())
+        option_dict = minimize_option(option_dict)
         
         return Cell(
             CellType.PYECHARTS,
