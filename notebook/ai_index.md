@@ -2,7 +2,7 @@
 
 > **AI 助手请先阅读此文件**，掌握 Notebook 输出模块的调用规范和数据格式
 >
-> **版本：v1.0.0 | 更新日期：2026-04-22**
+> **版本：v2.0.0 | 更新日期：2026-05-11**
 
 ---
 
@@ -12,9 +12,10 @@ Notebook 是 ft2 框架的 **HTML 报告生成器**，基于 Jinja2 + Vue3 + ECh
 
 **设计原则：**
 - Python 端只负责数据组装，不负责渲染逻辑
-- 图表通过 pyecharts 构建，输出 ECharts option JSON
+- 图表通过 min_pyecharts 构建，输出 ECharts option JSON
 - 表格通过 ft-table Vue 组件渲染
 - 最终由 Jinja2 模板 + Vue3 组装为完整 HTML
+- 数据以 JSON-LD 格式注入 `<head>`，AI 可优先抓取
 
 ---
 
@@ -24,13 +25,16 @@ Notebook 是 ft2 框架的 **HTML 报告生成器**，基于 Jinja2 + Vue3 + ECh
 notebook/
 ├── __init__.py      # 导出 Notebook 类
 ├── cell.py          # Cell/Section 数据类 + CellBuilder + 图表构建器
+├── min_pyecharts.py # 精简版 pyecharts（自研，402行）
 ├── notebook.py      # Notebook 主类（用户 API 入口）
+├── README.md        # 用户文档
 └── ai_index.md      # 本文件
 
 template/
-├── notebook.html    # Jinja2 HTML 模板
+├── notebook.html    # Jinja2 HTML 模板（数据以 JSON-LD 注入 <head>）
 └── js/
     ├── notebook3C.js   # Vue3 渲染逻辑
+    ├── notebook3.css   # 样式
     ├── ft-table.js     # 表格组件
     └── echarts.min.js  # ECharts 库
 ```
@@ -56,12 +60,11 @@ nb = Notebook(title: str = "Notebook Report")
 
 ```python
 nb.export_html(name=None, template_path=None)  # 导出 HTML（name 不含扩展名）
-nb.export_markdown(name=None)                   # 导出 Markdown
 nb.to_json()                                    # 导出 JSON 字符串
 nb.to_dict()                                    # 导出字典
 ```
 
-**输出路径规则：** HTML/MD 文件输出到 **调用者脚本所在目录**（`base_dir`），非 notebook 模块目录。
+**输出路径规则：** HTML 文件输出到 **调用者脚本所在目录**（`base_dir`），非 notebook 模块目录。
 
 ---
 
@@ -139,15 +142,6 @@ heatmap={'start': 2, 'end': 5, 'axis': 'column'}
 # excludeRows: 排除的行索引（如 [-1] 排除汇总行）
 ```
 
-**完整示例：**
-
-```python
-nb.table(data, columns=['code', 'name', 'return'],
-         freeze={'left': 2}, page={'size': 20},
-         heatmap={'start': 2, 'axis': 'column'},
-         title='持仓明细')
-```
-
 ---
 
 ### 2. 指标卡片 `nb.metrics()`
@@ -199,27 +193,26 @@ nb.metrics(data, title='核心指标', columns=4)
 }
 ```
 
-#### 3.2 DataFrame 自动转换（line / area / bar / kline / heatmap）
+#### 3.2 DataFrame 自动转换规则（按图表类型不同）
+
+**line / area / bar：** 第一列 → xAxis，其余列 → series
 
 ```python
-# 第一列 → xAxis，其余列 → series
-# 例如 df 有列 ['date', 'nav', 'benchmark']
-# 自动转换：xAxis=df['date'], series=[{'name':'nav',...}, {'name':'benchmark',...}]
-
+# df 列: ['date', 'nav', 'benchmark']
+# 转换: xAxis=df['date'], series=[{'name':'nav','data':[...]}, {'name':'benchmark','data':[...]}]
 nb.chart('line', df, title='净值曲线')
 ```
 
-#### 3.3 散点图（仅标准格式）
+**scatter：** ❌ 不支持 DataFrame，必须用标准格式 dict
 
 ```python
 # 类目散点图
 {'xAxis': ['A', 'B', 'C'], 'series': [{'name': '', 'data': [10, 20, 30]}]}
-
 # 数值散点图
 {'xAxis': [], 'series': [{'name': '', 'data': [[1, 10], [2, 20]]}]}
 ```
 
-#### 3.4 K线图
+**kline：** 第一列 → xAxis（日期），需包含 open/close/low/high 字段（自动识别中英文列名）
 
 ```python
 # 标准格式
@@ -227,27 +220,29 @@ nb.chart('line', df, title='净值曲线')
     'xAxis': ['2024-01-01', '2024-01-02'],
     'series': [{'name': 'K线', 'data': [[开,收,低,高], [开,收,低,高]]}]
 }
-
-# DataFrame 格式（自动识别 open/close/low/high 字段，支持中英文列名）
-# 第一列 → X轴（日期），需包含 open/close/low/high 字段
+# DataFrame 格式: df 列 ['date', 'open', 'close', 'low', 'high']
+# 字段映射: open→['open','开盘','Open'], close→['close','收盘','Close'],
+#           low→['low','最低','Low'], high→['high','最高','High']
+nb.chart('kline', df_kline, title='K线')
 ```
 
-#### 3.5 饼图
+**pie：** 第一列 → name，第二列 → value
 
 ```python
-# 列表格式
-[{'name': '股票', 'value': 60}, {'name': '债券', 'value': 30}, {'name': '现金', 'value': 10}]
-
-# DataFrame 格式：第一列 → name，第二列 → value
+# 列表格式（标准）
+[{'name': '股票', 'value': 60}, {'name': '债券', 'value': 30}]
+# DataFrame 格式: df 列 ['类别', '权重'] → name=类别, value=权重
+nb.chart('pie', df_pie, title='资产分布')
 ```
 
-#### 3.6 热力图
+**heatmap：** 第一列 → X 轴，其余列名 → Y 轴
 
 ```python
-# 嵌套字典格式：{Y: {X: value}}
-{'2023': {'1月': 0.02, '2月': -0.01}, '2024': {'1月': 0.05, '2月': -0.02}}
-
-# DataFrame 格式：第一列 → X 轴，其余列名 → Y 轴
+# 嵌套字典格式: {Y: {X: value}}
+{'2023': {'1月': 0.02, '2月': -0.01}, '2024': {'1月': 0.05}}
+# DataFrame 格式: df 列 ['月份', '策略A', '策略B']
+# → X轴=['1月','2月',...], Y轴=['策略A','策略B']
+nb.chart('heatmap', df_heatmap, title='月度收益')
 ```
 
 #### 3.7 图表可选参数
@@ -272,19 +267,6 @@ nb.chart('line', data,
     series_opts={'is_smooth': True, 'symbol_size': 6},
 )
 ```
-
-**全局配置 key 与 pyecharts opts 对应关系：**
-
-| key | pyecharts 类 |
-|-----|-------------|
-| `title_opts` | `opts.TitleOpts` |
-| `legend_opts` | `opts.LegendOpts` |
-| `tooltip_opts` | `opts.TooltipOpts` |
-| `xaxis_opts` | `opts.AxisOpts` |
-| `yaxis_opts` | `opts.AxisOpts` |
-| `datazoom_opts` | `opts.DataZoomOpts`（列表，自动遍历） |
-| `visualmap_opts` | `opts.VisualMapOpts` |
-| `grid_opts` | `opts.GridOpts` |
 
 ---
 
@@ -352,18 +334,18 @@ with nb.section("风险分析"):
 - `True`：可折叠，默认折叠
 - `False`：可折叠，默认展开
 
-**section 内的 title 参数：** 在 `with nb.section(...)` 内部调用 `nb.metrics/nb.table/nb.chart` 时，`title` 参数作为 Cell 的小标题显示。
-
 ---
 
-## 输出 JSON 结构
+## 输出 JSON-LD 结构
 
-Notebook 最终输出的数据结构：
+Notebook 最终输出到 HTML `<head>` 中的 JSON-LD 数据：
 
 ```python
 {
+    "@context": "https://schema.org",
+    "@type": "Dataset",
     "title": "报告标题",
-    "createdAt": "2026-04-22 10:30:00",
+    "createdAt": "2026-05-11 10:30:00",
     "children": [
         {
             "type": "title",
@@ -393,6 +375,8 @@ Notebook 最终输出的数据结构：
     ]
 }
 ```
+
+**模板渲染：** 数据以 `<script id="notebook-data" type="application/ld+json">` 注入 `<head>`，AI 优先读取，Vue3 从同一数据源初始化。
 
 ---
 
@@ -474,8 +458,8 @@ nb.export_html()
 
 ## 注意事项
 
-1. **xAxis vs x**：图表标准格式使用 `'xAxis'`（不是 `'x'`），这是与 README.md 中旧写法的区别
-2. **DataFrame 转换规则**：第一列始终作为 X 轴，其余列作为 series
+1. **xAxis 键名**：图表标准格式使用 `'xAxis'`（不是 `'x'`）
+2. **DataFrame 转换规则（按类型不同）**：line/area/bar → 第一列→xAxis其余→series；kline → 第一列→xAxis+自动识别OHLC字段；pie → 第一列→name第二列→value；heatmap → 第一列→X轴其余列名→Y轴
 3. **scatter 不支持 DataFrame**：散点图必须使用标准格式 dict
 4. **chartg 自动合并**：chartg 是累加模式，在下一个非 chartg 操作时自动 flush
 5. **输出路径**：`export_html()` 输出到调用者脚本所在目录，非 notebook 模块目录
@@ -494,4 +478,4 @@ nb.export_html()
 
 ---
 
-> 最后更新：2026-04-22
+> 最后更新：2026-05-11

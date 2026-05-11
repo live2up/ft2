@@ -1,30 +1,21 @@
 # Notebook - HTML 报告生成器
 
-> 基于 Jinja2 + ECharts 的轻量级报告生成组件
+> 基于 Jinja2 + Vue3 + ECharts 的轻量级报告生成组件
 
 ---
 
 ## 特性
 
-- 🎨 **美观的 HTML 输出** - 基于 Jinja2 模板，支持自定义样式
-- 📊 **丰富的图表类型** - 折线图、柱状图、饼图、散点图、K线图等
-- 📋 **智能表格组件** - 支持冻结列、分页、热力图
-- 🎯 **指标卡片** - 一键生成核心指标展示
-- 📦 **章节容器** - 支持嵌套、折叠的章节结构
-- 🔗 **链式调用** - 流畅的 API 设计
+- 美观的 HTML 输出 — 基于 Jinja2 模板，数据以 JSON-LD 注入 `<head>`
+- 丰富的图表类型 — 折线图、柱状图、饼图、散点图、K线图、热力图
+- 智能表格组件 — 支持冻结列、分页、热力图
+- 指标卡片 — 一键生成核心指标展示
+- 章节容器 — 支持嵌套、折叠的章节结构
+- 链式调用 — 流畅的 API 设计
 
 ---
 
 ## 快速开始
-
-### 安装
-
-```bash
-# ft2 项目已包含此模块，无需额外安装
-# 依赖：pandas, jinja2, pyecharts
-```
-
-### 基础示例
 
 ```python
 from notebook import Notebook
@@ -48,12 +39,12 @@ nb.table(
 
 # 添加图表
 nb.chart('line', {
-    'x': ['2024-01', '2024-02', '2024-03'],
+    'xAxis': ['2024-01', '2024-02', '2024-03'],
     'series': [{'name': '净值', 'data': [1.0, 1.05, 1.12]}]
 }, title='净值曲线')
 
 # 导出 HTML
-nb.export_html("report.html")
+nb.export_html()
 ```
 
 ---
@@ -62,31 +53,26 @@ nb.export_html("report.html")
 
 ### Notebook 类
 
-#### 构造函数
-
 ```python
 Notebook(title: str = "Notebook Report")
 ```
 
-**参数：**
-- `title` - 报告标题
+**参数：** `title` — 报告标题，同时作为默认输出文件名
 
 ---
 
 ### 指标卡片
 
 ```python
-nb.metrics(data, title: str = None, columns: int = 4)
+nb.metrics(data, title=None, columns=4)
 ```
 
 **参数：**
-- `data` - 指标数据
-  - `List[Dict]` 格式：`[{'name': '指标名', 'value': '指标值', 'color': '颜色'}, ...]`
-  - `Dict` 格式：`{'指标名': '指标值', ...}`（自动转换）
-- `title` - 标题（可选）
-- `columns` - 每行显示的卡片数量，默认 4
-
-**示例：**
+- `data` — 指标数据
+  - `List[Dict]`：`[{'name': '指标名', 'value': '指标值', 'color': '颜色'}, ...]`
+  - `Dict`：`{'指标名': '指标值', ...}`（自动转换）
+- `title` — 标题（可选）
+- `columns` — 每行显示的卡片数量，默认 4
 
 ```python
 # List[Dict] 格式（推荐）
@@ -96,14 +82,10 @@ nb.metrics([
 ])
 
 # Dict 格式（便捷）
-nb.metrics({
-    '收益率': '15%',
-    '夏普': '1.5',
-})
+nb.metrics({'收益率': '15%', '夏普': '1.5'})
 ```
 
-**颜色支持：**
-- `red`, `green`, `blue`, `yellow`, `orange`, `purple`, `gray` 等
+颜色支持：`red`, `green`, `blue`, `yellow`, `orange`, `purple`, `gray`
 
 ---
 
@@ -113,10 +95,8 @@ nb.metrics({
 nb.table(data, columns=None, title=None, **options)
 ```
 
-**参数：**
-
 | 参数 | 类型 | 说明 |
-|---|---|---|
+|------|------|------|
 | `data` | List[Dict] / DataFrame | 表格数据 |
 | `columns` | List[str] | 列名列表，指定显示的列及顺序 |
 | `title` | str | 标题（可选） |
@@ -124,22 +104,11 @@ nb.table(data, columns=None, title=None, **options)
 | `page` | Dict / False | 分页配置，如 `{'size': 20}` 或 `False` 禁用 |
 | `heatmap` | Dict | 热力图配置 |
 
-**示例：**
-
 ```python
-# 基础表格
 nb.table(data, columns=['code', 'name', 'return'])
-
-# 冻结列
 nb.table(data, freeze={'left': 2})
-
-# 分页配置
 nb.table(data, page={'size': 20, 'options': [10, 20, 50, 100]})
-
-# 禁用分页
 nb.table(data, page=False)
-
-# 热力图
 nb.table(data, heatmap={'start': 2, 'end': 5, 'axis': 'column'})
 ```
 
@@ -148,53 +117,70 @@ nb.table(data, heatmap={'start': 2, 'end': 5, 'axis': 'column'})
 ### 图表
 
 ```python
-nb.chart(chart_type, data, title=None)
+nb.chart(chart_type, data, title=None, height='400px', **kwargs)
 ```
 
 **支持的图表类型：**
 
 | 类型 | 说明 | 数据格式 |
-|---|---|---|
-| `line` | 折线图 | `{'x': [...], 'series': [...]}` |
-| `bar` | 柱状图 | `{'x': [...], 'series': [...]}` |
-| `pie` | 饼图 | `{'data': [{'name': ..., 'value': ...}]}` |
-| `scatter` | 散点图 | `{'data': [{'x': ..., 'y': ...}]}` |
-| `kline` | K线图 | `{'data': [[open, close, low, high], ...]}` |
+|------|------|----------|
+| `line` | 折线图 | 标准格式 / DataFrame |
+| `area` | 面积图 | 标准格式 / DataFrame |
+| `bar` | 柱状图 | 标准格式 / DataFrame |
+| `scatter` | 散点图 | 标准格式（仅 dict） |
+| `kline` | K线图 | 标准格式 / DataFrame |
+| `pie` | 饼图 | 列表格式 / DataFrame |
+| `heatmap` | 热力图 | 嵌套字典 / DataFrame |
 
-**示例：**
+**标准格式（line / area / bar / scatter / kline）：**
 
 ```python
-# 折线图（多系列）
-nb.chart('line', {
-    'x': ['2024-01', '2024-02', '2024-03'],
+{
+    'xAxis': ['2024-01', '2024-02', '2024-03'],
     'series': [
-        {'name': '净值', 'data': [1.0, 1.05, 1.12]},
+        {'name': '策略', 'data': [1.0, 1.05, 1.12]},
         {'name': '基准', 'data': [1.0, 1.02, 1.05]},
     ]
-}, title='净值曲线')
+}
+```
 
-# 柱状图
-nb.chart('bar', {
-    'x': ['股票', '债券', '现金'],
-    'series': [{'name': '权重', 'data': [60, 30, 10]}]
-}, title='资产配置')
+**DataFrame 自动转换：**
 
-# 饼图
-nb.chart('pie', {
-    'data': [
-        {'name': '股票', 'value': 60},
-        {'name': '债券', 'value': 30},
-        {'name': '现金', 'value': 10},
-    ]
-}, title='资产分布')
+```python
+# 第一列 → xAxis，其余列 → series
+nb.chart('line', df, title='净值曲线')
+```
 
-# 散点图
-nb.chart('scatter', {
-    'data': [
-        {'x': 1, 'y': 2, 'name': 'A'},
-        {'x': 3, 'y': 5, 'name': 'B'},
-    ]
-}, title='风险收益分布')
+**饼图：**
+
+```python
+[{'name': '股票', 'value': 60}, {'name': '债券', 'value': 30}]
+```
+
+**热力图：**
+
+```python
+# 嵌套字典：{Y: {X: value}}
+{'2023': {'1月': 0.02, '2月': -0.01}, '2024': {'1月': 0.05}}
+```
+
+**可选参数：**
+
+```python
+nb.chart('line', data,
+    title='净值曲线',
+    height='400px',
+    width='100%',
+    title_opts={'title': '图表标题'},
+    legend_opts={'is_show': True},
+    tooltip_opts={'trigger': 'axis'},
+    xaxis_opts={'name': '日期'},
+    yaxis_opts={'min_': 0.9, 'max_': 1.3},
+    datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}],
+    visualmap_opts={'min_': 0, 'max_': 100},
+    grid_opts={'contain_label': True},
+    series_opts={'is_smooth': True, 'symbol_size': 6},
+)
 ```
 
 ---
@@ -203,31 +189,22 @@ nb.chart('scatter', {
 
 ```python
 with nb.section(title, collapsed=None):
-    # 添加内容
     nb.metrics([...])
     nb.table(data)
 ```
 
-**参数：**
-- `title` - 章节标题
-- `collapsed` - 折叠状态
-  - `None` - 不可折叠（默认）
-  - `True` - 可折叠，默认折叠
-  - `False` - 可折叠，默认展开
-
-**示例：**
+- `collapsed=None`（默认）：不可折叠
+- `collapsed=True`：可折叠，默认折叠
+- `collapsed=False`：可折叠，默认展开
 
 ```python
-# 基础章节
 with nb.section("收益分析"):
     nb.metrics([...], title="核心指标")
     nb.chart('line', {...}, title="净值曲线")
 
-# 可折叠章节
 with nb.section("详细数据", collapsed=True):
     nb.table(data)
 
-# 嵌套章节
 with nb.section("风险分析"):
     with nb.section("回撤分析"):
         nb.chart('line', {...})
@@ -241,41 +218,26 @@ with nb.section("风险分析"):
 nb.chartg(chart_type, data, height=200, **kwargs)
 ```
 
-将多个图表合并为一个 Grid 布局。
-
-**示例：**
+将多个图表累加合并为一个 Grid 布局，在下一个非 chartg 操作时自动输出。
 
 ```python
-# 累加多个图表到 Grid
-nb.chartg('line', data1, height=200)  # 第一个图
-nb.chartg('bar', data2, height=150)   # 第二个图
-# 在下一个 cell 或 section 退出时自动合并输出
+nb.chartg('line', data1, height=200)
+nb.chartg('bar', data2, height=150)
+# 自动合并，总高度 = 200 + 150
 ```
 
 ---
 
-### 文本与标题
+### 文本与布局
 
 ```python
-# 标题
-nb.title("报告标题", level=1)  # level: 1-6
-
-# 文本
-nb.text("普通文本")
-nb.text("红色文本", color='red')
-
-# Markdown
-nb.markdown("""
-## 标题
-- 列表项1
-- 列表项2
-""")
-
-# 分隔线
-nb.divider()
-
-# 代码块
-nb.code("print('hello')", language='python', output='hello')
+nb.title("标题", level=1)          # level: 1-6
+nb.text("普通文本")                  # 纯文本
+nb.text("红色文本", color='red')     # 带颜色
+nb.markdown("## 标题\n- 列表项")     # Markdown 渲染
+nb.code("print('hello')", language='python', output='hello')  # 代码块
+nb.divider()                        # 分隔线
+nb.html("<div>原始HTML</div>")       # 原始 HTML
 ```
 
 ---
@@ -283,11 +245,13 @@ nb.code("print('hello')", language='python', output='hello')
 ### 导出
 
 ```python
-nb.export_html(path)
+nb.export_html(name=None, template_path=None)
 ```
 
-**参数：**
-- `path` - 输出文件路径
+- `name` — 输出文件名（不含扩展名），默认使用标题
+- `template_path` — 自定义模板路径
+
+输出到调用者脚本所在目录。
 
 ---
 
@@ -296,24 +260,22 @@ nb.export_html(path)
 ### 表格数据
 
 ```python
-# List[Dict] 格式（推荐）
+# List[Dict]（推荐）
 data = [
     {'code': '000001', 'name': '平安银行', 'return': 0.15},
     {'code': '000002', 'name': '万科A', 'return': -0.05},
 ]
 
-# DataFrame 格式（自动转换）
-import pandas as pd
+# DataFrame（自动转换）
 df = pd.DataFrame(data)
-nb.table(df, columns=['code', 'name', 'return'])
 ```
 
 ### 图表数据
 
 ```python
-# 折线图/柱状图
+# 折线图/柱状图（标准格式）
 {
-    'x': ['2024-01', '2024-02', '2024-03'],  # X轴
+    'xAxis': ['2024-01', '2024-02', '2024-03'],
     'series': [
         {'name': '净值', 'data': [1.0, 1.05, 1.12]},
         {'name': '基准', 'data': [1.0, 1.02, 1.05]},
@@ -321,21 +283,10 @@ nb.table(df, columns=['code', 'name', 'return'])
 }
 
 # 饼图
-{
-    'data': [
-        {'name': '股票', 'value': 60},
-        {'name': '债券', 'value': 30},
-        {'name': '现金', 'value': 10},
-    ]
-}
+[{'name': '股票', 'value': 60}, {'name': '债券', 'value': 30}]
 
-# 散点图
-{
-    'data': [
-        {'x': 1, 'y': 2, 'name': 'A'},
-        {'x': 3, 'y': 5, 'name': 'B'},
-    ]
-}
+# 热力图
+{'2023': {'1月': 0.02, '2月': -0.01}, '2024': {'1月': 0.05}}
 ```
 
 ---
@@ -346,93 +297,60 @@ nb.table(df, columns=['code', 'name', 'return'])
 
 ```python
 from notebook import Notebook
-from core.analyzer import AccountAnalyzer
 
-def generate_backtest_report(account, output_path):
-    """生成回测报告"""
-    
-    analyzer = AccountAnalyzer(account=account)
-    
-    nb = Notebook("策略回测报告")
-    
-    # 核心指标
-    nb.metrics({
-        '总收益率': f"{analyzer.returns().sum()*100:.2f}%",
-        '年化收益': f"{analyzer.annual_return()*100:.2f}%",
-        '夏普比率': f"{analyzer.sharpe_ratio():.2f}",
-        '最大回撤': f"{analyzer.max_drawdown()*100:.2f}%",
-    }, title="核心指标")
-    
-    # 净值曲线
+nb = Notebook("策略回测报告")
+
+nb.metrics({
+    '总收益率': '45.2%',
+    '年化收益': '18.5%',
+    '夏普比率': '1.85',
+    '最大回撤': '-12.5%',
+}, title="核心指标")
+
+nb.chart('line', {
+    'xAxis': dates,
+    'series': [
+        {'name': '策略', 'data': nav_list},
+        {'name': '基准', 'data': benchmark_list},
+    ]
+}, title='净值曲线', series_opts={'is_smooth': True})
+
+with nb.section("风险分析"):
     nb.chart('line', {
-        'x': analyzer.daily_returns.index.tolist(),
-        'series': [{'name': '净值', 'data': analyzer.nav().tolist()}]
-    }, title="净值曲线")
-    
-    # 风险分析章节
-    with nb.section("风险分析"):
-        nb.chart('line', {
-            'x': analyzer.daily_returns.index.tolist(),
-            'series': [{'name': '回撤', 'data': analyzer.drawdown().tolist()}]
-        }, title="回撤曲线")
-    
-    # 详细数据（可折叠）
-    with nb.section("交易明细", collapsed=True):
-        nb.table(analyzer.trade_records(), columns=['date', 'code', 'action', 'price'])
-    
-    nb.export_html(output_path)
-    return output_path
+        'xAxis': dates,
+        'series': [{'name': '回撤', 'data': drawdown_list}]
+    }, title='回撤曲线')
+
+with nb.section("交易明细", collapsed=True):
+    nb.table(trade_data, columns=['date', 'code', 'action', 'price'])
+
+nb.export_html()
 ```
 
 ### 因子分析报告
 
 ```python
-def generate_factor_report(factor_results, output_path):
-    """生成因子分析报告"""
-    
-    nb = Notebook("因子分析报告")
-    
-    # IC 统计
-    nb.metrics({
-        'IC均值': f"{factor_results['ic_mean']:.4f}",
-        'IC标准差': f"{factor_results['ic_std']:.4f}",
-        'IR': f"{factor_results['ir']:.4f}",
-        'IC>0占比': f"{factor_results['ic_positive_ratio']*100:.1f}%",
-    }, title="IC统计")
-    
-    # IC 序列
-    nb.chart('bar', {
-        'x': factor_results['dates'],
-        'series': [{'name': 'IC', 'data': factor_results['ic_series']}]
-    }, title="IC序列")
-    
-    # 分组收益
-    with nb.section("分组收益"):
-        nb.table(
-            factor_results['group_returns'],
-            columns=['group', 'return', 'count'],
-            heatmap={'start': 1, 'axis': 'column'}
-        )
-    
-    nb.export_html(output_path)
-```
+nb = Notebook("因子分析报告")
 
----
+nb.metrics({
+    'IC均值': '0.0523',
+    'IC标准差': '0.1834',
+    'IR': '0.2852',
+    'IC>0占比': '62.3%',
+}, title="IC统计")
 
-## 模板定制
+nb.chart('bar', {
+    'xAxis': dates,
+    'series': [{'name': 'IC', 'data': ic_series}]
+}, title='IC序列')
 
-### 默认模板路径
+nb.chart('heatmap', monthly_returns_dict, title='月度收益热力图')
 
-```
-ft2/template/notebook.html    # HTML 模板
-ft2/template/ft-table.js     # 表格组件
-```
+with nb.section("分组收益"):
+    nb.table(group_data, columns=['group', 'return', 'count'],
+             heatmap={'start': 2, 'axis': 'column'})
 
-### 自定义模板
-
-```python
-# 在 Notebook 构造函数中指定模板路径
-nb = Notebook("报告", template_path="custom_template.html")
+nb.export_html()
 ```
 
 ---
@@ -442,31 +360,8 @@ nb = Notebook("报告", template_path="custom_template.html")
 - Python >= 3.8
 - pandas
 - jinja2
-- pyecharts
+- pyecharts >= 2.1.0
 
 ---
 
-## 许可证
-
-MIT License
-
----
-
-## 更新日志
-
-### v1.0.0 (2024-01-01)
-
-- 初始版本
-- 支持基础图表、表格、指标卡片
-- 支持章节容器和折叠
-
-### v1.1.0 (2024-03-01)
-
-- 添加 Grid 图表支持
-- 添加热力图支持
-- 优化表格分页
-
----
-
-> 作者：ft2 团队
-> 最后更新：2026-04-04
+> 最后更新：2026-05-11
