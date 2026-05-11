@@ -389,6 +389,8 @@ class Notebook:
         template = env.get_template(Path(template_path).name)
         
         data = {
+            '@context': 'https://schema.org',
+            '@type': 'Dataset',
             'title': self.nb_title,
             'createdAt': self.created_at.strftime('%Y-%m-%d %H:%M:%S'),
             'children': [c.to_dict() for c in self.children]
