@@ -49,6 +49,18 @@ def test_comprehensive():
                 {"name": "基准", "data": benchmark_data}
             ]
         }, title="净值曲线（字典格式：xAxis + series）")
+        
+        # 100条数据的折线图测试
+        x_100 = [f"2024-{i:02d}" for i in range(1, 101)]
+        y_100_1 = [1.0 + np.sin(i * 0.1) * 0.2 + i * 0.005 for i in range(100)]
+        y_100_2 = [1.0 + np.cos(i * 0.1) * 0.15 + i * 0.003 for i in range(100)]
+        nb.chart('line', {
+            'xAxis': x_100,
+            'series': [
+                {"name": "策略A", "data": y_100_1},
+                {"name": "策略B", "data": y_100_2}
+            ]
+        }, title="100条数据折线图测试")
 
         # DataFrame 格式：第一列=X轴，其余列=series
         # 与字典格式对应关系：
@@ -261,7 +273,7 @@ def on_bar(bar):
     """)
     
     nb.export_html()
-    print("输出: test_comprehensive.html")
+    
 
 
 if __name__ == '__main__':

@@ -10,6 +10,8 @@ signals/v2/registry.py - 表达式注册与发现
 
 import json
 import hashlib
+import numpy as np
+import pandas as pd
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 
@@ -175,6 +177,146 @@ class ExpressionRegistry:
             categories[c] = categories.get(c, 0) + 1
         cat_str = ', '.join(f'{c}:{n}' for c, n in categories.items())
         return f"ExpressionRegistry({len(self._entries)}条: {cat_str})"
+
+    def select_best(self, regime: Optional[str] = None,
+                    metric: str = 'test_sharpe') -> Optional[ExpressionEntry]:
+        """
+        根据市场状态选择最佳表达式
+
+        Args:
+            regime: 市场状态（如 '震荡市', '趋势市', '反转市'），None则不限
+            metric: 排序指标
+
+        Returns:
+            最佳 ExpressionEntry
+        """
+        candidates = list(self._entries.values())
+        if regime:
+            candidates = [
+                e for e in candidates
+                if e.metadata.get('suitable_for', '') == regime
+                or regime in e.metadata.get('suitable_regimes', [])
+            ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda e: e.metadata.get(metric, 0))
+
+    def select_top_k(self, k: int = 3, regime: Optional[str] = None,
+                     metric: str = 'test_sharpe') -> List[ExpressionEntry]:
+        """选择前K个最佳表达式"""
+        candidates = list(self._entries.values())
+        if regime:
+            candidates = [
+                e for e in candidates
+                if e.metadata.get('suitable_for', '') == regime
+                or regime in e.metadata.get('suitable_regimes', [])
+            ]
+        sorted_entries = sorted(
+            candidates,
+            key=lambda e: e.metadata.get(metric, 0),
+            reverse=True
+        )
+        return sorted_entries[:k]
+
+    def ensemble(self, names: List[str], data: pd.DataFrame,
+                 mode: str = 'vote', feature_space=None) -> 'pd.Series':
+        """
+        Ensemble投票组合多个表达式
+
+        Args:
+            names: 已注册表达式名称列表
+            data: OHLCV DataFrame
+            mode: 'vote' 多数投票, 'weighted' 按夏普加权, 'unanimous' 全票通过
+            feature_space: FeatureSpace
+
+        Returns:
+            pd.Series 组合后的持仓信号 (0/1)
+        """
+        if len(names) == 0:
+            raise ValueError("至少需要1个表达式")
+        if len(names) == 1:
+            entry = self._entries[names[0]]
+            signal = entry.expression.generate(data)
+            return (signal > signal.median()).astype(int)
+
+        signals = []
+        weights = []
+        for name in names:
+            entry = self._entries.get(name)
+            if entry is None:
+                continue
+            sig = entry.expression.generate(data).reindex(data.index)
+            signals.append(sig)
+            s = entry.metadata.get('test_sharpe', 1.0)
+            weights.append(max(s, 0.01))
+
+        if not signals:
+            raise ValueError("没有找到有效的表达式")
+
+        positions = [((s > s.median()).astype(int) * 2 - 1) for s in signals]
+
+        if mode == 'vote':
+            combined = sum(positions)
+            result = (combined > 0).astype(int)
+        elif mode == 'weighted':
+            combined = sum(p * w for p, w in zip(positions, weights))
+            result = (combined > 0).astype(int)
+        elif mode == 'unanimous':
+            min_pos = np.minimum.reduce(positions)
+            result = ((min_pos > 0) | (sum(positions) == len(positions))).astype(int)
+        else:
+            raise ValueError(f"不支持的ensemble模式: {mode}")
+
+        return pd.Series(result, index=data.index)
+
+    def update_performance(self, name: str, **metrics):
+        """
+        更新表达式的绩效指标
+
+        用法:
+            registry.update_performance('rsi', test_sharpe=0.57, test_ic=-0.225)
+        """
+        entry = self._entries.get(name)
+        if entry:
+            entry.metadata.update(metrics)
+
+    def tag_regime(self, name: str, regime: str):
+        """标记表达式适合的市场状态"""
+        entry = self._entries.get(name)
+        if entry:
+            regs = entry.metadata.setdefault('suitable_regimes', [])
+            if regime not in regs:
+                regs.append(regime)
+            entry.metadata['suitable_for'] = regime
+
+    def regime_summary(self) -> Dict[str, List[str]]:
+        """按市场状态汇总表达式"""
+        summary = {}
+        for entry in self._entries.values():
+            for regime in entry.metadata.get('suitable_regimes', []):
+                if regime not in summary:
+                    summary[regime] = []
+                summary[regime].append(entry.name)
+            regime_single = entry.metadata.get('suitable_for')
+            if regime_single and regime_single not in summary:
+                summary[regime_single] = []
+            if regime_single:
+                summary[regime_single].append(entry.name)
+        return summary
+
+    def best_per_regime(self, metric: str = 'test_sharpe'
+                        ) -> Dict[str, ExpressionEntry]:
+        """每个市场状态下的最佳表达式"""
+        result = {}
+        summary = self.regime_summary()
+        for regime, names in summary.items():
+            entries = [self._entries[n] for n in names if n in self._entries]
+            if entries:
+                result[regime] = max(
+                    entries,
+                    key=lambda e: e.metadata.get(metric, 0)
+                )
+        return result
 
 
 # 全局默认注册表

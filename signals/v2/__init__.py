@@ -68,6 +68,20 @@ from .presets import (
     ExpressionPreset,
 )
 
+from .explainer import (
+    Explainer,
+    ExplanationReport,
+    RegimePerformance,
+    explain_signal,
+)
+
+from .decay_monitor import (
+    DecayMonitor,
+    DecayResult,
+    AlertLevel,
+    check_decay,
+)
+
 __all__ = [
     # Features
     'FeatureSpace', 'register_feature', 'DEFAULT_CONFIG',
@@ -87,4 +101,8 @@ __all__ = [
     'ExpressionRegistry', 'DEFAULT_REGISTRY',
     # Presets
     'PRESETS', 'ExpressionPreset',
+    # Explainer
+    'Explainer', 'ExplanationReport', 'RegimePerformance', 'explain_signal',
+    # Decay Monitor
+    'DecayMonitor', 'DecayResult', 'AlertLevel', 'check_decay',
 ]
