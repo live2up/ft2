@@ -88,10 +88,24 @@ class TreeNode:
         self.children = children if children else []
         self.param = param
 
+    def _feature_key(self) -> str:
+        """FEATURE节点: 从 value + params 构造 DataFrame 列名
+
+        FEATURE("ATR", [7]) → "ATR_7"
+        FEATURE("KDJ", [9, 3, 3]) → "KDJ_9_3_3"
+        FEATURE("ATR_7") → "ATR_7"
+        """
+        if self.param is not None:
+            if isinstance(self.param, list):
+                return f"{self.value}_{'_'.join(str(p) for p in self.param)}"
+            return f"{self.value}_{self.param}"
+        return self.value
+
     def evaluate(self, feature_data: Dict[str, np.ndarray]) -> np.ndarray:
         if self.node_type == NodeType.FEATURE:
-            if self.value in feature_data:
-                return feature_data[self.value].copy()
+            col_name = self._feature_key()
+            if col_name in feature_data:
+                return feature_data[col_name].copy()
             return np.zeros(1)
         elif self.node_type == NodeType.CONSTANT:
             return float(self.value)
@@ -129,7 +143,7 @@ class TreeNode:
     def get_features(self) -> Set[str]:
         feats = set()
         if self.node_type == NodeType.FEATURE:
-            feats.add(self.value)
+            feats.add(self._feature_key())
         for child in self.children:
             feats.update(child.get_features())
         return feats
@@ -144,6 +158,10 @@ class TreeNode:
 
     def to_string(self) -> str:
         if self.node_type == NodeType.FEATURE:
+            if self.param is not None:
+                if isinstance(self.param, list):
+                    return f"{self.value}({', '.join(str(p) for p in self.param)})"
+                return f"{self.value}({self.param})"
             return self.value
         elif self.node_type == NodeType.CONSTANT:
             return self.value
@@ -404,16 +422,15 @@ class Parser:
         if name in TreeNode.UNARY_FUNCS:
             return TreeNode(NodeType.FUNCTION, name, [args[0]])
 
-        # 默认为特征函数: RSI(14) → FEATURE("RSI_14")
-        # 实际上RSI(14)应该展开为预计算的特征名
-        # 如果是简单的特征调用，直接生成特征名
-        feat_name = func_name
-        if args:
-            # 将参数转为特征名后缀
-            for a in args:
-                if a.node_type == NodeType.CONSTANT:
-                    feat_name += f"_{a.value}"
-        return TreeNode(NodeType.FEATURE, feat_name)
+        # 默认为特征函数: RSI(14) → FEATURE("RSI", param=[14])
+        # KDJ(9, 3, 3) → FEATURE("KDJ", param=[9, 3, 3])
+        feature_params = []
+        for a in args:
+            if a.node_type == NodeType.CONSTANT:
+                feature_params.append(int(float(a.value)))
+        if feature_params:
+            return TreeNode(NodeType.FEATURE, func_name, param=feature_params)
+        return TreeNode(NodeType.FEATURE, func_name)
 
 
 def parse_expression(expr_str: str, feature_names: Optional[Set[str]] = None) -> TreeNode:

@@ -52,6 +52,7 @@ from .validator import (
     Validator,
     run_backtest,
     run_backtest_from_signal,
+    walk_forward,
     WalkForwardResult,
 )
 
@@ -118,7 +119,7 @@ __all__ = [
     'NodeType', 'TreeNode', 'Expression', 'parse_expression',
     'parse_and_build', 'persist', 'regime_switch', 'np_persist',
     # Validator
-    'Validator', 'run_backtest', 'run_backtest_from_signal', 'WalkForwardResult',
+    'Validator', 'run_backtest', 'run_backtest_from_signal', 'walk_forward', 'WalkForwardResult',
     # Pipeline
     'SignalPipeline', 'pipe_and', 'pipe_or', 'pipe_vote', 'pipe_weighted',
     # Registry
