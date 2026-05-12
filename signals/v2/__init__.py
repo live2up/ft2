@@ -3,6 +3,11 @@ signals/v2/__init__.py - V2核心模块导出
 
 signals v2 是基于AIdev探索结论的底层重构模块。
 核心变革：从"一个指标一个类"到"特征空间+表达式引擎"。
+
+V2扩展模块：
+- grid_search   : 参数网格搜索编排器
+- gp_optimizer  : 遗传算法择时优化器（基于 AIdev GP V5）
+- pysr_adapter  : PySR 符号回归适配器（Julia后端）
 """
 
 from .features import (
@@ -82,6 +87,25 @@ from .decay_monitor import (
     check_decay,
 )
 
+from .grid_search import (
+    GridSearch,
+    GridResult,
+)
+
+from .gp_optimizer import (
+    GPOptimizer,
+    Individual,
+    GenerationHistory,
+    NODE_CONFIG,
+    SEED_EXPRESSIONS,
+)
+
+from .pysr_adapter import (
+    PySRAdapter,
+    SRFormulaResult,
+    DEFAULT_PYSR_CONFIG,
+)
+
 __all__ = [
     # Features
     'FeatureSpace', 'register_feature', 'DEFAULT_CONFIG',
@@ -105,4 +129,11 @@ __all__ = [
     'Explainer', 'ExplanationReport', 'RegimePerformance', 'explain_signal',
     # Decay Monitor
     'DecayMonitor', 'DecayResult', 'AlertLevel', 'check_decay',
+    # Grid Search
+    'GridSearch', 'GridResult',
+    # GP Optimizer
+    'GPOptimizer', 'Individual', 'GenerationHistory',
+    'NODE_CONFIG', 'SEED_EXPRESSIONS',
+    # PySR Adapter
+    'PySRAdapter', 'SRFormulaResult', 'DEFAULT_PYSR_CONFIG',
 ]
