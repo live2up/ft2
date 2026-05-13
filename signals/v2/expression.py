@@ -189,10 +189,14 @@ class TreeNode:
         'exp': lambda x: np.exp(np.clip(x, -50, 50)),
     }
 
+    # [修复] thr_mean/thr_med 不再在此处用全序列均值实现，改为 expanding 方式(无前瞻偏差)
+    # 旧实现 'thr_mean': lambda x: np.where(x > np.nanmean(x), 1.0, 0.0) 用了全序列均值含未来数据
+    # 新实现移到 evaluate() 中，调用 _expanding_mean / _expanding_median
+    # thr_0 保持不变：指标>0做多，对中心化后的RSI/MFI等含义是"高于中性线"
     THRESHOLD_FUNCS = {
         'thr_0': lambda x: np.where(x > 0, 1.0, 0.0),
-        'thr_mean': lambda x: np.where(x > np.nanmean(x), 1.0, 0.0),
-        'thr_med': lambda x: np.where(x > np.nanmedian(x), 1.0, 0.0),
+        'thr_mean': None,
+        'thr_med': None,
     }
 
     def __init__(self, node_type: NodeType, value: str,
@@ -235,10 +239,25 @@ class TreeNode:
             return self.UNARY_FUNCS[self.value](arg)
         elif self.node_type == NodeType.THRESHOLD:
             arg = self.children[0].evaluate(feature_data) if self.children else np.zeros(1)
-            if self.value in ('thr_roll_mean', 'thr_roll_med'):
+            if self.value == 'thr_roll_mean':
                 w = self.param if self.param is not None else 30
                 rolling_val = _rolling_mean(arg, w)
                 return np.where(arg > rolling_val, 1.0, 0.0)
+            # [修复] thr_roll_med 原来错误调用了 _rolling_mean，现改为 _rolling_median
+            if self.value == 'thr_roll_med':
+                w = self.param if self.param is not None else 30
+                rolling_val = _rolling_median(arg, w)
+                return np.where(arg > rolling_val, 1.0, 0.0)
+            # [修复] thr_mean 从全序列均值改为 expanding mean，消除前瞻偏差
+            # 旧: np.where(x > np.nanmean(x), ...) 用了未来数据
+            # 新: expanding_mean 只用 [0:t+1] 的历史数据，实盘可复现
+            if self.value == 'thr_mean':
+                expanding_val = _expanding_mean(arg)
+                return np.where(arg > expanding_val, 1.0, 0.0)
+            # [修复] thr_med 同理，从全序列中位数改为 expanding median
+            if self.value == 'thr_med':
+                expanding_val = _expanding_median(arg)
+                return np.where(arg > expanding_val, 1.0, 0.0)
             if self.value in self.THRESHOLD_FUNCS:
                 return self.THRESHOLD_FUNCS[self.value](arg)
             return np.where(arg > 0, 1.0, 0.0)
@@ -337,6 +356,45 @@ def np_persist(arr: np.ndarray, n: int) -> np.ndarray:
             result[i] = 1.0
         elif np.all(segment < 0):
             result[i] = -1.0
+    return result
+
+
+def _expanding_mean(arr: np.ndarray) -> np.ndarray:
+    """扩展窗口均值：第t天的均值只用到[0:t+1]的数据，无前瞻偏差
+    [修复说明] 替代原有的 np.nanmean(x) 全序列均值实现。
+    原实现在第t天判断时用了t+1到末尾的未来数据(前瞻偏差)，
+    回测虚增收益且实盘不可复现。expanding mean 严格只用历史数据。"""
+    result = np.full_like(arr, np.nan, dtype=float)
+    cumsum = np.nancumsum(arr)
+    count = np.cumsum(~np.isnan(arr))
+    for i in range(len(arr)):
+        if count[i] > 0:
+            result[i] = cumsum[i] / count[i]
+    return result
+
+
+def _expanding_median(arr: np.ndarray) -> np.ndarray:
+    """扩展窗口中位数：第t天的中位数只用到[0:t+1]的数据，无前瞻偏差
+    [修复说明] 替代原有的 np.nanmedian(x) 全序列中位数实现，同理消除前瞻偏差。"""
+    result = np.full_like(arr, np.nan, dtype=float)
+    for i in range(len(arr)):
+        segment = arr[:i + 1]
+        valid = segment[~np.isnan(segment)]
+        if len(valid) > 0:
+            result[i] = np.median(valid)
+    return result
+
+
+def _rolling_median(arr: np.ndarray, window: int) -> np.ndarray:
+    """滚动窗口中位数
+    [修复说明] thr_roll_med 原来错误调用了 _rolling_mean(计算的是均值而非中位数)，
+    现独立实现正确的中位数计算。"""
+    result = np.full_like(arr, np.nan, dtype=float)
+    for i in range(window - 1, len(arr)):
+        segment = arr[i - window + 1:i + 1]
+        valid = segment[~np.isnan(segment)]
+        if len(valid) > 0:
+            result[i] = np.median(valid)
     return result
 
 

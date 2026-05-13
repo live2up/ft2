@@ -857,14 +857,26 @@ class FeatureSpace:
         return self.transform()
 
     def _guess_normalize(self, feat_name: str) -> str:
-        """根据特征名推测归一化方式（复用AIdev V5的配置逻辑）"""
-        close_feats = {'ATR', 'STDDEV', 'BBW', 'BBWIDTH', 'TRIMA', 'SMA', 'TSF', 'CCI', 'EMA',
+        """根据特征名推测归一化方式
+        close_feats: 原始值为价格量级, 需除以close归一化为比例
+        pct_feats: 原始值为百分比, 需除以100
+        raw_feats: 原始值已归一化/无量纲/振荡类, 不做额外处理
+        """
+        # [修复] 从 close_feats 移除以下指标，原因：
+        # BBWIDTH: calc_bbwidth 已计算 (upper-lower)/middle，本身已是比例值(0.05~0.3)，
+        #          再除以close(如3000点)后值域变为~0.00001，双重归一化导致值域异常
+        # MA: calc_ma 已计算 (short-long)/long*100，本身已是百分比变化，
+        #     再除以close后值域异常，且破坏了thr_mean的比较关系
+        # CCI: CCI本身是无量纲振荡指标(典型±300)，不是价格量级，不应除以close，
+        #      除以close后值域随标的价格量级变化，thr_0行为不可预测
+        close_feats = {'ATR', 'STDDEV', 'TRIMA', 'SMA', 'TSF', 'EMA',
                        'WMA', 'DEMA', 'KAMA'}
         pct_feats = {'HV', 'NATR'}
-        raw_feats = {'ADX', 'RSI', 'VOL_RATIO', 'VOL_CHG', 'TREND_STRENGTH',
-                      'VOL_REGIME', 'MOM_CHG', 'UP_RATIO', 'MACD', 'VAR', 'LINEARREG',
-                      'MFI', 'ULTOSC', 'OBV', 'AVGPRICE', 'WCLPRICE',
-                      'HT_SINE', 'HT_TRENDMODE', 'CORREL'}
+        raw_feats = {'ADX', 'RSI', 'CCI', 'BBW', 'BBWIDTH', 'MA',
+                     'VOL_RATIO', 'VOL_CHG', 'TREND_STRENGTH',
+                     'VOL_REGIME', 'MOM_CHG', 'UP_RATIO', 'MACD', 'VAR', 'LINEARREG',
+                     'MFI', 'ULTOSC', 'OBV', 'AVGPRICE', 'WCLPRICE',
+                     'HT_SINE', 'HT_TRENDMODE', 'CORREL'}
 
         name_upper = feat_name.upper()
         for cf in close_feats:
@@ -873,8 +885,6 @@ class FeatureSpace:
         for pf in pct_feats:
             if name_upper.startswith(pf):
                 return 'pct'
-        if 'RSI' in name_upper or 'ADX' in name_upper:
-            return 'raw'
         return 'raw'
 
     def get_feature_names(self) -> List[str]:
