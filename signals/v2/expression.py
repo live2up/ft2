@@ -28,7 +28,7 @@ signals/v2/expression.py — 统一表达式引擎
  │  Parser（递归下降语法分析）→ AST 树                                   │
  │                                                                      │
  │  THR_MEAN                                                           │
- │    └── FEATURE("ATR", [7])  ─→ 查找 DataFrame 列: ATR_7             │
+ │    └── FEATURE("ATR", [7])  ─→ 查找 DataFrame 列: ATR{7}            │
  └────────────────────┬────────────────────────────────────────────────┘
                       │
                       ▼
@@ -38,7 +38,7 @@ signals/v2/expression.py — 统一表达式引擎
  │  ┌──────────────┬──────────────────────────────────────────────┐    │
  │  │   节点类型    │    说明 / 语法                                │    │
  │  ├──────────────┼──────────────────────────────────────────────┤    │
- │  │ FEATURE      │ 特征引用    ATR(7) → 查找列 ATR_7              │    │
+ │  │ FEATURE      │ 特征引用    ATR{7} → 查找列 ATR{7}             │    │
  │  │ CONSTANT     │ 常量        -1.0, 0.5, 2.0                     │    │
  │  │ OPERATOR     │ 二元运算    +, -, *, /, &, |, >, <            │    │
  │  │ FUNCTION     │ 一元函数    abs, sqrt, sigmoid, tanh, relu    │    │
@@ -72,27 +72,24 @@ signals/v2/expression.py — 统一表达式引擎
  ┌──────────────────────────┬───────────────────────────────────────┐
  │       语法元素            │       说明 / 示例                      │
  ├──────────────────────────┼───────────────────────────────────────┤
- │ 特征引用 (函数调用式)     │ ATR(7)  → 列名 ATR_7                  │
- │                          │ MA(5,20) → 列名 MA_5_20               │
+ │ 特征引用 ({} 列引用)      │ ATR{7}  → 列名 ATR{7}                 │
+ │                          │ MACD{12,26,9} → 列名 MACD{12,26,9}    │
  │                          │                                       │
- │                          │ 为何列名是 ATR_7 而不是 ATR(7)?         │
- │                          │   括号 () 在 Expression 中是语法标记    │
- │                          │   (参数边界)，若列名含括号会导致:       │
- │                          │   "thr_mean(ATR(7))" 解析时，          │
- │                          │   Parser 无法区分 () 是列名字符还是     │
- │                          │   函数调用语法 → 语义冲突。            │
- │                          │   故用 _ 替代: ATR(7) → ATR_7          │
+ │                          │ 花括号 {} 专门用于"引用特征数据列"，    │
+ │                          │ 圆括号 () 专门用于"函数/变换调用"。     │
+ │                          │ 两者分工明确，表达式所见即列名。        │
  │                          │                                       │
- │                          │   类比: URL 空格 → %20 编码，           │
- │                          │   语法层的特殊字符到了存储层必须转义    │
+ │                          │ 旧 () 语法仍向后兼容：                 │
+ │                          │ RSI(14) 与 RSI{14} 产生相同 AST。       │
+ │                          │ 推荐使用 {} 写法保持语义一致性。        │
  │                          │                                       │
- │                          │   TreeNode._feature_key() 负责转换:     │
- │                          │   FEATURE("ATR",[7]) → 拼接 → "ATR_7"  │
+ │                          │ TreeNode._feature_key() 转换:           │
+ │                          │ FEATURE("ATR",[7]) → "ATR{7}"          │
  │                          │                                       │
- │                          │   与 Config 层对照:                     │
- │                          │   Config.features: "ATR(7,14)" (函数式) │
- │                          │   Expression:  "thr_mean(ATR(7))" (同上)│
- │                          │   差异在 differences 配置用了列名式     │
+ │                          │ 与 Config 层对照:                      │
+ │                          │ Config.features: "ATR(period=[7,14])"  │
+ │                          │ Expression:  "thr_mean(ATR{7})"        │
+ │                          │                                        │
  ├──────────────────────────┼───────────────────────────────────────┤
  │ 阈值函数                  │ thr_0(x)    : x > 0 → 1.0 / 0.0      │
 │                          │ thr_mean(x) : x > mean(x) → 1.0 / 0.0 │
@@ -128,14 +125,14 @@ signals/v2/expression.py — 统一表达式引擎
 
 ============================================================================
 
-语法示例：
-    简单:    "RSI(14)"
-    变换:    "thr_mean(RSI(14))"
-    阈值:    "thr_roll_mean(BBWIDTH(30), 60)"
-    二元:    "thr_mean(BBWIDTH(30)) sub thr_mean(TSF(7))"
-    条件:    "if_then(ADX(14) > 25, trend_expr, range_expr)"
-    确认:    "persist(thr_mean(BBWIDTH(30)), 3)"
-    组合:    "thr_mean(ATR(7)) & thr_mean(TRIMA(60))"
+语法示例（推荐 {} 列引用语法）：
+    简单:    "RSI{14}"
+    变换:    "thr_mean(RSI{14})"
+    阈值:    "thr_roll_mean(BBWIDTH{30}, 60)"
+    二元:    "thr_mean(BBWIDTH{30}) sub thr_mean(TSF{7})"
+    条件:    "if_then(ADX{14} > 25, trend_expr, range_expr)"
+    确认:    "persist(thr_mean(BBWIDTH{30}), 3)"
+    组合:    "thr_mean(ATR{7}) & thr_mean(TRIMA{60})"
 
 ============================================================================
 """
@@ -207,6 +204,14 @@ class TreeNode:
     def __init__(self, node_type: NodeType, value: str,
                  children: Optional[List['TreeNode']] = None,
                  param: Optional[Any] = None):
+        """AST 树节点
+
+        Args:
+            node_type: 节点类型 (FEATURE / CONSTANT / OPERATOR / ...)
+            value: 节点值（特征名/运算符/函数名/常量字符串）
+            children: 子树列表（OPERATOR 有左右子树，THRESHOLD 有入参子树）
+            param: 额外参数（FEATURE 的参数列表、THRESHOLD 的窗口大小等）
+        """
         self.node_type = node_type
         self.value = value
         self.children = children if children else []
@@ -215,38 +220,48 @@ class TreeNode:
     def _feature_key(self) -> str:
         """FEATURE节点: 从 value + params 构造 DataFrame 列名
 
-        FEATURE("ATR", [7]) → "ATR_7"
-        FEATURE("KDJ", [9, 3, 3]) → "KDJ_9_3_3"
-        FEATURE("ATR_7") → "ATR_7"
+        FEATURE("RSI", [14]) → "RSI{14}"
+        FEATURE("MACD", [12, 26, 9]) → "MACD{12,26,9}"
+        FEATURE("ULTOSC") → "ULTOSC"
         """
         if self.param is not None:
             if isinstance(self.param, list):
-                return f"{self.value}_{'_'.join(str(p) for p in self.param)}"
-            return f"{self.value}_{self.param}"
+                return f"{self.value}{{{','.join(str(p) for p in self.param)}}}"
+            return f"{self.value}{{{self.param}}}"
         return self.value
 
     def evaluate(self, feature_data: Dict[str, np.ndarray]) -> np.ndarray:
         if self.node_type == NodeType.FEATURE:
             col_name = self._feature_key()
-            # 精确匹配: RSI(14) → "RSI_14" → 直接命中
+            # 1) 精确匹配: RSI{14} → 直接命中
             if col_name in feature_data:
                 return feature_data[col_name].copy()
-            # [新增] 前缀匹配回退: VOL_RATIO(10) → "VOL_RATIO_10" → 匹配 "VOL_RATIO_10_20"
-            # 场景: 多参数特征在配置中展开后列名包含更多后缀(如 long=20)，
-            #        但表达式中只写了部分参数，需要通过前缀匹配找到完整列名
-            # 规则: 优先匹配"最短前缀匹配"(不含_MA等衍生后缀)，避免歧义
-            prefix_matches = [k for k in feature_data
-                              if k.startswith(col_name + '_') and '_MA' not in k.replace(col_name + '_', '', 1).split('_sub_')[0]
-                              and '_sub_' not in k]
+            # 2) {} 前缀匹配: VOL_RATIO{10} → 匹配 VOL_RATIO{10,20}
+            #    花括号格式去掉末尾 } 加 , 定位额外参数前缀
+            #    "RSI{14}" 这种单参数特征精确匹配已命中，不会进此分支
+            prefix_matches = []
+            if '}' in col_name:
+                brace_prefix = col_name.rstrip('}') + ','
+                prefix_matches = [k for k in feature_data
+                                  if k.startswith(brace_prefix)]
+            # 3) 旧 _ 格式向后兼容: 将 {} 转 _ 再试
+            if not prefix_matches:
+                alt_name = col_name.replace('{', '_').replace('}', '')
+                if alt_name in feature_data:
+                    return feature_data[alt_name].copy()
+                prefix_matches = [k for k in feature_data
+                                  if k.startswith(alt_name + '_')
+                                  and '_MA' not in k.replace(alt_name + '_', '', 1).split('_sub_')[0]
+                                  and '_sub_' not in k]
             if len(prefix_matches) == 1:
                 return feature_data[prefix_matches[0]].copy()
             if len(prefix_matches) > 1:
                 raise KeyError(
                     f"特征 '{col_name}' 前缀匹配到多列: {prefix_matches}，"
-                    f"请使用完整参数指定，如 VOL_RATIO(short=10,long=20)"
+                    f"请使用完整参数指定，如 VOL_RATIO{10,20}"
                 )
             # 无匹配 → 报错
-            available = [k for k in feature_data if k.startswith(col_name[:3])]
+            available = [k for k in feature_data if col_name[:3] in k]
             raise KeyError(f"特征列 '{col_name}' 不存在于特征矩阵中 (相近列: {available[:10]})")
         elif self.node_type == NodeType.CONSTANT:
             return float(self.value)
@@ -313,6 +328,11 @@ class TreeNode:
         raise ValueError(f"未知节点类型: {self.node_type}")
 
     def get_features(self) -> Set[str]:
+        """递归收集 AST 中所有引用到的特征列名
+
+        Returns:
+            { "RSI{14}", "ROC{5}", "VOL_RATIO{10,20}", ... }
+        """
         feats = set()
         if self.node_type == NodeType.FEATURE:
             feats.add(self._feature_key())
@@ -321,19 +341,21 @@ class TreeNode:
         return feats
 
     def depth(self) -> int:
+        """AST 树的深度 = 从根到叶子节点的最长路径"""
         if not self.children:
             return 1
         return 1 + max(child.depth() for child in self.children)
 
     def size(self) -> int:
+        """AST 树的节点总数 = 表达式复杂度的衡量"""
         return 1 + sum(child.size() for child in self.children)
 
     def to_string(self) -> str:
         if self.node_type == NodeType.FEATURE:
             if self.param is not None:
                 if isinstance(self.param, list):
-                    return f"{self.value}({', '.join(str(p) for p in self.param)})"
-                return f"{self.value}({self.param})"
+                    return f"{self.value}{{{', '.join(str(p) for p in self.param)}}}"
+                return f"{self.value}{{{self.param}}}"
             return self.value
         elif self.node_type == NodeType.CONSTANT:
             return self.value
@@ -371,6 +393,7 @@ class TreeNode:
         return str(self.value)
 
     def copy(self) -> 'TreeNode':
+        """深度克隆整棵 AST 树（递归拷贝所有子节点）"""
         return TreeNode(
             self.node_type, self.value,
             [child.copy() for child in self.children],
@@ -378,6 +401,7 @@ class TreeNode:
         )
 
     def to_dict(self) -> Dict:
+        """序列化为字典（JSON 兼容），用于保存/传输"""
         result = {
             'type': self.node_type.value,
             'value': self.value,
@@ -390,6 +414,7 @@ class TreeNode:
 
     @classmethod
     def from_dict(cls, data: Dict) -> 'TreeNode':
+        """从字典反序列化为 AST 树（与 to_dict() 对称）"""
         node_type = NodeType(data['type'])
         children = [cls.from_dict(c) for c in data.get('children', [])]
         param = data.get('param')
@@ -397,7 +422,19 @@ class TreeNode:
 
 
 def np_persist(arr: np.ndarray, n: int) -> np.ndarray:
-    """信号确认：连续N日同向才触发"""
+    """信号确认滤波器：连续 N 个信号同向才触发，否则保持中性的 0
+
+    用途：
+      消除单日噪声信号的虚假触发。例如 persist(signal, 3) 要求连续3日做多信号才做多，
+      连续3日做空才做空，其余情况持仓不变（信号 0）。
+
+    Args:
+        arr: 原始信号序列，取值 { -1, 0, 1 }
+        n: 最低持续天数
+
+    Returns:
+        滤波后信号序列，仅当连续 n 期同向时输出 +1/-1，否则 0
+    """
     result = np.zeros_like(arr)
     for i in range(n - 1, len(arr)):
         segment = arr[i - n + 1:i + 1]
@@ -429,9 +466,14 @@ def _expanding_mean(arr: np.ndarray, min_warmup: int = _EXPANDING_WARMUP) -> np.
 
 
 def _expanding_median(arr: np.ndarray, min_warmup: int = _EXPANDING_WARMUP) -> np.ndarray:
-    """扩展窗口中位数：第t天的中位数只用到[0:t+1]的数据，无前瞻偏差
-    [修复说明] 替代原有的 np.nanmedian(x) 全序列中位数实现，同理消除前瞻偏差。
-    [修复] 冷启动保护: 前 min_warmup 天返回 NaN。"""
+    """扩展窗口中位数：第 t 天的中位数只用到 [0:t+1] 的数据，无前瞻偏差
+
+    用途：
+      替代 np.nanmedian(x) 全序列中位数（含未来数据），消除前瞻偏差。
+
+    冷启动保护：
+      前 min_warmup 天返回 NaN，避免少量样本下中位数不稳定。
+    """
     result = np.full_like(arr, np.nan, dtype=float)
     for i in range(min_warmup, len(arr)):
         segment = arr[:i + 1]
@@ -442,9 +484,16 @@ def _expanding_median(arr: np.ndarray, min_warmup: int = _EXPANDING_WARMUP) -> n
 
 
 def _rolling_median(arr: np.ndarray, window: int) -> np.ndarray:
-    """滚动窗口中位数
-    [修复说明] thr_roll_med 原来错误调用了 _rolling_mean(计算的是均值而非中位数)，
-    现独立实现正确的中位数计算。"""
+    """滚动窗口中位数：固定窗口 [t-window+1:t+1]
+
+    用途：
+      thr_roll_med 的底层计算。原实现错误地调用了 _rolling_mean（计算均值而非中位数），
+      此函数提供了正确的中位数计算。
+
+    与 _expanding_median 的区别：
+      - expanding: 窗口从 0 增长到当前（start→current）
+      - rolling: 窗口大小固定为 window（current-window+1→current）
+    """
     result = np.full_like(arr, np.nan, dtype=float)
     for i in range(window - 1, len(arr)):
         segment = arr[i - window + 1:i + 1]
@@ -455,7 +504,12 @@ def _rolling_median(arr: np.ndarray, window: int) -> np.ndarray:
 
 
 def _rolling_std(arr: np.ndarray, window: int) -> np.ndarray:
-    """滚动窗口标准差，用于 thr_zscore 的布林带式突破"""
+    """滚动窗口标准差（样本标准差 ddof=1）
+
+    用途：
+      thr_zscore 的底层计算，用于布林带式突破信号：
+        signal = x[t] > rolling_mean(x, w) + k * rolling_std(x, w)
+    """
     result = np.full_like(arr, np.nan, dtype=float)
     for i in range(window - 1, len(arr)):
         segment = arr[i - window + 1:i + 1]
@@ -483,8 +537,18 @@ def _expanding_percentile(arr: np.ndarray, percentile: float,
 # ============================================================
 
 class Token:
-    LPAREN, RPAREN, COMMA, NAME, NUMBER, OP, EOF = (
-        'LPAREN', 'RPAREN', 'COMMA', 'NAME', 'NUMBER', 'OP', 'EOF'
+    """词法分析 token 类型枚举（字符串常数，用于类型判断）
+
+    LPAREN/RPAREN: 分组括号 ()
+    LBRACE/RBRACE: 列引用花括号 {}      ← {} 语法新增
+    COMMA:         参数分隔符
+    NAME:          标识符（函数名/特征名/运算符别名）
+    NUMBER:        数字字面量（含负数和浮点数）
+    OP:            运算符（> < & | + -）
+    EOF:           流结束标记
+    """
+    LPAREN, RPAREN, LBRACE, RBRACE, COMMA, NAME, NUMBER, OP, EOF = (
+        'LPAREN', 'RPAREN', 'LBRACE', 'RBRACE', 'COMMA', 'NAME', 'NUMBER', 'OP', 'EOF'
     )
 
     def __init__(self, type_: str, value: str):
@@ -499,6 +563,17 @@ OPS = {'add', 'sub', 'mul', 'div', 'max', 'min', '>', '<', '&', '|', '+'}
 
 
 class Tokenizer:
+    """词法分析器：表达式字符串 → Token 序列
+
+    支持的语法元素:
+      括号:      ( )
+      花括号:    { }       ← 列引用语法
+      逗号:      ,
+      数字:      3.14, -5, 20
+      标识符:    RSI, thr_mean, ROC
+      运算符:    > < & | + -
+    """
+
     def __init__(self, source: str):
         self.source = source
         self.pos = 0
@@ -519,6 +594,12 @@ class Tokenizer:
             elif ch == ',':
                 self.tokens.append(Token(Token.COMMA, ','))
                 self.pos += 1
+            elif ch == '{':
+                self.tokens.append(Token(Token.LBRACE, '{'))
+                self.pos += 1
+            elif ch == '}':
+                self.tokens.append(Token(Token.RBRACE, '}'))
+                self.pos += 1
             elif ch.isdigit() or ch == '.' or (ch == '-' and self.pos + 1 < len(self.source) and self.source[self.pos + 1].isdigit()):
                 self._number()
             elif ch.isalpha() or ch == '_':
@@ -531,6 +612,7 @@ class Tokenizer:
         return self.tokens
 
     def _number(self):
+        """扫描数字字面量（含负号和浮点数），生成 NUMBER token"""
         start = self.pos
         if self.source[self.pos] == '-':
             self.pos += 1
@@ -540,6 +622,7 @@ class Tokenizer:
         self.tokens.append(Token(Token.NUMBER, val))
 
     def _name(self):
+        """扫描标识符（字母、数字、下划线），生成 NAME token"""
         start = self.pos
         while self.pos < len(self.source) and (self.source[self.pos].isalnum() or self.source[self.pos] == '_'):
             self.pos += 1
@@ -547,6 +630,7 @@ class Tokenizer:
         self.tokens.append(Token(Token.NAME, val))
 
     def _op(self):
+        """扫描运算符（支持单字符和双字符），生成 OP token"""
         val = self.source[self.pos]
         if self.pos + 1 < len(self.source):
             two = val + self.source[self.pos + 1]
@@ -567,17 +651,21 @@ class Parser:
         self.feature_names = feature_names or set()
 
     def peek(self) -> Token:
+        """查看下一个 token 但不消耗它（lookahead）"""
         return self.tokens[self.pos] if self.pos < len(self.tokens) else Token(Token.EOF, '')
 
     def advance(self) -> Token:
+        """消耗并返回当前 token，pos 前进 1"""
         t = self.peek()
         self.pos += 1
         return t
 
     def match(self, type_: str) -> bool:
+        """检查下一个 token 是否匹配指定类型（不消耗）"""
         return self.peek().type == type_
 
     def expect(self, type_: str, value: Optional[str] = None):
+        """期望下一个 token 为指定类型（可选匹配值），否则抛出 SyntaxError"""
         t = self.advance()
         if t.type != type_:
             raise SyntaxError(f"期望 {type_}，得到 {t.type}('{t.value}') at pos {self.pos}")
@@ -657,10 +745,12 @@ class Parser:
         return left
 
     def _normalize_op(self, op_val: str) -> str:
+        """统一运算符表示：+ → add，- → sub，&& → &，|| → |"""
         op_map = {'+': 'add', '-': 'sub', '&&': '&', '||': '|'}
         return op_map.get(op_val, op_val)
 
     def _parse_primary(self) -> TreeNode:
+        """解析基本元素：数字 → CONSTANT、标识符 → NAME/CALL/BRAVE_REF、括号 → 子表达式"""
         token = self.peek()
         if token.type == Token.NUMBER:
             return self._parse_number()
@@ -675,6 +765,7 @@ class Parser:
             raise SyntaxError(f"意外的 token: {token}")
 
     def _parse_number(self) -> TreeNode:
+        """解析数字常量 → CONSTANT 节点"""
         t = self.advance()
         return TreeNode(NodeType.CONSTANT, t.value)
 
@@ -683,12 +774,40 @@ class Parser:
         if self.peek().type == Token.LPAREN:
             # 函数调用: name(args...)
             return self._parse_call(name)
+        elif self.peek().type == Token.LBRACE:
+            # 列引用: NAME{params} → FEATURE 节点
+            return self._parse_brace_ref(name)
         # 普通名称: 可能是特征名
         if name in self.feature_names or not self.feature_names:
             return TreeNode(NodeType.FEATURE, name)
         return TreeNode(NodeType.FEATURE, name)
 
+    def _parse_brace_ref(self, name: str) -> TreeNode:
+        """解析 NAME{param1,param2,...} → FEATURE 节点
+
+        RSI{14}       → FEATURE("RSI", param=[14])
+        MACD{12,26,9} → FEATURE("MACD", param=[12, 26, 9])
+        """
+        self.expect(Token.LBRACE)
+        params = []
+        while self.peek().type != Token.RBRACE:
+            if self.peek().type == Token.NUMBER:
+                params.append(int(float(self.advance().value)))
+            elif self.peek().type == Token.COMMA:
+                self.advance()
+            else:
+                break
+        self.expect(Token.RBRACE)
+        if params:
+            return TreeNode(NodeType.FEATURE, name, param=params)
+        return TreeNode(NodeType.FEATURE, name)
+
     def _parse_call(self, func_name: str) -> TreeNode:
+        """解析 NAME(args...) 函数调用语法
+
+        支持所有内置函数（阈值、一元运算、信号确认、条件分支）
+        以及默认的 FEATURE 构建（参数进入 param）
+        """
         self.expect(Token.LPAREN)
         args = []
         while self.peek().type != Token.RPAREN:
@@ -855,15 +974,18 @@ class Expression:
         signals = np.nan_to_num(signals, nan=0.0, posinf=0.0, neginf=0.0)
         return pd.Series(signals, index=feature_df.index, name=self._name)
 
-    # ---- 运算符重载 ----
+    # ---- 运算符重载（Python 语法 → AST 组合） ----
 
     def __and__(self, other: 'Expression') -> 'Expression':
+        """& 运算符：AND 信号组合 (np.minimum)"""
         return self._binary_op(other, '&', 'AND')
 
     def __or__(self, other: 'Expression') -> 'Expression':
+        """| 运算符：OR 信号组合 (np.maximum)"""
         return self._binary_op(other, '|', 'OR')
 
     def __neg__(self) -> 'Expression':
+        """- 运算符：信号反转（做多↔做空反转）"""
         tree = TreeNode(NodeType.FUNCTION, 'neg', [self._tree.copy()])
         expr = Expression(tree, self._feature_space, self._feature_df,
                           name=f'REV_{self._name}')
@@ -871,15 +993,28 @@ class Expression:
         return expr
 
     def __add__(self, other: 'Expression') -> 'Expression':
+        """+ 运算符：两个信号值相加（等权合并）"""
         return self._binary_op(other, 'add', 'ADD')
 
     def __sub__(self, other: 'Expression') -> 'Expression':
+        """- 运算符：信号差值"""
         return self._binary_op(other, 'sub', 'SUB')
 
     def __mul__(self, other: 'Expression') -> 'Expression':
+        """* 运算符：信号相乘（条件与）"""
         return self._binary_op(other, 'mul', 'MUL')
 
     def _binary_op(self, other: 'Expression', op_name: str, label: str) -> 'Expression':
+        """通用二元运算构造器：组合两个 Expression 的 AST 树为新节点
+
+        此方法创建一棵新的 OPERATOR 节点，左右子树分别是 self 和 other 的 AST 拷贝。
+        合并时优先使用 self 的 feature_space / feature_df。
+
+        Args:
+            other: 参与运算的另一个表达式
+            op_name: 内部运算符名称（'&', '|', 'add', 'sub', 'mul'）
+            label: 拼接名称用的显示标签（'AND', 'OR', 'ADD', 'SUB', 'MUL'）
+        """
         tree = TreeNode(NodeType.OPERATOR, op_name, [self._tree.copy(), other._tree.copy()])
         expr = Expression(tree, self._feature_space or other._feature_space,
                           self._feature_df or other._feature_df,
@@ -890,6 +1025,7 @@ class Expression:
     # ---- 序列化 ----
 
     def to_dict(self) -> Dict:
+        """转字典（含表达式字符串、AST 树、自省信息），用于保存/传输"""
         return {
             'source': self.source,
             'expression': self.expression,
@@ -901,11 +1037,19 @@ class Expression:
         }
 
     def to_json(self) -> str:
+        """转 JSON 字符串"""
         return json.dumps(self.to_dict(), indent=2, ensure_ascii=False)
 
     @classmethod
     def from_dict(cls, data: Dict, feature_space: Optional[FeatureSpace] = None,
                   feature_df: Optional[pd.DataFrame] = None) -> 'Expression':
+        """从字典还原 Expression
+
+        Args:
+            data: to_dict() 输出的字典
+            feature_space: 可选的 FeatureSpace 实例
+            feature_df: 可选的预计算特征矩阵
+        """
         tree = TreeNode.from_dict(data.get('tree', data.get('ast', {})))
         expr = cls(tree, feature_space, feature_df, name=data.get('name'))
         expr.source = data.get('source', expr.source)
@@ -914,18 +1058,19 @@ class Expression:
     @classmethod
     def from_json(cls, json_str: str, feature_space: Optional[FeatureSpace] = None,
                   feature_df: Optional[pd.DataFrame] = None) -> 'Expression':
+        """从 JSON 字符串还原 Expression"""
         data = json.loads(json_str)
         return cls.from_dict(data, feature_space, feature_df)
 
     def save(self, path: str):
-        """保存表达式到JSON文件"""
+        """保存表达式到 JSON 文件"""
         with open(path, 'w', encoding='utf-8') as f:
             f.write(self.to_json())
 
     @classmethod
     def load(cls, path: str, feature_space: Optional[FeatureSpace] = None,
              feature_df: Optional[pd.DataFrame] = None) -> 'Expression':
-        """从JSON文件加载表达式"""
+        """从 JSON 文件加载 Expression"""
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         return cls.from_dict(data, feature_space, feature_df)
@@ -942,14 +1087,28 @@ class Expression:
 # ============================================================
 
 def persist(expr: Expression, n: int = 3) -> Expression:
-    """创建信号确认包装器"""
+    """信号确认包装器：连续 n 个信号同向才触发
+
+    用法:
+        filtered = persist(expr, 3)   # 连续 3 日同向才触发
+
+    相当于表达式语法:
+        persist(thr_mean(RSI{14}), 3)
+    """
     tree = TreeNode(NodeType.PERSIST, 'persist', [expr._tree.copy()], param=n)
     return Expression(tree, expr._feature_space, expr._feature_df,
                       name=f'Persist({n})_{expr._name}')
 
 
 def regime_switch(condition: Expression, expr_a: Expression, expr_b: Expression) -> Expression:
-    """创建条件分支信号"""
+    """条件分支信号：condition 成立时走 expr_a，否则走 expr_b
+
+    用法:
+        trend_signal = regime_switch(adx_signal, trend_expr, range_expr)
+
+    相当于表达式语法:
+        if_then(ADX{14} > 25, ATR_breakout, BBWIDTH_reversal)
+    """
     tree = TreeNode(NodeType.SWITCH, 'switch',
                      [condition._tree.copy(), expr_a._tree.copy(), expr_b._tree.copy()])
     fs = condition._feature_space or expr_a._feature_space or expr_b._feature_space
@@ -960,5 +1119,10 @@ def regime_switch(condition: Expression, expr_a: Expression, expr_b: Expression)
 def parse_and_build(expr_str: str,
                     feature_space: Optional[FeatureSpace] = None,
                     feature_df: Optional[pd.DataFrame] = None) -> Expression:
-    """便捷函数：从字符串创建Expression"""
+    """便捷函数：从字符串创建 Expression，一行替代两步操作
+
+    相当于:
+        tree = parse_expression(expr_str)
+        expr = Expression(tree, feature_space, feature_df)
+    """
     return Expression(expr_str, feature_space, feature_df)
