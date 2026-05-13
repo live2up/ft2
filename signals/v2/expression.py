@@ -92,6 +92,10 @@ signals/v2/expression.py — 统一表达式引擎
  │                          │                                        │
  ├──────────────────────────┼───────────────────────────────────────┤
  │ 阈值函数                  │ thr_0(x)    : x > 0 → 1.0 / 0.0      │
+│                          │ thr_50(x)   : x > 50 → 1.0 / 0.0     │
+│                          │ thr_1(x)    : x > 1 → 1.0 / 0.0       │
+│                          │ thr_0.5(x)  : x > 0.5 → 1.0 / 0.0     │
+│                          │ 任意 thr_<数字>(x) 均可用              │
 │                          │ thr_mean(x) : x > mean(x) → 1.0 / 0.0 │
 │                          │ thr_med(x)  : x > median(x) → 1.0/0.0 │
 │                          │ thr_roll_mean(x, w) : x > rolling_mean │
@@ -140,6 +144,7 @@ signals/v2/expression.py — 统一表达式引擎
 import sys
 import os
 import json
+import re
 import numpy as np
 import pandas as pd
 from enum import Enum
@@ -313,6 +318,9 @@ class TreeNode:
                 return np.where((arg > lo) & (arg < hi), 1.0, 0.0)
             if self.value in self.THRESHOLD_FUNCS:
                 return self.THRESHOLD_FUNCS[self.value](arg)
+            # 通用 thr_<数字>: x > 阈值 (如 thr_50(RSI{14}))
+            if self.param is not None and isinstance(self.param, (int, float)):
+                return np.where(arg > self.param, 1.0, 0.0)
             return np.where(arg > 0, 1.0, 0.0)
         elif self.node_type == NodeType.PERSIST:
             arg = self.children[0].evaluate(feature_data) if self.children else np.zeros(1)
@@ -622,10 +630,35 @@ class Tokenizer:
         self.tokens.append(Token(Token.NUMBER, val))
 
     def _name(self):
-        """扫描标识符（字母、数字、下划线），生成 NAME token"""
+        """扫描标识符（字母、数字、下划线），生成 NAME token
+
+        额外支持标识符后缀：
+          · 小数后缀:  thr_0.5  → 完整标识符 thr_0.5
+          · 负数后缀:  thr_-5   → 完整标识符 thr_-5  (仅当名以 _ 结尾时触发，
+            避免与 thr_ - 5 这样的减法表达式混淆)
+        """
         start = self.pos
         while self.pos < len(self.source) and (self.source[self.pos].isalnum() or self.source[self.pos] == '_'):
             self.pos += 1
+        # 后缀扩展: .数字 (thr_0.5)
+        if (self.pos + 1 < len(self.source) and self.source[self.pos] == '.'
+                and self.source[self.pos + 1].isdigit()):
+            self.pos += 1
+            while self.pos < len(self.source) and self.source[self.pos].isdigit():
+                self.pos += 1
+        # 后缀扩展: -数字 (thr_-5)，仅当名以 _ 结尾（防止 thr - 5 误识别）
+        elif (self.pos + 1 < len(self.source) and self.source[self.pos] == '-'
+              and self.source[self.pos + 1].isdigit()
+              and self.source[start:self.pos].endswith('_')):
+            self.pos += 1  # 消耗 '-'
+            while self.pos < len(self.source) and self.source[self.pos].isdigit():
+                self.pos += 1
+            # 再尝试消耗小数部分: thr_-0.5
+            if (self.pos + 1 < len(self.source) and self.source[self.pos] == '.'
+                    and self.source[self.pos + 1].isdigit()):
+                self.pos += 1
+                while self.pos < len(self.source) and self.source[self.pos].isdigit():
+                    self.pos += 1
         val = self.source[start:self.pos]
         self.tokens.append(Token(Token.NAME, val))
 
@@ -836,6 +869,15 @@ class Parser:
             if len(args) >= 3:
                 return TreeNode(NodeType.SWITCH, 'switch', [args[0], args[1], args[2]])
             return args[0] if args else TreeNode(NodeType.CONSTANT, '0')
+
+        # 通用阈值函数: thr_<数字>(x) — 显式阈值比较
+        #   thr_1(EMA{20})   → "EMA/close > 1" = 价格在均线上方
+        #   thr_50(RSI{14})  → "中心化RSI > 50" (若RSI未中心化则为原始RSI > 50)
+        #   thr_0.5(VOL_RATIO{10,20}) → "量比 > 0.5"
+        thr_numeric = re.match(r'^thr_(-?\d+(?:\.\d+)?)$', name)
+        if thr_numeric:
+            threshold = float(thr_numeric.group(1))
+            return TreeNode(NodeType.THRESHOLD, name, [args[0]], param=threshold)
 
         # 阈值函数: thr_0, thr_mean, thr_med, thr_roll_mean, thr_roll_med
         # [新增] thr_zscore, thr_pct, thr_range

@@ -124,15 +124,20 @@ signals/v2/features.py — 特征空间引擎
 
 import sys
 import os
+import logging
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional, Callable, Any
+
+logger = logging.getLogger(__name__)
 
 try:
     import talib
     HAS_TALIB = True
 except ImportError:
     HAS_TALIB = False
+    logger.warning("talib 未安装，部分特征（MFI/ULTOSC/AVGPRICE/WCLPRICE/HT_SINE/HT_TRENDMODE/CORREL）"
+                   "将返回全零序列。建议安装 TA-Lib: pip install TA-Lib")
 
 
 # ============================================================
@@ -618,6 +623,7 @@ def calc_mfi(data: pd.DataFrame, period: int = 14) -> Tuple[np.ndarray, np.ndarr
         mfi = talib.MFI(high, low, close, volume, timeperiod=period)
         raw = mfi - 50.0
     else:
+        logger.warning("calc_mfi: 缺少 talib，返回全零序列")
         raw = np.zeros(len(data))
     return raw, _rolling_mean(raw, period)
 
@@ -639,6 +645,7 @@ def calc_ultosc(data: pd.DataFrame, period1: int = 7, period2: int = 14,
                               timeperiod3=period3)
         raw = ultosc - 50.0
     else:
+        logger.warning("calc_ultosc: 缺少 talib，返回全零序列")
         raw = np.zeros(len(data))
     return raw, _rolling_mean(raw, period2)
 
@@ -676,6 +683,7 @@ def calc_avgprice(data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         avgprice = talib.AVGPRICE(open_p, high, low, close)
         raw = np.where(avgprice > 0, (close - avgprice) / avgprice * 100, 0)
     else:
+        logger.warning("calc_avgprice: 缺少 talib，返回全零序列")
         raw = np.zeros(len(data))
     return raw, _rolling_mean(raw, 20)
 
@@ -694,6 +702,7 @@ def calc_wclprice(data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         wclprice = talib.WCLPRICE(high, low, close)
         raw = np.where(wclprice > 0, (close - wclprice) / wclprice * 100, 0)
     else:
+        logger.warning("calc_wclprice: 缺少 talib，返回全零序列")
         raw = np.zeros(len(data))
     return raw, _rolling_mean(raw, 20)
 
@@ -709,6 +718,7 @@ def calc_ht_sine(data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         sine, leadsine = talib.HT_SINE(close)
         raw = sine - leadsine
     else:
+        logger.warning("calc_ht_sine: 缺少 talib，返回全零序列")
         raw = np.zeros(len(data))
     return raw, raw
 
@@ -724,6 +734,7 @@ def calc_ht_trendmode(data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         ht_trendmode = talib.HT_TRENDMODE(close)
         raw = ht_trendmode - 0.5
     else:
+        logger.warning("calc_ht_trendmode: 缺少 talib，返回全零序列")
         raw = np.zeros(len(data))
     return raw, raw
 
@@ -734,6 +745,7 @@ def calc_correl(data: pd.DataFrame, period: int = 10) -> Tuple[np.ndarray, np.nd
         time_seq = np.arange(len(close), dtype=float)
         correl = talib.CORREL(close, time_seq, timeperiod=period)
     else:
+        logger.warning("calc_correl: 缺少 talib，返回全零序列")
         correl = np.zeros(len(close))
     return correl, _rolling_mean(correl, period)
 
@@ -1187,9 +1199,16 @@ class FeatureSpace:
 
     def _guess_normalize(self, feat_name: str) -> str:
         """根据特征名推测归一化方式
-        close_feats: 原始值为价格量级, 需除以close归一化为比例
-        pct_feats: 原始值为百分比, 需除以100
-        raw_feats: 原始值已归一化/无量纲/振荡类, 不做额外处理
+
+        close_feats: 原始值为价格量级, 需除以 close 归一化为比例
+        pct_feats:   原始值为百分比, 需除以 100
+        raw_feats:   原始值已归一化/无量纲/振荡类, 不做额外处理
+
+        ⚠️ 阈值选择建议
+           close 归一化后（如 EMA{20} 的值 = EMA/close），中性点为 1 而非 0。
+           → thr_0(EMA{20}) ≡ 1.0 恒成立（始终 > 0）
+           → 改用 thr_1(EMA{20}) = "EMA/close > 1" = 价格在均线上方  ✅
+           同理 thr_0.5(VOL_RATIO{10,20}) = "量比 > 0.5" 等。
         """
         # [修复] 从 close_feats 移除以下指标，原因：
         # BBWIDTH: calc_bbwidth 已计算 (upper-lower)/middle，本身已是比例值(0.05~0.3)，
