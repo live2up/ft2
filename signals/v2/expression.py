@@ -636,6 +636,8 @@ class Tokenizer:
           · 小数后缀:  thr_0.5  → 完整标识符 thr_0.5
           · 负数后缀:  thr_-5   → 完整标识符 thr_-5  (仅当名以 _ 结尾时触发，
             避免与 thr_ - 5 这样的减法表达式混淆)
+
+        命名运算符: sub/add/mul/div/min/max 识别为 OP token 而非 NAME
         """
         start = self.pos
         while self.pos < len(self.source) and (self.source[self.pos].isalnum() or self.source[self.pos] == '_'):
@@ -660,7 +662,11 @@ class Tokenizer:
                 while self.pos < len(self.source) and self.source[self.pos].isdigit():
                     self.pos += 1
         val = self.source[start:self.pos]
-        self.tokens.append(Token(Token.NAME, val))
+        # 命名运算符识别: sub/add/mul/div/min/max 生成 OP token
+        if val in OPS:
+            self.tokens.append(Token(Token.OP, val))
+        else:
+            self.tokens.append(Token(Token.NAME, val))
 
     def _op(self):
         """扫描运算符（支持单字符和双字符），生成 OP token"""

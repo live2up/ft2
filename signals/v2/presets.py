@@ -218,6 +218,25 @@ PRESETS: Dict[str, ExpressionPreset] = {
         param_count=4,
         example='BBWIDTH(30) sub (VOL_RATIO(5) & TSF(7))'
     ),
+    # ============================
+    # Phase 1B 新增组合
+    # ============================
+    'atr_roc': ExpressionPreset(
+        name='atr_roc',
+        template='thr_mean(ATR(?)) & thr_mean(ROC(?))',
+        description='ATR×ROC组合（波动+动量，Phase 1B已验证模式）',
+        category='combo',
+        param_count=2,
+        example='ATR(7) & ROC(10)'
+    ),
+    'atr_ma': ExpressionPreset(
+        name='atr_ma',
+        template='thr_mean(ATR(?)) & thr_0(MA{5,20})',
+        description='ATR×MA组合（波动+趋势交叉，MA固定{5,20}）',
+        category='combo',
+        param_count=1,
+        example='ATR(7) & MA{5,20}'
+    ),
 
     # ============================
     # Regime 市场状态类
@@ -245,6 +264,90 @@ PRESETS: Dict[str, ExpressionPreset] = {
         category='regime',
         param_count=1,
         example='VOL_CHG(5)'
+    ),
+
+    # ============================
+    # Phase 1B 新增特征
+    # ============================
+    'mom_ratio': ExpressionPreset(
+        name='mom_ratio',
+        template='thr_mean(MOM_RATIO(?, ?))',
+        description='动量比（ROC_short/ROC_long）偏离均值',
+        category='momentum',
+        param_count=2,
+        example='MOM_RATIO(5,20)'
+    ),
+    'vol_ratio': ExpressionPreset(
+        name='vol_ratio',
+        template='thr_mean(VOL_RATIO(?, ?))',
+        description='量比偏离均值',
+        category='volume',
+        param_count=2,
+        example='VOL_RATIO(5,20)'
+    ),
+    'roc': ExpressionPreset(
+        name='roc',
+        template='thr_mean(ROC(?))',
+        description='变动率偏离均值信号',
+        category='momentum',
+        param_count=1,
+        example='ROC(5)'
+    ),
+    'tsf': ExpressionPreset(
+        name='tsf',
+        template='thr_mean(TSF(?))',
+        description='时间序列预测偏离均值信号',
+        category='statistic',
+        param_count=1,
+        example='TSF(7)'
+    ),
+    'var': ExpressionPreset(
+        name='var',
+        template='thr_mean(VAR(?))',
+        description='方差偏离均值信号',
+        category='statistic',
+        param_count=1,
+        example='VAR(20)'
+    ),
+    'stddev': ExpressionPreset(
+        name='stddev',
+        template='thr_mean(STDDEV(?))',
+        description='标准差偏离均值信号',
+        category='volatility',
+        param_count=1,
+        example='STDDEV(20)'
+    ),
+    'correl': ExpressionPreset(
+        name='correl',
+        template='thr_mean(CORREL(?))',
+        description='相关系数偏离均值信号',
+        category='statistic',
+        param_count=1,
+        example='CORREL(10)'
+    ),
+    'linearreg': ExpressionPreset(
+        name='linearreg',
+        template='thr_mean(LINEARREG(?))',
+        description='线性回归偏离均值信号',
+        category='statistic',
+        param_count=1,
+        example='LINEARREG(20)'
+    ),
+    'obv': ExpressionPreset(
+        name='obv',
+        template='thr_mean(OBV(?))',
+        description='OBV偏离均值信号',
+        category='volume',
+        param_count=1,
+        example='OBV(10)'
+    ),
+    'mom_chg': ExpressionPreset(
+        name='mom_chg',
+        template='thr_mean(MOM_CHG(?))',
+        description='动量加速度偏离均值信号',
+        category='momentum',
+        param_count=1,
+        example='MOM_CHG(5)'
     ),
 }
 

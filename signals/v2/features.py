@@ -879,22 +879,30 @@ DEFAULT_CONFIG = {
         # 新写法 'RSI(period=[5,7,10,14,20,30])' 明确: period参数展开为6列
         # 列表值做叉积展开, 标量值在所有实例中固定
         'volatility': [
-            'ATR(period=[7,14])', 'STDDEV(period=[20,30])', 'BBWIDTH(period=[20,30])',
-            'HV(period=20)', 'NATR(period=14)',
+            'ATR(period=[3,5,7,10,14,20,30])',
+            'STDDEV(period=[10,15,20,25,30,40])',
+            'BBWIDTH(period=[10,15,20,25,30,40])',
+            'HV(period=[10,20,30,60])',
+            'NATR(period=[7,10,14,20,30])',
         ],
         'trend': [
-            'TRIMA(period=[40,60])', 'SMA(period=50)',
+            'TRIMA(period=[20,30,40,50,60])', 'SMA(period=50)',
             'MA(short=5,long=20)',
             'EMA(period=[5,10,15,20,30,40,60])',
             'WMA(period=20)', 'DEMA(period=20)', 'KAMA(period=10)',
         ],
         'statistic': [
-            'TSF(period=[3,5,7,10,14,20])', 'VAR(period=20)', 'LINEARREG(period=20)', 'CORREL(period=10)',
+            'TSF(period=[3,5,7,10,14,20])',
+            'VAR(period=[10,15,20,25,30])',
+            'LINEARREG(period=[10,15,20,25,30])',
+            'CORREL(period=[5,10,15,20,25])',
         ],
         'momentum': [
-            'ADX(period=14)', 'RSI(period=[5,7,10,14,20,30])', 'CCI(period=[14,20])',
+            'ADX(period=[7,10,14,20,25,30])',
+            'RSI(period=[5,7,10,14,20,30])',
+            'CCI(period=[7,10,14,20,30])',
             'MACD(fast=12,slow=26,signal=9)',
-            'MFI(period=14)', 'ULTOSC()',
+            'MFI(period=[7,10,14,20])', 'ULTOSC()',
             'ROC(period=[5,10,20,60])',
         ],
         'momentum_ratio': [
@@ -905,7 +913,8 @@ DEFAULT_CONFIG = {
         # [修复] VOL_RATIO 旧写法 'VOL_RATIO(5,10)' 把5和10都映射到short, long默认20
         # 新写法明确指定: short=[5,10]展开, long=20固定 → VOL_RATIO_5_20, VOL_RATIO_10_20
         'volume': [
-            'VOL_RATIO(short=[5,10],long=20)', 'OBV(signal_period=10)',
+            'VOL_RATIO(short=[3,5,10,15,20],long=20)',
+            'OBV(signal_period=[5,10,15,20])',
         ],
     },
     'regime': True,
