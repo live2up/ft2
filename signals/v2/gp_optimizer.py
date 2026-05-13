@@ -122,11 +122,11 @@ ROLL_WINDOWS = [10, 20, 30, 60]
 SEED_EXPRESSIONS = [
     'thr_mean(ATR_7) & thr_mean(TRIMA_60)',
     'thr_mean(BBWIDTH_30) sub thr_mean(TSF_7)',
-    'thr_mean(BBWIDTH_30) sub (VOL_RATIO_10_MA min thr_mean(TSF_7))',
-    'thr_roll_mean(BBWIDTH_30, 60) sub (VOL_RATIO_10_MA min thr_roll_mean(TSF_7, 30))',
+    'thr_mean(BBWIDTH_30) sub (VOL_RATIO_10_20_MA min thr_mean(TSF_7))',
+    'thr_roll_mean(BBWIDTH_30, 60) sub (VOL_RATIO_10_20_MA min thr_roll_mean(TSF_7, 30))',
     'switch(ADX_14, thr_mean(BBWIDTH_30), thr_mean(neg(BBWIDTH_30)))',
     'persist(thr_mean(BBWIDTH_30) sub thr_mean(TSF_7), 3)',
-    'thr_mean(BBWIDTH_30) mul thr_mean(VOL_RATIO_5)',
+    'thr_mean(BBWIDTH_30) mul thr_mean(VOL_RATIO_5_20)',
     'thr_roll_mean(BBWIDTH_30, 20) sub thr_roll_med(TSF_7, 20)',
     'switch(VOL_REGIME_20, thr_mean(BBWIDTH_30), thr_mean(neg(BBWIDTH_30)))',
     'persist(thr_mean(UP_RATIO_10) sub thr_mean(BBWIDTH_30), 2)',
@@ -134,7 +134,7 @@ SEED_EXPRESSIONS = [
     'thr_roll_mean(UP_RATIO_10, 20) sub thr_roll_med(BBWIDTH_30, 30)',
     'thr_mean(BBWIDTH_30_sub_TSF_7)',
     'thr_mean(ATR_7_sub_TSF_7)',
-    'persist(thr_roll_mean(BBWIDTH_30, 30) sub thr_roll_med(VOL_RATIO_10_MA, 60), 3)',
+    'persist(thr_roll_mean(BBWIDTH_30, 30) sub thr_roll_med(VOL_RATIO_10_20_MA, 60), 3)',
 ]
 
 

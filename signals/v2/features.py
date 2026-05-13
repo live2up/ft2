@@ -638,19 +638,35 @@ def register_feature(name: str, calc_fn: Callable):
 # 默认配置：AIdev V5特征集
 DEFAULT_CONFIG = {
     'features': {
-        'volatility': ['ATR(7,14)', 'STDDEV(20,30)', 'BBWIDTH(20,30)',
-                       'HV(20)', 'NATR(14)'],
-        'trend': ['TRIMA(40,60)', 'SMA(50)',
-                  'MA(short=5,long=20)',
-                  'EMA(5,10,15,20,30,40,60)',
-                  'WMA(20)', 'DEMA(20)', 'KAMA(10)'],
-        'statistic': ['TSF(3,5,7,10,14,20)', 'VAR(20)', 'LINEARREG(20)', 'CORREL(10)'],
-        'momentum': ['ADX(14)', 'RSI(5,7,10,14,20,30)', 'CCI(14,20)',
-                     'MACD(fast=12,slow=26,signal=9)',
-                     'MFI(14)', 'ULTOSC()'],
+        # [重构] 所有特征配置改用严格关键字参数 + 列表展开语法
+        # 旧写法 'RSI(5,7,10,14,20,30)' 禁止: 纯位置参数, 不知5/7/10对应哪个形参
+        # 新写法 'RSI(period=[5,7,10,14,20,30])' 明确: period参数展开为6列
+        # 列表值做叉积展开, 标量值在所有实例中固定
+        'volatility': [
+            'ATR(period=[7,14])', 'STDDEV(period=[20,30])', 'BBWIDTH(period=[20,30])',
+            'HV(period=20)', 'NATR(period=14)',
+        ],
+        'trend': [
+            'TRIMA(period=[40,60])', 'SMA(period=50)',
+            'MA(short=5,long=20)',
+            'EMA(period=[5,10,15,20,30,40,60])',
+            'WMA(period=20)', 'DEMA(period=20)', 'KAMA(period=10)',
+        ],
+        'statistic': [
+            'TSF(period=[3,5,7,10,14,20])', 'VAR(period=20)', 'LINEARREG(period=20)', 'CORREL(period=10)',
+        ],
+        'momentum': [
+            'ADX(period=14)', 'RSI(period=[5,7,10,14,20,30])', 'CCI(period=[14,20])',
+            'MACD(fast=12,slow=26,signal=9)',
+            'MFI(period=14)', 'ULTOSC()',
+        ],
         'price_transform': ['AVGPRICE()', 'WCLPRICE()'],
         'cycle': ['HT_SINE()', 'HT_TRENDMODE()'],
-        'volume': ['VOL_RATIO(5,10)', 'OBV(10)'],
+        # [修复] VOL_RATIO 旧写法 'VOL_RATIO(5,10)' 把5和10都映射到short, long默认20
+        # 新写法明确指定: short=[5,10]展开, long=20固定 → VOL_RATIO_5_20, VOL_RATIO_10_20
+        'volume': [
+            'VOL_RATIO(short=[5,10],long=20)', 'OBV(signal_period=10)',
+        ],
     },
     'regime': True,
     'market_breadth': False,
@@ -698,46 +714,117 @@ class FeatureSpace:
         return self
 
     def _parse_feature_str(self, feat_str: str) -> Tuple[str, Dict]:
-        """解析 'ATR(7,14)' → ('ATR', {'period': 7}, ...)"""
+        """解析特征配置字符串为 (name, params) 对
+        [重构] 严格关键字参数规范，禁止隐式位置参数展开
+
+        支持的语法:
+          'RSI(period=[5,7,10,14,20,30])'  — 关键字+列表展开 → 6列
+          'ATR(period=[7,14])'              — 关键字+列表展开 → 2列
+          'MACD(fast=12,slow=26,signal=9)'  — 关键字+标量 → 1列
+          'ULTOSC()'                         — 无参数 → 1列
+
+        禁止的语法:
+          'RSI(5,7,10,14,20,30)'  — 纯位置参数: 不知道5/7/10各自对应哪个形参
+          'VOL_RATIO(5,10)'       — 多位置参数: 5→short? 10→long? 语义歧义
+
+        列表展开规则: 参数值为 [v1,v2,...] 时, 该参数做展开;
+        多个列表参数做叉积展开, 标量参数在所有展开实例中保持固定。
+        """
         name_end = feat_str.find('(')
         if name_end == -1:
             return feat_str, {}
         name = feat_str[:name_end]
-        params_str = feat_str[name_end + 1:-1]
+        params_str = feat_str[name_end + 1:-1].strip()
+        if not params_str:
+            return name.upper(), {}
+
         params = {}
-        parts = [p.strip() for p in params_str.split(',') if p.strip()]
-        key_params = []
-        for p in parts:
-            if '=' in p:
-                k, v = p.split('=')
-                params[k.strip()] = int(v.strip())
+        positional_values = []
+        # [修复] 不能简单 split(','), 因为列表值如 period=[7,14] 内部也有逗号
+        # 改为逐字符扫描, 跟踪方括号深度, 只在顶层逗号处分割
+        top_level_parts = []
+        depth = 0
+        current = []
+        for ch in params_str:
+            if ch == '[':
+                depth += 1
+                current.append(ch)
+            elif ch == ']':
+                depth -= 1
+                current.append(ch)
+            elif ch == ',' and depth == 0:
+                top_level_parts.append(''.join(current).strip())
+                current = []
             else:
-                key_params.append(int(p))
-        if key_params:
-            params['__default_params'] = key_params
+                current.append(ch)
+        if current:
+            top_level_parts.append(''.join(current).strip())
+
+        for p in top_level_parts:
+            if not p:
+                continue
+            if '=' in p:
+                k, v = p.split('=', 1)
+                k = k.strip()
+                v = v.strip()
+                if v.startswith('[') and v.endswith(']'):
+                    params[k] = [int(x.strip()) for x in v[1:-1].split(',') if x.strip()]
+                else:
+                    params[k] = int(v)
+            else:
+                positional_values.append(int(p))
+
+        # [严格] 禁止纯位置参数 — 语义不明确
+        if positional_values:
+            raise ValueError(
+                f"特征 '{name}' 配置使用了位置参数 {positional_values}，"
+                f"请使用关键字参数格式。例如: '{name}(period={positional_values[0]})' "
+                f"或 '{name}(period={positional_values})' (展开多列)"
+            )
+
         return name.upper(), params
 
     def _expand_params(self, name: str, params: Dict, calc_fn: Callable) -> List[Dict]:
-        """展开多参数为多个特征配置"""
-        import inspect
-        sig = inspect.signature(calc_fn)
-        param_names = [pn for pn in sig.parameters.keys() if pn != 'data']
+        """展开多参数为多个特征配置
+        [重构] 叉积展开逻辑，替代旧的 __default_params 隐式映射
 
-        if '__default_params' in params:
-            values = params['__default_params']
-            result = []
-            # 第一个默认参数如 period 取 values 中的值
-            pos_param_idx = 0
-            keyword_params = {k: v for k, v in params.items() if k != '__default_params'}
-            for v in values:
-                p = {
-                    param_names[0 + pos_param_idx + len(keyword_params)]: v
-                }
-                p.update(keyword_params)
-                result.append(p)
-            return result
-        else:
-            return [params]
+        展开规则:
+        - 标量参数: 在所有展开实例中保持固定
+        - 列表参数: 做叉积展开，每个值产生一个独立实例
+        - 无列表参数: 返回单个实例（不展开）
+
+        示例:
+          RSI(period=[5,7,10]) → [{'period':5}, {'period':7}, {'period':10}]
+          VOL_RATIO(short=[5,10],long=20) → [{'short':5,'long':20}, {'short':10,'long':20}]
+          MACD(fast=12,slow=26,signal=9) → [{'fast':12,'slow':26,'signal':9}]
+        """
+        import itertools
+
+        # 分离列表参数和标量参数
+        list_params = {}
+        scalar_params = {}
+        for k, v in params.items():
+            if isinstance(v, list):
+                list_params[k] = v
+            else:
+                scalar_params[k] = v
+
+        if not list_params:
+            return [params] if params else [{}]
+
+        # 叉积展开: 生成所有列表参数值的组合
+        keys = list(list_params.keys())
+        value_lists = [list_params[k] for k in keys]
+        combinations = list(itertools.product(*value_lists))
+
+        result = []
+        for combo in combinations:
+            expanded = dict(scalar_params)
+            for k, v in zip(keys, combo):
+                expanded[k] = v
+            result.append(expanded)
+
+        return result
 
     def _build_configs(self):
         """解析配置，构建特征列表"""
@@ -750,10 +837,16 @@ class FeatureSpace:
                     continue
                 calc_fn = _FEATURE_CALC_REGISTRY[name]
                 expanded = self._expand_params(name, params, calc_fn)
+                # [修复] 列名拼接按函数签名参数顺序，而非字典插入顺序
+                # 旧实现: pcfg.values() 顺序不可控，VOL_RATIO 可能变成 VOL_RATIO_20_5
+                # 新实现: 按 calc_fn 签名中参数定义的顺序拼接，保证 VOL_RATIO_5_20
+                import inspect
+                sig_param_names = [pn for pn in inspect.signature(calc_fn).parameters.keys() if pn != 'data']
                 for pcfg in expanded:
                     if pcfg:
-                        parts = [str(v) for v in pcfg.values()]
-                        col_name = "_".join([name] + parts)
+                        # 按函数签名顺序排列参数值，确保列名一致性
+                        ordered_values = [pcfg.get(pn, '') for pn in sig_param_names if pn in pcfg]
+                        col_name = "_".join([name] + [str(v) for v in ordered_values])
                     else:
                         col_name = name
                     self._feature_names.append(col_name)

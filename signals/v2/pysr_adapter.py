@@ -260,7 +260,7 @@ class PySRAdapter:
             'HV_20', 'NATR_14', 'TRIMA_40', 'TRIMA_60',
             'TSF_3', 'TSF_5', 'TSF_7', 'TSF_14',
             'ADX_14', 'RSI_14', 'CCI_14', 'MACD_12_26_9',
-            'VOL_RATIO_5', 'VOL_RATIO_10', 'VOL_RATIO_10_MA',
+            'VOL_RATIO_5_20', 'VOL_RATIO_10_20', 'VOL_RATIO_10_20_MA',
             'TREND_STRENGTH_20', 'VOL_REGIME_20', 'VOL_CHG_5', 'MOM_CHG_5', 'UP_RATIO_10',
             'BBWIDTH_30_sub_TSF_7', 'ATR_7_sub_TSF_7', 'STDDEV_20_sub_TSF_7',
         ]

@@ -210,12 +210,22 @@ class WalkForwardResult:
 
 def _compute_backtest(positions: pd.Series, data: pd.DataFrame,
                        signals: pd.Series = None,
-                       initial_capital: float = 1_000_000) -> BacktestResult:
-    """核心回测计算逻辑"""
+                       initial_capital: float = 1_000_000,
+                       commission: float = 0.0,
+                       slippage: float = 0.0) -> BacktestResult:
+    """核心回测计算逻辑
+    [修复] 预留 commission/slippage 交易成本接口，默认0(先筛选信号再考虑成本)
+    修复交易次数统计为完整回合数"""
     df = data.copy()
     df['return'] = df['close'].pct_change()
 
-    strategy_returns = (positions * df['return']).fillna(0)
+    # [新增] 交易成本: 每次换手扣减 commission(双边佣金) + slippage(滑点)
+    # position_change != 0 表示发生交易，成本 = |仓位变化| * (commission + slippage)
+    position_changes = positions.diff().fillna(0)
+    cost_rate = commission * 2 + slippage  # 买入佣金 + 卖出佣金 + 单边滑点
+    transaction_costs = position_changes.abs() * cost_rate
+
+    strategy_returns = (positions * df['return'] - transaction_costs).fillna(0)
     benchmark_returns = df['return'].fillna(0)
 
     nav = initial_capital * (1 + strategy_returns).cumprod()
@@ -262,11 +272,15 @@ def _compute_backtest(positions: pd.Series, data: pd.DataFrame,
     information_ratio = (annual_return - benchmark_annual_return) / tracking_error if tracking_error > 0 else 0
 
     # 交易质量
+    # [修复] 交易次数改为完整回合数（一买一卖=1个回合），而非持仓变化次数
+    # 旧实现: trade_count = position_changes != 0 的次数，0→1→0→1→0 = 4次
+    # 新实现: trade_count = 完整买入→卖出回合数，0→1→0→1→0 = 2次
     position_changes = positions.diff()
-    trade_count = int((position_changes != 0).sum())
-
     buy_dates = position_changes[position_changes == 1].index
     sell_dates = position_changes[position_changes == -1].index
+    trade_count = min(len(buy_dates), len(sell_dates))
+    # 如果最后还有未平仓的买入，算半个回合（不计入完整交易，但在hold_days里体现）
+    open_trades = len(buy_dates) - len(sell_dates)
 
     trades = []
     for bd, sd in zip(buy_dates[:-1], sell_dates):
@@ -322,15 +336,19 @@ def _compute_backtest(positions: pd.Series, data: pd.DataFrame,
 
 def run_backtest(expr_or_gen: Any, data: pd.DataFrame,
                  initial_capital: float = 1_000_000,
-                 long_only: bool = True) -> BacktestResult:
+                 long_only: bool = True,
+                 commission: float = 0.0,
+                 slippage: float = 0.0) -> BacktestResult:
     """
-    运行单次回测，支持 Expression 和旧 SignalGenerator
+    运行单次回测，支持 Expression 和 旧 SignalGenerator
 
     Args:
         expr_or_gen: Expression实例 或 旧SignalGenerator
         data: K线数据
         initial_capital: 初始资金
         long_only: 仅做多
+        commission: 单边佣金费率 (默认0，筛选阶段不扣成本)
+        slippage: 滑点费率 (默认0，筛选阶段不扣成本)
     """
     # 判断输入类型
     if hasattr(expr_or_gen, 'generate'):
@@ -350,7 +368,8 @@ def run_backtest(expr_or_gen: Any, data: pd.DataFrame,
         positions = np.sign(signal_values)
 
     positions = positions.shift(1).fillna(0)
-    return _compute_backtest(positions, data, signal_values, initial_capital)
+    return _compute_backtest(positions, data, signal_values, initial_capital,
+                              commission=commission, slippage=slippage)
 
 
 def run_backtest_from_signal(signals: Union[pd.Series, np.ndarray],
@@ -472,14 +491,21 @@ def walk_forward(expr_or_gen: Any, data: pd.DataFrame,
             break
 
         try:
-            # 训练集回测
-            if hasattr(expr_or_gen, 'generate_from_features'):
+            # [修复] Walk-Forward 必须重置 _feature_df 和 _feature_space，消除前瞻偏差
+            # 旧实现: 只重置 _feature_space=None，但 _feature_df 优先于 _feature_space
+            #         generate() 走 _feature_df 分支时，用的是全量数据计算的特征
+            #         导致 train/test 子集实际上用了包含未来数据的特征矩阵
+            # 新实现: 同时重置 _feature_df=None 和 _feature_space=None，
+            #         强制每个窗口用各自的子数据重新计算特征，确保无前瞻偏差
+            if isinstance(expr_or_gen, Expression):
+                expr_or_gen._feature_df = None
                 expr_or_gen._feature_space = None
-                train_result = run_backtest(expr_or_gen, train_data, initial_capital)
-            else:
-                train_result = run_backtest(expr_or_gen, train_data, initial_capital)
+            train_result = run_backtest(expr_or_gen, train_data, initial_capital)
 
-            # 测试集回测
+            # 测试集回测 — 同样需要重置，防止用训练集的特征
+            if isinstance(expr_or_gen, Expression):
+                expr_or_gen._feature_df = None
+                expr_or_gen._feature_space = None
             test_result = run_backtest(expr_or_gen, test_data, initial_capital)
 
             windows.append({

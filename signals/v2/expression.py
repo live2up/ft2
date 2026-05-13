@@ -95,8 +95,13 @@ signals/v2/expression.py — 统一表达式引擎
  │                          │   差异在 differences 配置用了列名式     │
  ├──────────────────────────┼───────────────────────────────────────┤
  │ 阈值函数                  │ thr_0(x)    : x > 0 → 1.0 / 0.0      │
- │                          │ thr_mean(x) : x > mean(x) → 1.0 / 0.0 │
- │                          │ thr_med(x)  : x > median(x) → 1.0/0.0 │
+│                          │ thr_mean(x) : x > mean(x) → 1.0 / 0.0 │
+│                          │ thr_med(x)  : x > median(x) → 1.0/0.0 │
+│                          │ thr_roll_mean(x, w) : x > rolling_mean │
+│                          │ thr_roll_med(x, w)  : x > rolling_med  │
+│                          │ thr_zscore(x, w, k) : 布林带式突破     │
+│                          │ thr_pct(x, p) : x > 历史p分位数        │
+│                          │ thr_range(x, lo, hi) : 区间过滤        │
  ├──────────────────────────┼───────────────────────────────────────┤
  │ 二元运算                  │ expr1 & expr2 : AND (np.minimum)      │
  │                          │ expr1 | expr2 : OR  (np.maximum)       │
@@ -223,9 +228,26 @@ class TreeNode:
     def evaluate(self, feature_data: Dict[str, np.ndarray]) -> np.ndarray:
         if self.node_type == NodeType.FEATURE:
             col_name = self._feature_key()
+            # 精确匹配: RSI(14) → "RSI_14" → 直接命中
             if col_name in feature_data:
                 return feature_data[col_name].copy()
-            return np.zeros(1)
+            # [新增] 前缀匹配回退: VOL_RATIO(10) → "VOL_RATIO_10" → 匹配 "VOL_RATIO_10_20"
+            # 场景: 多参数特征在配置中展开后列名包含更多后缀(如 long=20)，
+            #        但表达式中只写了部分参数，需要通过前缀匹配找到完整列名
+            # 规则: 优先匹配"最短前缀匹配"(不含_MA等衍生后缀)，避免歧义
+            prefix_matches = [k for k in feature_data
+                              if k.startswith(col_name + '_') and '_MA' not in k.replace(col_name + '_', '', 1).split('_sub_')[0]
+                              and '_sub_' not in k]
+            if len(prefix_matches) == 1:
+                return feature_data[prefix_matches[0]].copy()
+            if len(prefix_matches) > 1:
+                raise KeyError(
+                    f"特征 '{col_name}' 前缀匹配到多列: {prefix_matches}，"
+                    f"请使用完整参数指定，如 VOL_RATIO(short=10,long=20)"
+                )
+            # 无匹配 → 报错
+            available = [k for k in feature_data if k.startswith(col_name[:3])]
+            raise KeyError(f"特征列 '{col_name}' 不存在于特征矩阵中 (相近列: {available[:10]})")
         elif self.node_type == NodeType.CONSTANT:
             return float(self.value)
         elif self.node_type == NodeType.OPERATOR:
@@ -243,21 +265,37 @@ class TreeNode:
                 w = self.param if self.param is not None else 30
                 rolling_val = _rolling_mean(arg, w)
                 return np.where(arg > rolling_val, 1.0, 0.0)
-            # [修复] thr_roll_med 原来错误调用了 _rolling_mean，现改为 _rolling_median
             if self.value == 'thr_roll_med':
                 w = self.param if self.param is not None else 30
                 rolling_val = _rolling_median(arg, w)
                 return np.where(arg > rolling_val, 1.0, 0.0)
-            # [修复] thr_mean 从全序列均值改为 expanding mean，消除前瞻偏差
-            # 旧: np.where(x > np.nanmean(x), ...) 用了未来数据
-            # 新: expanding_mean 只用 [0:t+1] 的历史数据，实盘可复现
             if self.value == 'thr_mean':
                 expanding_val = _expanding_mean(arg)
                 return np.where(arg > expanding_val, 1.0, 0.0)
-            # [修复] thr_med 同理，从全序列中位数改为 expanding median
             if self.value == 'thr_med':
                 expanding_val = _expanding_median(arg)
                 return np.where(arg > expanding_val, 1.0, 0.0)
+            # [新增] thr_zscore: x > rolling_mean(x, w) + k * rolling_std(x, w)，布林带式突破
+            # 用法: thr_zscore(RSI(14), 30, 1.0) — RSI突破30日均值+1倍标准差
+            if self.value == 'thr_zscore':
+                w = self.param.get('window', 30) if isinstance(self.param, dict) else (self.param or 30)
+                k = self.param.get('k', 1.0) if isinstance(self.param, dict) else 1.0
+                rolling_m = _rolling_mean(arg, w)
+                rolling_s = _rolling_std(arg, w)
+                return np.where(rolling_s > 1e-10,
+                                np.where(arg > rolling_m + k * rolling_s, 1.0, 0.0), 0.0)
+            # [新增] thr_pct: x > expanding_percentile(x, p)，历史分位数突破
+            # 用法: thr_pct(RSI(14), 0.8) — RSI处于历史前20%
+            if self.value == 'thr_pct':
+                p = self.param if self.param is not None else 0.5
+                pct_val = _expanding_percentile(arg, p)
+                return np.where(arg > pct_val, 1.0, 0.0)
+            # [新增] thr_range: lo < x < hi，区间过滤
+            # 用法: thr_range(RSI(14), -0.3, 0.3) — RSI在[-0.3, 0.3]区间内做多
+            if self.value == 'thr_range':
+                lo = self.param.get('lo', -1e10) if isinstance(self.param, dict) else -1e10
+                hi = self.param.get('hi', 1e10) if isinstance(self.param, dict) else 1e10
+                return np.where((arg > lo) & (arg < hi), 1.0, 0.0)
             if self.value in self.THRESHOLD_FUNCS:
                 return self.THRESHOLD_FUNCS[self.value](arg)
             return np.where(arg > 0, 1.0, 0.0)
@@ -310,6 +348,17 @@ class TreeNode:
             arg = self.children[0].to_string()
             if self.value in ('thr_roll_mean', 'thr_roll_med'):
                 return f"{self.value}({arg}, {self.param})"
+            # [新增] 新阈值函数的序列化
+            if self.value == 'thr_zscore':
+                w = self.param.get('window', 30) if isinstance(self.param, dict) else 30
+                k = self.param.get('k', 1.0) if isinstance(self.param, dict) else 1.0
+                return f"thr_zscore({arg}, {w}, {k})"
+            if self.value == 'thr_pct':
+                return f"thr_pct({arg}, {self.param})"
+            if self.value == 'thr_range':
+                lo = self.param.get('lo', -1e10) if isinstance(self.param, dict) else -1e10
+                hi = self.param.get('hi', 1e10) if isinstance(self.param, dict) else 1e10
+                return f"thr_range({arg}, {lo}, {hi})"
             return f"{self.value}({arg})"
         elif self.node_type == NodeType.PERSIST:
             arg = self.children[0].to_string()
@@ -359,25 +408,32 @@ def np_persist(arr: np.ndarray, n: int) -> np.ndarray:
     return result
 
 
-def _expanding_mean(arr: np.ndarray) -> np.ndarray:
+# [修复] expanding 函数增加 min_warmup 参数，冷启动期间返回 NaN
+# 旧实现: 从第0天就开始计算，expanding_mean 样本极少导致信号不稳定
+# 新实现: 前 min_warmup 天返回 NaN，由 nan_to_num 转为 0(不持仓)，避免冷启动噪音
+_EXPANDING_WARMUP = 20
+
+
+def _expanding_mean(arr: np.ndarray, min_warmup: int = _EXPANDING_WARMUP) -> np.ndarray:
     """扩展窗口均值：第t天的均值只用到[0:t+1]的数据，无前瞻偏差
     [修复说明] 替代原有的 np.nanmean(x) 全序列均值实现。
     原实现在第t天判断时用了t+1到末尾的未来数据(前瞻偏差)，
-    回测虚增收益且实盘不可复现。expanding mean 严格只用历史数据。"""
-    result = np.full_like(arr, np.nan, dtype=float)
+    回测虚增收益且实盘不可复现。expanding mean 严格只用历史数据。
+    [优化] 向量化实现，去掉 for 循环，cumsum/count 直接相除即可。"""
     cumsum = np.nancumsum(arr)
     count = np.cumsum(~np.isnan(arr))
-    for i in range(len(arr)):
-        if count[i] > 0:
-            result[i] = cumsum[i] / count[i]
+    result = np.where(count > 0, cumsum / count, np.nan)
+    # [修复] 冷启动保护: 前 min_warmup 天设为 NaN，避免样本不足导致信号不稳定
+    result[:min(min_warmup, len(result))] = np.nan
     return result
 
 
-def _expanding_median(arr: np.ndarray) -> np.ndarray:
+def _expanding_median(arr: np.ndarray, min_warmup: int = _EXPANDING_WARMUP) -> np.ndarray:
     """扩展窗口中位数：第t天的中位数只用到[0:t+1]的数据，无前瞻偏差
-    [修复说明] 替代原有的 np.nanmedian(x) 全序列中位数实现，同理消除前瞻偏差。"""
+    [修复说明] 替代原有的 np.nanmedian(x) 全序列中位数实现，同理消除前瞻偏差。
+    [修复] 冷启动保护: 前 min_warmup 天返回 NaN。"""
     result = np.full_like(arr, np.nan, dtype=float)
-    for i in range(len(arr)):
+    for i in range(min_warmup, len(arr)):
         segment = arr[:i + 1]
         valid = segment[~np.isnan(segment)]
         if len(valid) > 0:
@@ -395,6 +451,30 @@ def _rolling_median(arr: np.ndarray, window: int) -> np.ndarray:
         valid = segment[~np.isnan(segment)]
         if len(valid) > 0:
             result[i] = np.median(valid)
+    return result
+
+
+def _rolling_std(arr: np.ndarray, window: int) -> np.ndarray:
+    """滚动窗口标准差，用于 thr_zscore 的布林带式突破"""
+    result = np.full_like(arr, np.nan, dtype=float)
+    for i in range(window - 1, len(arr)):
+        segment = arr[i - window + 1:i + 1]
+        valid = segment[~np.isnan(segment)]
+        if len(valid) > 1:
+            result[i] = np.std(valid, ddof=1)
+    return result
+
+
+def _expanding_percentile(arr: np.ndarray, percentile: float,
+                           min_warmup: int = _EXPANDING_WARMUP) -> np.ndarray:
+    """扩展窗口分位数：第t天的p分位数只用到[0:t+1]的数据，无前瞻偏差
+    用于 thr_pct: 判断当前值是否突破历史分位数"""
+    result = np.full_like(arr, np.nan, dtype=float)
+    for i in range(min_warmup, len(arr)):
+        segment = arr[:i + 1]
+        valid = segment[~np.isnan(segment)]
+        if len(valid) > 0:
+            result[i] = np.percentile(valid, percentile * 100)
     return result
 
 
@@ -504,17 +584,72 @@ class Parser:
         if value is not None and t.value != value:
             raise SyntaxError(f"期望 '{value}'，得到 '{t.value}'")
 
+    # [修复] 运算符优先级分层，从平坦左结合改为三级优先级
+    # 旧实现: 所有运算符同级左结合, "A > 0 & B > 0" 解析为 ((A > 0) & B) > 0
+    # 新实现: >/< (比较) > &/| (逻辑) > +/-/*/÷ (算术), 正确解析为 (A > 0) & (B > 0)
+    # 优先级(数值越大越先绑定): comparison(6) > logic(4) > additive(2) > multiplicative(3)
+    # 实际解析从低优先级开始，高优先级在更深的递归层先归约
+    OP_PRECEDENCE = {
+        '|': 1, 'add': 2, 'sub': 2,
+        'mul': 3, 'div': 3, 'min': 3, 'max': 3,
+        '&': 4,
+        '>': 6, '<': 6,
+    }
+
     def parse(self) -> TreeNode:
         tree = self._parse_expr()
         if self.peek().type != Token.EOF:
-            # 可能有剩余的二元运算
             pass
         return tree
 
     def _parse_expr(self) -> TreeNode:
-        """解析表达式，处理二元运算的优先级"""
+        # [修复] 从最低优先级开始递归下降解析，保证高优先级运算符先绑定
+        return self._parse_logic_or()
+
+    def _parse_logic_or(self) -> TreeNode:
+        """优先级1: | (逻辑或)"""
+        left = self._parse_logic_and()
+        while self.peek().type == Token.OP and self._normalize_op(self.peek().value) == '|':
+            op_token = self.advance()
+            op_str = self._normalize_op(op_token.value)
+            right = self._parse_logic_and()
+            left = TreeNode(NodeType.OPERATOR, op_str, [left, right])
+        return left
+
+    def _parse_logic_and(self) -> TreeNode:
+        """优先级4: & (逻辑与)"""
+        left = self._parse_comparison()
+        while self.peek().type == Token.OP and self._normalize_op(self.peek().value) == '&':
+            op_token = self.advance()
+            op_str = self._normalize_op(op_token.value)
+            right = self._parse_comparison()
+            left = TreeNode(NodeType.OPERATOR, op_str, [left, right])
+        return left
+
+    def _parse_comparison(self) -> TreeNode:
+        """优先级6: > < (比较)"""
+        left = self._parse_additive()
+        while self.peek().type == Token.OP and self._normalize_op(self.peek().value) in ('>', '<'):
+            op_token = self.advance()
+            op_str = self._normalize_op(op_token.value)
+            right = self._parse_additive()
+            left = TreeNode(NodeType.OPERATOR, op_str, [left, right])
+        return left
+
+    def _parse_additive(self) -> TreeNode:
+        """优先级2: + - (加减)"""
+        left = self._parse_multiplicative()
+        while self.peek().type == Token.OP and self._normalize_op(self.peek().value) in ('add', 'sub', '+'):
+            op_token = self.advance()
+            op_str = self._normalize_op(op_token.value)
+            right = self._parse_multiplicative()
+            left = TreeNode(NodeType.OPERATOR, op_str, [left, right])
+        return left
+
+    def _parse_multiplicative(self) -> TreeNode:
+        """优先级3: * / min max (乘除)"""
         left = self._parse_primary()
-        while self.peek().type == Token.OP:
+        while self.peek().type == Token.OP and self._normalize_op(self.peek().value) in ('mul', 'div', 'min', 'max'):
             op_token = self.advance()
             op_str = self._normalize_op(op_token.value)
             right = self._parse_primary()
@@ -522,7 +657,7 @@ class Parser:
         return left
 
     def _normalize_op(self, op_val: str) -> str:
-        op_map = {'+': 'add', '&&': '&', '||': '|'}
+        op_map = {'+': 'add', '-': 'sub', '&&': '&', '||': '|'}
         return op_map.get(op_val, op_val)
 
     def _parse_primary(self) -> TreeNode:
@@ -584,11 +719,31 @@ class Parser:
             return args[0] if args else TreeNode(NodeType.CONSTANT, '0')
 
         # 阈值函数: thr_0, thr_mean, thr_med, thr_roll_mean, thr_roll_med
-        if name in ('thr_0', 'thr_mean', 'thr_med', 'thr_roll_mean', 'thr_roll_med'):
+        # [新增] thr_zscore, thr_pct, thr_range
+        if name in ('thr_0', 'thr_mean', 'thr_med', 'thr_roll_mean', 'thr_roll_med',
+                     'thr_zscore', 'thr_pct', 'thr_range'):
             param = None
             if name in ('thr_roll_mean', 'thr_roll_med') and len(args) >= 2:
                 if args[1].node_type == NodeType.CONSTANT:
                     param = int(float(args[1].value))
+            # [新增] thr_zscore(x, window, k) — 布林带式突破
+            elif name == 'thr_zscore' and len(args) >= 2:
+                param = {'window': 30, 'k': 1.0}
+                if args[1].node_type == NodeType.CONSTANT:
+                    param['window'] = int(float(args[1].value))
+                if len(args) >= 3 and args[2].node_type == NodeType.CONSTANT:
+                    param['k'] = float(args[2].value)
+            # [新增] thr_pct(x, p) — 历史分位数突破
+            elif name == 'thr_pct' and len(args) >= 2:
+                if args[1].node_type == NodeType.CONSTANT:
+                    param = float(args[1].value)
+            # [新增] thr_range(x, lo, hi) — 区间过滤
+            elif name == 'thr_range' and len(args) >= 3:
+                param = {'lo': -1e10, 'hi': 1e10}
+                if args[1].node_type == NodeType.CONSTANT:
+                    param['lo'] = float(args[1].value)
+                if args[2].node_type == NodeType.CONSTANT:
+                    param['hi'] = float(args[2].value)
             return TreeNode(NodeType.THRESHOLD, name, [args[0]], param=param)
 
         # 一元函数
