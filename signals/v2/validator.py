@@ -215,8 +215,8 @@ def _compute_backtest(positions: pd.Series, data: pd.DataFrame,
     df = data.copy()
     df['return'] = df['close'].pct_change()
 
-    strategy_returns = positions * df['return']
-    benchmark_returns = df['return']
+    strategy_returns = (positions * df['return']).fillna(0)
+    benchmark_returns = df['return'].fillna(0)
 
     nav = initial_capital * (1 + strategy_returns).cumprod()
     benchmark_nav = initial_capital * (1 + benchmark_returns).cumprod()
