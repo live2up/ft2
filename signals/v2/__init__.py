@@ -178,6 +178,13 @@ from .decay_monitor import (
     check_decay,
 )
 
+from .scoring import (
+    ScoredSignal,
+    CompositeScorer,
+    three_zone_backtest,
+    BacktestResult,
+)
+
 from .grid_search import (
     GridSearch,
     GridResult,
@@ -227,4 +234,6 @@ __all__ = [
     'NODE_CONFIG', 'SEED_EXPRESSIONS',
     # PySR Adapter
     'PySRAdapter', 'SRFormulaResult', 'DEFAULT_PYSR_CONFIG',
+    # Scoring
+    'ScoredSignal', 'CompositeScorer', 'three_zone_backtest', 'BacktestResult',
 ]
