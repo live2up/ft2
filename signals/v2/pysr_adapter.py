@@ -223,6 +223,22 @@ class PySRAdapter:
         self._feature_df = self._fs.fit_transform(self._data)
         self._feature_names = self._fs.get_feature_names()
 
+        # 清洗特征名：PySR Julia 后端只接受 [a-zA-Z0-9_] 字符
+        self._orig_to_sanitized = {}
+        sanitized_cols = {}
+        for col in self._feature_df.columns:
+            san = col.replace('{', '_').replace('}', '')
+            san = san.replace('(', '_').replace(')', '')
+            san = san.replace(',', '_').replace('.', '_')
+            san = san.replace('-', '_').replace(' ', '_')
+            san = san.replace('__', '_').replace('__', '_')
+            san = san.strip('_')
+            self._orig_to_sanitized[san] = col
+            sanitized_cols[col] = san
+        self._feature_df = self._feature_df.rename(columns=sanitized_cols)
+        self._feature_names = list(sanitized_cols.values())
+        print(f"  特征名已清洗: {len(self._feature_names)} 个 (PySR 兼容)")
+
         close = self._data['close']
         future_return = close.shift(-self.holding_period) / close - 1.0
         self._y = future_return.loc[self._feature_df.index]
@@ -233,7 +249,7 @@ class PySRAdapter:
         if selected_features:
             available = [f for f in selected_features if f in self._feature_df.columns]
             feature_cols = available
-            print(f"使用精选特征: {len(available)}/{len(self._feature_names)} 个")
+            print(f"  使用精选特征: {len(available)}/{len(self._orig_to_sanitized)} 个")
 
         train_mask = self._feature_df.index < test_start
         test_mask = self._feature_df.index >= test_start
@@ -246,7 +262,6 @@ class PySRAdapter:
         self._test_prices = close.loc[self._feature_df.index[test_mask]]
         self._feature_names = feature_cols
 
-        print(f"数据准备完成:")
         print(f"  训练: {len(self._X_train)} 条, 测试: {len(self._X_test)} 条")
         print(f"  特征数: {len(feature_cols)}")
         print(f"  目标: 未来{self.holding_period}日收益率")
@@ -255,16 +270,21 @@ class PySRAdapter:
 
     def _get_default_selected_features(self) -> List[str]:
         all_features = set(self._feature_names)
+        # 使用清洗后的名称（去掉 {} 等非字母数字字符）
         preferred = [
             'ATR_7', 'ATR_14', 'STDDEV_20', 'BBWIDTH_20', 'BBWIDTH_30',
             'HV_20', 'NATR_14', 'TRIMA_40', 'TRIMA_60',
             'TSF_3', 'TSF_5', 'TSF_7', 'TSF_14',
-            'ADX_14', 'RSI_14', 'CCI_14', 'MACD_12_26_9',
-            'VOL_RATIO_5_20', 'VOL_RATIO_10_20', 'VOL_RATIO_10_20_MA',
-            'TREND_STRENGTH_20', 'VOL_REGIME_20', 'VOL_CHG_5', 'MOM_CHG_5', 'UP_RATIO_10',
+            'ADX_14', 'RSI_14', 'CCI_14',
+            'VOL_RATIO_5_20', 'VOL_RATIO_10_20',
+            'TREND_STRENGTH_20', 'VOL_REGIME_20', 'VOL_CHG_5', 'MOM_CHG_5',
             'BBWIDTH_30_sub_TSF_7', 'ATR_7_sub_TSF_7', 'STDDEV_20_sub_TSF_7',
         ]
-        return [f for f in preferred if f in all_features]
+        found = [f for f in preferred if f in all_features]
+        if not found:
+            # 兜底：拿前 25 个特征
+            found = sorted(all_features)[:25]
+        return found
 
     # ---- PySR 搜索 ----
 
@@ -489,7 +509,7 @@ class PySRAdapter:
                         pass
 
                 self._results.append(best_result)
-                tag = "✓" if best_result.is_valid else "✗"
+                tag = "[OK]" if best_result.is_valid else "[--]"
                 print(f"      {tag} IC: train={best_result.train_ic:.4f}, "
                       f"test={best_result.test_ic:.4f} | "
                       f"ICIR: {best_result.test_icir:.4f} | "
@@ -557,7 +577,7 @@ class PySRAdapter:
                 '过拟合比': round(r.overfit_ratio, 3),
                 '交易次数': r.trade_count,
                 '信号方法': r.best_signal_method,
-                '有效': '✓' if r.is_valid else '✗',
+                '有效': 'Y' if r.is_valid else 'N',
                 '公式': r.equation[:70],
             })
         return pd.DataFrame(rows)

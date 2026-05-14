@@ -118,23 +118,37 @@ NODE_CONFIG = {
 }
 ROLL_WINDOWS = [10, 20, 30, 60]
 
-# 种子表达式（来自 AIdev V4/V5 的共识发现）
+# 种子表达式（规范版，使用 {} 列引用语法）
+# 来源: AIdev V4/V5 共识 + Phase 1B/3 验证有效的公式
 SEED_EXPRESSIONS = [
-    'thr_mean(ATR_7) & thr_mean(TRIMA_60)',
-    'thr_mean(BBWIDTH_30) sub thr_mean(TSF_7)',
-    'thr_mean(BBWIDTH_30) sub (VOL_RATIO_10_20_MA min thr_mean(TSF_7))',
-    'thr_roll_mean(BBWIDTH_30, 60) sub (VOL_RATIO_10_20_MA min thr_roll_mean(TSF_7, 30))',
-    'switch(ADX_14, thr_mean(BBWIDTH_30), thr_mean(neg(BBWIDTH_30)))',
-    'persist(thr_mean(BBWIDTH_30) sub thr_mean(TSF_7), 3)',
-    'thr_mean(BBWIDTH_30) mul thr_mean(VOL_RATIO_5_20)',
-    'thr_roll_mean(BBWIDTH_30, 20) sub thr_roll_med(TSF_7, 20)',
-    'switch(VOL_REGIME_20, thr_mean(BBWIDTH_30), thr_mean(neg(BBWIDTH_30)))',
-    'persist(thr_mean(UP_RATIO_10) sub thr_mean(BBWIDTH_30), 2)',
-    'thr_mean(VOL_CHG_5 mul MOM_CHG_5)',
-    'thr_roll_mean(UP_RATIO_10, 20) sub thr_roll_med(BBWIDTH_30, 30)',
-    'thr_mean(BBWIDTH_30_sub_TSF_7)',
-    'thr_mean(ATR_7_sub_TSF_7)',
-    'persist(thr_roll_mean(BBWIDTH_30, 30) sub thr_roll_med(VOL_RATIO_10_20_MA, 60), 3)',
+    # === 波动率 - 趋势差异类（Phase 1B 衍生类最佳）===
+    'thr_mean(STDDEV_TSF_sub{20,7})',
+    'thr_mean(BBWIDTH_TSF_sub{30,7})',
+    'thr_mean(ATR_TSF_sub{7,7})',
+    'thr_roll_mean(BBWIDTH_TSF_sub{30,7}, 30)',
+
+    # === GP V4.2 三维结构（Phase 3 验证 Sharpe 1.08）===
+    'thr_mean(BBWIDTH{20}) - (thr_mean(VOL_RATIO{10,20}) min thr_mean(TSF{7}))',
+    'thr_mean(BBWIDTH{30}) - (thr_mean(VOL_RATIO{10,20}) min thr_mean(TSF{7}))',
+
+    # === 波动率 + 趋势组合（V3经典模式）===
+    'thr_mean(ATR{7}) & thr_mean(TRIMA{60})',
+    'thr_mean(ATR{7}) & (ADX{7} - 25) > 0',
+
+    # === 条件分支（GP V5 发现）===
+    'switch(thr_mean(ADX{14}), thr_mean(BBWIDTH{30}), thr_mean(neg(BBWIDTH{30})))',
+    'switch(thr_mean(VOL_REGIME{20,60}), thr_mean(BBWIDTH{30}), thr_mean(neg(BBWIDTH{30})))',
+
+    # === 信号确认 ===
+    'persist(thr_mean(BBWIDTH{30}) sub thr_mean(TSF{7}), 3)',
+    'persist(thr_roll_mean(BBWIDTH{30}, 30) sub thr_roll_med(TSF{7}, 20), 3)',
+
+    # === 量波比（GP V4.1）===
+    'thr_mean(VOL_RATIO{5,20}) div thr_med(ATR{7} sub TSF{7})',
+
+    # === 滚动阈值变体 ===
+    'thr_roll_mean(BBWIDTH{30}, 30) sub (thr_roll_med(VOL_RATIO{10,20}, 30) min thr_roll_mean(TSF{3}, 10))',
+    'thr_roll_mean(UP_RATIO{10}, 20) sub thr_roll_med(BBWIDTH{30}, 30)',
 ]
 
 
@@ -245,6 +259,9 @@ class GPOptimizer:
         self._train_feature_df = self._fs.fit_transform(self._train_data)
         self._test_feature_df = self._fs.fit_transform(self._test_data)
         self._feature_names = self._fs.get_feature_names()
+        # 对齐特征矩阵与原始数据的索引（fit_transform 可能丢弃了 NaN 行）
+        self._train_data = self._train_data.loc[self._train_feature_df.index]
+        self._test_data = self._test_data.loc[self._test_feature_df.index]
         self._train_feature_data = {col: self._train_feature_df[col].values
                                      for col in self._feature_names}
         self._test_feature_data = {col: self._test_feature_df[col].values
@@ -371,11 +388,10 @@ class GPOptimizer:
 
     def _evaluate_signals(self, signals: np.ndarray, prices: pd.Series) -> Dict:
         try:
+            # 构造带时间索引的 DataFrame，使回测引擎正确计算持有天数
+            df = pd.DataFrame({'close': prices.values}, index=prices.index)
             result = run_backtest_from_signal(
-                signals=signals,
-                prices=prices,
-                data=None,
-                long_only=True
+                signals=signals, prices=prices, data=df, long_only=True
             )
             return {
                 'sharpe': result.sharpe,

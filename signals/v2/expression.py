@@ -269,7 +269,8 @@ class TreeNode:
             available = [k for k in feature_data if col_name[:3] in k]
             raise KeyError(f"特征列 '{col_name}' 不存在于特征矩阵中 (相近列: {available[:10]})")
         elif self.node_type == NodeType.CONSTANT:
-            return float(self.value)
+            # 返回单元素数组而非标量，确保 numpy 广播兼容
+            return np.array([float(self.value)])
         elif self.node_type == NodeType.OPERATOR:
             if len(self.children) < 2:
                 return self.children[0].evaluate(feature_data) if self.children else np.zeros(1)

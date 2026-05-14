@@ -1182,7 +1182,17 @@ class FeatureSpace:
         differences = self.config.get('differences', [])
         for diff_config in differences:
             left_col, right_col, op = diff_config[0], diff_config[1], diff_config[2]
-            derived_name = f"{left_col}_{op}_{right_col}"
+            # 差异列命名: 将参数拆解重组，确保表达式解析器可正确识别为单一特征列
+            # 旧: BBWIDTH{30}_sub_TSF{7}  → 解析器拆成两个特征，错误
+            # 新: BBWIDTH_TSF_sub{30,7}    → 单一 FEATURE 节点，正确
+            import re as _re
+            m1 = _re.match(r'^(\w+)\{([^}]+)\}$', left_col)
+            m2 = _re.match(r'^(\w+)\{([^}]+)\}$', right_col)
+            if m1 and m2:
+                derived_name = (f"{m1.group(1)}_{m2.group(1)}_{op}"
+                                f"{{{m1.group(2)},{m2.group(2)}}}")
+            else:
+                derived_name = f"{left_col}_{op}_{right_col}"
             if left_col in features.columns and right_col in features.columns:
                 lv = features[left_col].values
                 rv = features[right_col].values
