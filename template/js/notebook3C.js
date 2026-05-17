@@ -184,7 +184,7 @@ const PieChart = {
         const pieShowValue = ref(true);
         const pieShowPercent = ref(true);
 
-        const { chartRef, initChart, extractData, getColors, refreshChart } = useChart(props, {
+        const { chartRef, refreshChart } = useChart(props, {
             buildOption: (extracted, colors) => {
                 const data = extracted.series[0]?.data || [];
                 let labelFormatter = '{b}';
@@ -496,8 +496,6 @@ const GridChart = {
             if (!chartRef.value || !props.cell.content?.charts) return;
             if (chartInstance) chartInstance.dispose();
             chartInstance = echarts.init(chartRef.value);
-            if (!window.chartInstances) window.chartInstances = new Map();
-            window.chartInstances.set(chartRef.value, chartInstance);
             chartInstance.setOption(buildGridOption());
         };
 
@@ -529,7 +527,6 @@ const GridChart = {
             document.removeEventListener('keydown', handleKeydown);
             document.body.style.overflow = '';
             if (chartInstance) {
-                if (window.chartInstances) window.chartInstances.delete(chartRef.value);
                 chartInstance.dispose();
             }
         });
