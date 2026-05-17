@@ -677,6 +677,78 @@ body {
     color: #fff;
 }
 
+/* ========== 6.1 图表全屏样式 ========== */
+
+/* 全屏遮罩层 */
+.chart-fullscreen-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.85);
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    cursor: pointer;
+}
+
+/* 全屏内容容器 */
+.chart-fullscreen-content {
+    background: #fff;
+    border-radius: 8px;
+    width: 95vw;
+    height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    cursor: default;
+}
+
+/* 全屏头部 */
+.chart-fullscreen-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 24px;
+    border-bottom: 1px solid #e5e5e5;
+    background: #fafafa;
+    border-radius: 8px 8px 0 0;
+}
+
+.chart-fullscreen-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #37352f;
+}
+
+.chart-fullscreen-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    color: #999;
+    cursor: pointer;
+    padding: 4px 8px;
+    line-height: 1;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.chart-fullscreen-close:hover {
+    background: #f5f5f5;
+    color: #37352f;
+}
+
+/* 全屏图表容器 */
+.chart-fullscreen-container {
+    flex: 1;
+    width: 100%;
+    padding: 8px;
+    box-sizing: border-box;
+}
+
 /* ========== 7. FT Table 样式（Notion 风格）========== */
 
 /* 表格容器 */
