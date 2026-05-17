@@ -705,61 +705,32 @@ body {
     color: #fff;
 }
 
-/* ========== 6.1 浏览器内全屏样式(CSS覆盖层) ========== */
+/* ========== 6.1 原位放大样式 ========== */
 
-/* 全屏遮罩层,覆盖整个浏览器视口 */
-.chart-fullscreen-overlay {
+/* chart容器固定覆盖视口 */
+.cell-chart.chart-zoomed {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    background: #fff;
     z-index: 9999;
+    background: #fff;
+    margin: 0;
     display: flex;
     flex-direction: column;
-    cursor: default;
+    box-sizing: border-box;
 }
 
-/* 全屏头部: 只占很小空间 */
-.chart-fullscreen-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 16px;
-    border-bottom: 1px solid #e5e5e5;
-    background: #fafafa;
-    flex-shrink: 0;
-}
-
-.chart-fullscreen-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: #37352f;
-}
-
-.chart-fullscreen-close {
-    background: none;
-    border: none;
-    font-size: 18px;
-    color: #999;
-    cursor: pointer;
-    padding: 2px 8px;
-    line-height: 1;
-    border-radius: 4px;
-    transition: all 0.2s;
-}
-
-.chart-fullscreen-close:hover {
-    background: #f0f0f0;
-    color: #37352f;
-}
-
-/* 全屏图表区域,撑满剩余空间 */
-.chart-fullscreen-body {
+.chart-zoomed .cell-chart-body {
     flex: 1;
-    width: 100%;
     min-height: 0;
+    height: auto;
+}
+
+/* chart div撑满剩余空间 */
+.chart-zoomed .chart-container {
+    height: 100% !important;
 }
 
 /* ========== 7. FT Table 样式（Notion 风格）========== */

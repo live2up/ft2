@@ -88,11 +88,8 @@ const GenericChart = {
     setup(props) {
         const showDataZoom = ref(false);
         const isFullscreen = ref(false);
-        const chartRef = ref(null);
-        const fullscreenRef = ref(null);
-        let chartInstance = null;
 
-        const { getColors, extractData } = useChart(props, {
+        const { chartRef, refreshChart } = useChart(props, {
             buildOption: (extracted, colors) => {
                 const chartType = extracted.chart_type;
                 const series = extracted.series || [];
@@ -107,14 +104,14 @@ const GenericChart = {
                     option.grid = { left: 8, right: 8, bottom: showDataZoom.value ? 50 : 5, top: 28, containLabel: true };
                     option.legend = { data: series.map(s => ({ name: s.name, icon: 'rect' })), top: 5 };
                     option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
-                    
+
                     if (showDataZoom.value && (chartType === 'line' || chartType === 'area')) {
                         option.dataZoom = [
                             { type: 'inside', xAxisIndex: [0], start: 0, end: 100 },
                             { type: 'slider', show: true, xAxisIndex: [0], start: 0, end: 100, bottom: 10, height: 20 }
                         ];
                     }
-                    
+
                     option.series = series.map((s, i) => {
                         const baseOption = { name: s.name, type: chartType === 'area' ? 'line' : chartType, data: s.data };
                         if (s.stack) baseOption.stack = s.stack;
@@ -134,139 +131,29 @@ const GenericChart = {
             }
         });
 
-        // [新增] 2026-05-17 浏览器内全屏(CSS覆盖层)
+        // [新增] 2026-05-17 原位放大: chart div不动,容器position:fixed覆盖视口
         const toggleFullscreen = () => {
-            if (isFullscreen.value) {
-                // 退出全屏
-                isFullscreen.value = false;
-                document.body.style.overflow = '';
-                // 销毁全屏中的图表实例,重新初始化原容器
-                if (chartInstance) {
-                    chartInstance.dispose();
-                    chartInstance = null;
-                }
-                nextTick(() => {
-                    const container = chartRef.value;
-                    if (container && props.cell.content?.charts) {
-                        chartInstance = echarts.init(container);
-                        if (!window.chartInstances) window.chartInstances = new Map();
-                        window.chartInstances.set(container, chartInstance);
-                        chartInstance.setOption(buildOption());
-                    }
-                });
-            } else {
-                // 进入全屏
-                isFullscreen.value = true;
-                document.body.style.overflow = 'hidden';
-            }
+            isFullscreen.value = !isFullscreen.value;
+            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
         };
 
-        // 构建option(与useChart的buildOption一致)
-        const buildOption = () => {
-            const charts = props.cell.content?.charts;
-            if (!charts) return {};
-            const extracted = extractData(charts);
-            if (!extracted) return charts;
-            const colors = getColors(extracted.chart_type);
-            const option = { color: colors, series: extracted.series };
-            const chartType = extracted.chart_type;
-            if (['line', 'bar', 'area'].includes(chartType)) {
-                const isBarChart = chartType === 'bar';
-                const first = extracted.xAxis[0];
-                const isDateStr = typeof first === 'string' && /^\d{4}-\d{2}-\d{2}/.test(first);
-                const xAxisType = isDateStr ? 'time' : 'category';
-                option.xAxis = { type: xAxisType, boundaryGap: isBarChart, data: extracted.xAxis };
-                option.yAxis = { type: 'value', scale: true, boundaryGap: ['10%', '10%'] };
-                option.grid = { left: 8, right: 8, bottom: showDataZoom.value ? 50 : 5, top: 28, containLabel: true };
-                option.legend = { data: extracted.series.map(s => ({ name: s.name, icon: 'rect' })), top: 5 };
-                option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
-                if (showDataZoom.value && (chartType === 'line' || chartType === 'area')) {
-                    option.dataZoom = [
-                        { type: 'inside', xAxisIndex: [0], start: 0, end: 100 },
-                        { type: 'slider', show: true, xAxisIndex: [0], start: 0, end: 100, bottom: 10, height: 20 }
-                    ];
-                }
-                option.series = extracted.series.map((s, i) => {
-                    const baseOption = { name: s.name, type: chartType === 'area' ? 'line' : chartType, data: s.data };
-                    if (s.stack) baseOption.stack = s.stack;
-                    if (chartType === 'line' || chartType === 'area') {
-                        baseOption.smooth = true;
-                        baseOption.showSymbol = false;
-                        if (chartType === 'area') baseOption.areaStyle = { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: colors[i % colors.length] + '60' }, { offset: 1, color: colors[i % colors.length] + '10' }] } };
-                    }
-                    if (isBarChart) baseOption.itemStyle = { color: extracted.series.length === 1 && !s.stack ? function(params) { return params.value >= 0 ? colors[0] : colors[1]; } : colors[i % colors.length], borderRadius: [4, 4, 0, 0] };
-                    return baseOption;
-                });
-            } else if (chartType === 'scatter') {
-                if (extracted.xAxis.length) option.xAxis = { type: 'category', data: extracted.xAxis };
-                if (extracted.yAxis.length) option.yAxis = { type: 'category', data: extracted.yAxis };
-            }
-            return option;
-        };
-
-        // 全屏中初始化图表
-        watch(isFullscreen, (val) => {
-            if (val) {
-                nextTick(() => {
-                    const container = fullscreenRef.value;
-                    if (!container || !props.cell.content?.charts) return;
-                    if (chartInstance) chartInstance.dispose();
-                    chartInstance = echarts.init(container);
-                    if (!window.chartInstances) window.chartInstances = new Map();
-                    window.chartInstances.set(container, chartInstance);
-                    chartInstance.setOption(buildOption());
-                    chartInstance.resize();
-                });
-            }
-        });
-
-        // ESC退出全屏
         const handleKeydown = (e) => {
-            if (e.key === 'Escape' && isFullscreen.value) {
-                toggleFullscreen();
-            }
+            if (e.key === 'Escape' && isFullscreen.value) toggleFullscreen();
         };
 
-        // 初始化原容器图表
-        const initLocalChart = () => {
-            if (!chartRef.value || !props.cell.content?.charts) return;
-            if (chartInstance) chartInstance.dispose();
-            chartInstance = echarts.init(chartRef.value);
-            if (!window.chartInstances) window.chartInstances = new Map();
-            window.chartInstances.set(chartRef.value, chartInstance);
-            chartInstance.setOption(buildOption());
-        };
+        watch([showDataZoom], refreshChart);
 
-        const handleResize = () => chartInstance?.resize();
-
-        watch([showDataZoom], () => {
-            if (chartInstance && !isFullscreen.value) {
-                chartInstance.setOption(buildOption());
-            }
-        });
-
-        onMounted(() => {
-            nextTick(() => initLocalChart());
-            window.addEventListener('resize', handleResize);
-            window.addEventListener('colorSchemeChanged', initLocalChart);
-            document.addEventListener('keydown', handleKeydown);
-        });
-
+        onMounted(() => { document.addEventListener('keydown', handleKeydown); });
         onUnmounted(() => {
-            window.removeEventListener('resize', handleResize);
-            window.removeEventListener('colorSchemeChanged', initLocalChart);
             document.removeEventListener('keydown', handleKeydown);
             document.body.style.overflow = '';
-            if (chartInstance) {
-                if (window.chartInstances) window.chartInstances.delete(chartRef.value);
-                chartInstance.dispose();
-            }
         });
 
-        return { chartRef, fullscreenRef, showDataZoom, isFullscreen, toggleFullscreen };
+        return { chartRef, showDataZoom, isFullscreen, toggleFullscreen };
     },
     template: `
-        <div class="cell-chart">
+        <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
             <div class="cell-chart-body">
                 <div ref="chartRef" class="chart-container chart-container-main"
@@ -281,17 +168,9 @@ const GenericChart = {
                     </div>
                     <div class="control-label">全屏</div>
                     <div class="multiplier-buttons">
-                        <button @click="toggleFullscreen">放大</button>
+                        <button @click="toggleFullscreen">{{ isFullscreen ? '退出' : '放大' }}</button>
                     </div>
                 </div>
-            </div>
-            <!-- 浏览器内全屏覆盖层 -->
-            <div v-if="isFullscreen" class="chart-fullscreen-overlay" @click.self="toggleFullscreen">
-                <div class="chart-fullscreen-header">
-                    <span class="chart-fullscreen-title">{{ cell.title || '图表' }}</span>
-                    <button class="chart-fullscreen-close" @click="toggleFullscreen">✕</button>
-                </div>
-                <div ref="fullscreenRef" class="chart-fullscreen-body"></div>
             </div>
         </div>
     `
@@ -533,7 +412,6 @@ const GridChart = {
     props: { cell: { type: Object, required: true } },
     setup(props) {
         const chartRef = ref(null);
-        const fullscreenRef = ref(null);
         let chartInstance = null;
         const showDataZoom = ref(false);
         const isFullscreen = ref(false);
@@ -554,99 +432,64 @@ const GridChart = {
             option.color = colors;
             option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
             if (option.grid && Array.isArray(option.grid)) {
-                option.grid = option.grid.map(g => ({
-                    ...g,
-                    left: 8,
-                    right: 8,
-                    containLabel: true
-                }));
+                option.grid = option.grid.map(g => ({ ...g, left: 8, right: 8, containLabel: true }));
             }
             if (option.yAxis && Array.isArray(option.yAxis)) {
-                option.yAxis = option.yAxis.map(y => ({
-                    ...y,
-                    scale: true,
-                    boundaryGap: ['10%', '10%']
-                }));
+                option.yAxis = option.yAxis.map(y => ({ ...y, scale: true, boundaryGap: ['10%', '10%'] }));
             }
             if (option.series && Array.isArray(option.series)) {
-                option.series.forEach(s => {
-                    if (s.type === 'line') {
-                        s.smooth = true;
-                        s.showSymbol = false;
-                    }
-                });
+                option.series.forEach(s => { if (s.type === 'line') { s.smooth = true; s.showSymbol = false; } });
             }
             if (option.legend && Array.isArray(option.legend)) {
                 option.legend = option.legend.map(leg => ({ ...leg, icon: 'rect' }));
-            } else if (option.legend) {
-                option.legend.icon = 'rect';
-            }
-            
+            } else if (option.legend) { option.legend.icon = 'rect'; }
+
             if (showDataZoom.value) {
                 const gridCount = option.grid ? option.grid.length : 1;
-                const dataZoomConfig = [];
+                const dc = [];
                 for (let i = 0; i < gridCount; i++) {
-                    dataZoomConfig.push({ type: 'inside', xAxisIndex: [i], start: 0, end: 100 });
-                    dataZoomConfig.push({ type: 'slider', show: true, xAxisIndex: [i], start: 0, end: 100, bottom: 10, height: 20 });
+                    dc.push({ type: 'inside', xAxisIndex: [i], start: 0, end: 100 });
+                    dc.push({ type: 'slider', show: true, xAxisIndex: [i], start: 0, end: 100, bottom: 10, height: 20 });
                 }
-                if (dataZoomConfig.length > 0) option.dataZoom = dataZoomConfig;
+                if (dc.length > 0) option.dataZoom = dc;
             }
             return option;
         };
 
-        const initChart = (container) => {
-            if (!container || !props.cell.content?.charts) return;
+        const initChart = () => {
+            if (!chartRef.value || !props.cell.content?.charts) return;
             if (chartInstance) chartInstance.dispose();
-            chartInstance = echarts.init(container);
+            chartInstance = echarts.init(chartRef.value);
             if (!window.chartInstances) window.chartInstances = new Map();
-            window.chartInstances.set(container, chartInstance);
+            window.chartInstances.set(chartRef.value, chartInstance);
             chartInstance.setOption(buildGridOption());
         };
 
         const handleResize = () => chartInstance?.resize();
 
-        // [新增] 2026-05-17 浏览器内全屏(CSS覆盖层)
+        // [新增] 2026-05-17 原位放大
         const toggleFullscreen = () => {
-            if (isFullscreen.value) {
-                isFullscreen.value = false;
-                document.body.style.overflow = '';
-                if (chartInstance) {
-                    chartInstance.dispose();
-                    chartInstance = null;
-                }
-                nextTick(() => initChart(chartRef.value));
-            } else {
-                isFullscreen.value = true;
-                document.body.style.overflow = 'hidden';
-            }
+            isFullscreen.value = !isFullscreen.value;
+            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
+            setTimeout(() => chartInstance?.resize(), 100);
         };
-
-        // 全屏中初始化
-        watch(isFullscreen, (val) => {
-            if (val) {
-                // 给DOM一点时间渲染
-                setTimeout(() => initChart(fullscreenRef.value), 50);
-            }
-        });
 
         const handleKeydown = (e) => {
             if (e.key === 'Escape' && isFullscreen.value) toggleFullscreen();
         };
 
-        watch([showDataZoom], () => {
-            if (chartInstance) chartInstance.setOption(buildGridOption());
-        });
+        watch([showDataZoom], () => { if (chartInstance) chartInstance.setOption(buildGridOption()); });
 
         onMounted(() => {
-            nextTick(() => initChart(chartRef.value));
+            nextTick(() => initChart());
             window.addEventListener('resize', handleResize);
-            window.addEventListener('colorSchemeChanged', () => initChart(chartRef.value));
+            window.addEventListener('colorSchemeChanged', initChart);
             document.addEventListener('keydown', handleKeydown);
         });
 
         onUnmounted(() => {
             window.removeEventListener('resize', handleResize);
-            window.removeEventListener('colorSchemeChanged', () => initChart(chartRef.value));
+            window.removeEventListener('colorSchemeChanged', initChart);
             document.removeEventListener('keydown', handleKeydown);
             document.body.style.overflow = '';
             if (chartInstance) {
@@ -655,10 +498,10 @@ const GridChart = {
             }
         });
 
-        return { chartRef, fullscreenRef, showDataZoom, isFullscreen, toggleFullscreen };
+        return { chartRef, showDataZoom, isFullscreen, toggleFullscreen };
     },
     template: `
-        <div class="cell-chart">
+        <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
             <div class="cell-chart-body">
                 <div ref="chartRef" class="chart-container chart-container-main"
@@ -673,17 +516,9 @@ const GridChart = {
                     </div>
                     <div class="control-label">全屏</div>
                     <div class="multiplier-buttons">
-                        <button @click="toggleFullscreen">放大</button>
+                        <button @click="toggleFullscreen">{{ isFullscreen ? '退出' : '放大' }}</button>
                     </div>
                 </div>
-            </div>
-            <!-- 浏览器内全屏覆盖层 -->
-            <div v-if="isFullscreen" class="chart-fullscreen-overlay" @click.self="toggleFullscreen">
-                <div class="chart-fullscreen-header">
-                    <span class="chart-fullscreen-title">{{ cell.title || '图表' }}</span>
-                    <button class="chart-fullscreen-close" @click="toggleFullscreen">✕</button>
-                </div>
-                <div ref="fullscreenRef" class="chart-fullscreen-body"></div>
             </div>
         </div>
     `
