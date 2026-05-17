@@ -88,6 +88,7 @@ const GenericChart = {
     setup(props) {
         const showDataZoom = ref(false);
         const isFullscreen = ref(false);
+        const containerRef = ref(null);
 
         const { chartRef, getColors, extractData, refreshChart } = useChart(props, {
             buildOption: (extracted, colors) => {
@@ -133,44 +134,52 @@ const GenericChart = {
             }
         });
 
-        // [新增] 2026-05-17 全屏功能(CSS覆盖层方案 - 简洁版)
+        // [新增] 2026-05-17 浏览器全屏功能(Fullscreen API)
         const toggleFullscreen = () => {
-            isFullscreen.value = !isFullscreen.value;
-            // 切换body样式,防止背景滚动
+            if (!containerRef.value) return;
+            
+            if (!document.fullscreenElement) {
+                containerRef.value.requestFullscreen().catch(err => {
+                    console.error('全屏失败:', err);
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        };
+
+        // 监听全屏变化,自动resize图表
+        const handleFullscreenChange = () => {
+            isFullscreen.value = !!document.fullscreenElement;
+            // body防止滚动
             document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
+            // 延迟resize等DOM渲染完成
             setTimeout(() => {
                 if (window.chartInstances?.has(chartRef.value)) {
                     window.chartInstances.get(chartRef.value)?.resize();
                 }
-            }, 100);
-        };
-
-        // 监听ESC键退出全屏
-        const handleKeydown = (e) => {
-            if (e.key === 'Escape' && isFullscreen.value) {
-                toggleFullscreen();
-            }
+            }, 200);
         };
 
         watch([showDataZoom], refreshChart);
 
         onMounted(() => {
-            document.addEventListener('keydown', handleKeydown);
+            document.addEventListener('fullscreenchange', handleFullscreenChange);
         });
 
         onUnmounted(() => {
-            document.removeEventListener('keydown', handleKeydown);
+            document.removeEventListener('fullscreenchange', handleFullscreenChange);
+            document.body.style.overflow = '';
         });
 
-        return { chartRef, showDataZoom, isFullscreen, toggleFullscreen };
+        return { chartRef, containerRef, showDataZoom, isFullscreen, toggleFullscreen };
     },
     template: `
-        <div class="cell-chart with-control" :class="{ 'chart-fullscreen-mode': isFullscreen }">
+        <div ref="containerRef" class="cell-chart" :class="{ 'cell-chart-zoomed': isFullscreen }">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
-            <div class="chart-with-control">
-                <div ref="chartRef" class="chart-container"
-                     :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                <div class="chart-control">
+            <div class="cell-chart-body">
+                <div ref="chartRef" class="chart-container chart-container-main"
+                     :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px', flex: isFullscreen ? '1' : '' }"></div>
+                <div class="chart-controls">
                     <div class="control-label">滚动轴</div>
                     <div class="checkbox-group">
                         <label class="checkbox-item">
@@ -184,12 +193,6 @@ const GenericChart = {
                             {{ isFullscreen ? '退出' : '放大' }}
                         </button>
                     </div>
-                </div>
-            </div>
-            <!-- 全屏遮罩层(简洁版:直接显示图表) -->
-            <div v-if="isFullscreen" class="chart-fullscreen-overlay" @click="toggleFullscreen">
-                <div class="chart-fullscreen-simple" @click.stop>
-                    <div ref="chartRef" class="chart-fullscreen-chart"></div>
                 </div>
             </div>
         </div>
@@ -432,6 +435,7 @@ const GridChart = {
     props: { cell: { type: Object, required: true } },
     setup(props) {
         const chartRef = ref(null);
+        const containerRef = ref(null);
         let chartInstance = null;
         const showDataZoom = ref(false);
         const isFullscreen = ref(false);
@@ -513,46 +517,35 @@ const GridChart = {
             return option;
         };
 
-        const initChart = (container) => {
-            if (!container || !props.cell.content?.charts) return;
+        const initChart = () => {
+            if (!chartRef.value || !props.cell.content?.charts) return;
             if (chartInstance) chartInstance.dispose();
-            chartInstance = echarts.init(container);
-            // 保存实例引用供全屏resize使用
+            chartInstance = echarts.init(chartRef.value);
             if (!window.chartInstances) window.chartInstances = new Map();
-            window.chartInstances.set(container, chartInstance);
+            window.chartInstances.set(chartRef.value, chartInstance);
             chartInstance.setOption(buildGridOption());
         };
 
         const handleResize = () => chartInstance?.resize();
 
-        // [新增] 2026-05-17 全屏功能(CSS覆盖层方案 - 简洁版)
+        // [新增] 2026-05-17 浏览器全屏功能(Fullscreen API)
         const toggleFullscreen = () => {
-            isFullscreen.value = !isFullscreen.value;
-            // 切换body样式,防止背景滚动
-            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
-            setTimeout(() => {
-                if (isFullscreen.value) {
-                    // 进入全屏,初始化全屏容器中的图表
-                    const fullscreenContainer = document.querySelector('.chart-fullscreen-chart');
-                    if (fullscreenContainer) {
-                        initChart(fullscreenContainer);
-                    }
-                } else {
-                    // 退出全屏,重新初始化原始容器
-                    nextTick(() => {
-                        if (chartRef.value) {
-                            initChart(chartRef.value);
-                        }
-                    });
-                }
-            }, 100);
+            if (!containerRef.value) return;
+            
+            if (!document.fullscreenElement) {
+                containerRef.value.requestFullscreen().catch(err => {
+                    console.error('全屏失败:', err);
+                });
+            } else {
+                document.exitFullscreen();
+            }
         };
 
-        // 监听ESC键退出全屏
-        const handleKeydown = (e) => {
-            if (e.key === 'Escape' && isFullscreen.value) {
-                toggleFullscreen();
-            }
+        // 监听全屏变化,自动resize图表
+        const handleFullscreenChange = () => {
+            isFullscreen.value = !!document.fullscreenElement;
+            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
+            setTimeout(() => chartInstance?.resize(), 200);
         };
 
         watch([showDataZoom], () => {
@@ -562,16 +555,16 @@ const GridChart = {
         });
 
         onMounted(() => {
-            nextTick(() => initChart(chartRef.value));
+            nextTick(() => initChart());
             window.addEventListener('resize', handleResize);
-            window.addEventListener('colorSchemeChanged', () => initChart(chartRef.value));
-            document.addEventListener('keydown', handleKeydown);
+            window.addEventListener('colorSchemeChanged', initChart);
+            document.addEventListener('fullscreenchange', handleFullscreenChange);
         });
 
         onUnmounted(() => {
             window.removeEventListener('resize', handleResize);
-            window.removeEventListener('colorSchemeChanged', () => initChart(chartRef.value));
-            document.removeEventListener('keydown', handleKeydown);
+            window.removeEventListener('colorSchemeChanged', initChart);
+            document.removeEventListener('fullscreenchange', handleFullscreenChange);
             document.body.style.overflow = '';
             if (chartInstance) {
                 if (window.chartInstances) window.chartInstances.delete(chartRef.value);
@@ -579,15 +572,15 @@ const GridChart = {
             }
         });
 
-        return { chartRef, showDataZoom, isFullscreen, toggleFullscreen };
+        return { chartRef, containerRef, showDataZoom, isFullscreen, toggleFullscreen };
     },
     template: `
-        <div class="cell-chart with-control" :class="{ 'chart-fullscreen-mode': isFullscreen }">
+        <div ref="containerRef" class="cell-chart" :class="{ 'cell-chart-zoomed': isFullscreen }">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
-            <div class="chart-with-control">
-                <div ref="chartRef" class="chart-container"
+            <div class="cell-chart-body">
+                <div ref="chartRef" class="chart-container chart-container-main"
                      :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                <div class="chart-control">
+                <div class="chart-controls">
                     <div class="control-label">滚动轴</div>
                     <div class="checkbox-group">
                         <label class="checkbox-item">
@@ -601,12 +594,6 @@ const GridChart = {
                             {{ isFullscreen ? '退出' : '放大' }}
                         </button>
                     </div>
-                </div>
-            </div>
-            <!-- 全屏遮罩层(简洁版:直接显示图表) -->
-            <div v-if="isFullscreen" class="chart-fullscreen-overlay" @click="toggleFullscreen">
-                <div class="chart-fullscreen-simple" @click.stop>
-                    <div class="chart-fullscreen-chart"></div>
                 </div>
             </div>
         </div>

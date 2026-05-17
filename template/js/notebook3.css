@@ -594,6 +594,35 @@ body {
     max-width: 100%;
 }
 
+/* 图表主体行: 图表 + 控制器并排 */
+.cell-chart-body {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+/* 图表容器默认撑满主体 */
+.chart-container-main {
+    flex: 1;
+    min-width: 0;
+}
+
+/* 控制器侧边栏 */
+.chart-controls {
+    flex-shrink: 0;
+    width: 85px;
+    padding: 8px 10px;
+    background: #f7f6f3;
+    border-radius: 6px;
+}
+
+/* 热力图单独设置更窄的宽度 */
+.cell-chart.heatmap .chart-controls {
+    width: 60px;
+    padding: 8px 8px;
+}
+
+/* 兼容旧版图表(饼图/堆叠图)的旧类名 */
 .chart-with-control .chart-container {
     float: left;
     width: calc(100% - 120px) !important;
@@ -609,7 +638,6 @@ body {
     margin-left: 12px;
 }
 
-/* 热力图单独设置更窄的宽度 */
 .chart-with-control.heatmap .chart-container {
     width: calc(100% - 85px) !important;
 }
@@ -677,37 +705,17 @@ body {
     color: #fff;
 }
 
-/* ========== 6.1 图表全屏样式(简洁版) ========== */
+/* ========== 6.1 浏览器全屏样式 ========== */
 
-/* 全屏遮罩层 */
-.chart-fullscreen-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: #fff;
-    z-index: 9999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
+/* 浏览器全屏时,容器全铺背景白色 */
+.cell-chart-zoomed {
+    background: #fff !important;
+    position: relative;
 }
 
-/* 全屏内容容器(简洁版:无边框无标题) */
-.chart-fullscreen-simple {
-    width: 100vw;
-    height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: default;
-}
-
-/* 全屏图表容器 */
-.chart-fullscreen-chart {
-    width: 100%;
-    height: 100%;
+/* 全屏模式下 padding 为0 */
+.cell-chart-zoomed.cell {
+    padding: 0;
 }
 
 /* ========== 7. FT Table 样式（Notion 风格）========== */
