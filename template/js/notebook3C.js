@@ -5,6 +5,9 @@
 
 const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
 
+// [优化] 2026-05-17 全局ESC注册表(仅一个keydown监听器)
+window.__fsEsc = new Set();
+
 // =============================================================================
 // 第一部分：Chart Composable - 图表组件共用逻辑
 // =============================================================================
@@ -51,9 +54,10 @@ function useChart(props, chartOptions = {}) {
         chartInstance.setOption(getChartOption());
     };
 
+    // [优化] 2026-05-17 不合并,避免dataZoom等组件残留
     const updateChart = () => {
         if (!chartInstance) return;
-        chartInstance.setOption(getChartOption());
+        chartInstance.setOption(getChartOption(), true);
     };
 
     watch(() => props.cell.content?.charts, () => {
@@ -89,7 +93,7 @@ const GenericChart = {
         const showDataZoom = ref(false);
         const isFullscreen = ref(false);
 
-        const { chartRef, refreshChart } = useChart(props, {
+        const { chartRef, updateChart, refreshChart } = useChart(props, {
             buildOption: (extracted, colors) => {
                 const chartType = extracted.chart_type;
                 const series = extracted.series || [];
@@ -110,6 +114,8 @@ const GenericChart = {
                             { type: 'inside', xAxisIndex: [0], start: 0, end: 100 },
                             { type: 'slider', show: true, xAxisIndex: [0], start: 0, end: 100, bottom: 10, height: 20 }
                         ];
+                    } else if (chartType !== 'scatter') {
+                        option.dataZoom = [];  // 显式清空,避免setOption合并残留
                     }
 
                     option.series = series.map((s, i) => {
@@ -138,15 +144,14 @@ const GenericChart = {
             setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
         };
 
-        const handleKeydown = (e) => {
-            if (e.key === 'Escape' && isFullscreen.value) toggleFullscreen();
-        };
+        // [优化] 2026-05-17 全局ESC注册; 滚动轴切换用updateChart避免重建
+        const handleKeydown = () => { if (isFullscreen.value) toggleFullscreen(); };
 
-        watch([showDataZoom], refreshChart);
+        watch([showDataZoom], updateChart);
 
-        onMounted(() => { document.addEventListener('keydown', handleKeydown); });
+        onMounted(() => { window.__fsEsc.add(handleKeydown); });
         onUnmounted(() => {
-            document.removeEventListener('keydown', handleKeydown);
+            window.__fsEsc.delete(handleKeydown);
             document.body.style.overflow = '';
         });
 
@@ -265,13 +270,14 @@ const HeatmapChart = {
             document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
             setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
         };
-        const handleKeydown = (e) => { if (e.key === 'Escape' && isFullscreen.value) toggleFullscreen(); };
+        // [优化] 2026-05-17 全局ESC
+        const handleKeydown = () => { if (isFullscreen.value) toggleFullscreen(); };
 
         watch([heatmapShowData, heatmapMultiplier], () => { updateChart(); });
 
-        onMounted(() => { document.addEventListener('keydown', handleKeydown); });
+        onMounted(() => { window.__fsEsc.add(handleKeydown); });
         onUnmounted(() => {
-            document.removeEventListener('keydown', handleKeydown);
+            window.__fsEsc.delete(handleKeydown);
             document.body.style.overflow = '';
         });
 
@@ -320,7 +326,7 @@ const StackedChart = {
         const stackShowPercent = ref(false);
         const isFullscreen = ref(false);
 
-        const { chartRef, refreshChart } = useChart(props, {
+        const { chartRef, updateChart, refreshChart } = useChart(props, {
             buildOption: (extracted, colors) => {
                 const chartType = extracted.chart_type;
                 const series = extracted.series || [];
@@ -395,13 +401,14 @@ const StackedChart = {
             document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
             setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
         };
-        const handleKeydown = (e) => { if (e.key === 'Escape' && isFullscreen.value) toggleFullscreen(); };
+        // [优化] 2026-05-17 全局ESC + updateChart
+        const handleKeydown = () => { if (isFullscreen.value) toggleFullscreen(); };
 
-        watch([stackNormalize, stackShowRaw, stackShowPercent], refreshChart);
+        watch([stackNormalize, stackShowRaw, stackShowPercent], updateChart);
 
-        onMounted(() => { document.addEventListener('keydown', handleKeydown); });
+        onMounted(() => { window.__fsEsc.add(handleKeydown); });
         onUnmounted(() => {
-            document.removeEventListener('keydown', handleKeydown);
+            window.__fsEsc.delete(handleKeydown);
             document.body.style.overflow = '';
         });
 
@@ -488,6 +495,8 @@ const GridChart = {
                     dc.push({ type: 'slider', show: true, xAxisIndex: [i], start: 0, end: 100, bottom: 10, height: 20 });
                 }
                 if (dc.length > 0) option.dataZoom = dc;
+            } else {
+                option.dataZoom = [];  // 显式清空,避免残留
             }
             return option;
         };
@@ -508,23 +517,22 @@ const GridChart = {
             setTimeout(() => chartInstance?.resize(), 100);
         };
 
-        const handleKeydown = (e) => {
-            if (e.key === 'Escape' && isFullscreen.value) toggleFullscreen();
-        };
+        // [优化] 2026-05-17 全局ESC注册
+        const handleKeydown = () => { if (isFullscreen.value) toggleFullscreen(); };
 
-        watch([showDataZoom], () => { if (chartInstance) chartInstance.setOption(buildGridOption()); });
+        watch([showDataZoom], () => { if (chartInstance) chartInstance.setOption(buildGridOption(), true); });
 
         onMounted(() => {
             nextTick(() => initChart());
             window.addEventListener('resize', handleResize);
             window.addEventListener('colorSchemeChanged', initChart);
-            document.addEventListener('keydown', handleKeydown);
+            window.__fsEsc.add(handleKeydown);
         });
 
         onUnmounted(() => {
             window.removeEventListener('resize', handleResize);
             window.removeEventListener('colorSchemeChanged', initChart);
-            document.removeEventListener('keydown', handleKeydown);
+            window.__fsEsc.delete(handleKeydown);
             document.body.style.overflow = '';
             if (chartInstance) {
                 chartInstance.dispose();
@@ -918,6 +926,16 @@ const Toast = {
 // =============================================================================
 // 第七部分：createNotebookApp
 // =============================================================================
+
+// [优化] 2026-05-17 全局ESC监听(仅一个,替代每个图表的独立keydown)
+if (typeof document !== 'undefined' && !window.__fsEscInited) {
+    window.__fsEscInited = true;
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            window.__fsEsc.forEach(fn => fn());
+        }
+    });
+}
 
 function createNotebookApp() {
     const FtTableComponent = typeof window !== 'undefined' ? window.FtTable : null;
