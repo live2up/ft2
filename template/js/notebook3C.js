@@ -1,6 +1,11 @@
 /**
  * Notebook Vue3 - Vue 3 组合式 API 版本的 Notebook 应用逻辑
  * 组件模式 + Composable 复用逻辑
+ * 
+ * v2.0 — 2026-05-17
+ *   新增: 滚动轴(line/area/bar/kline)、全屏(五个组件)
+ *   重构: float → flex 统一布局
+ *   优化: 全局ESC、updateChart不合并、滚动轴切换不重建
  */
 
 const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
