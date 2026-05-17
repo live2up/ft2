@@ -105,7 +105,7 @@ const GenericChart = {
                     option.legend = { data: series.map(s => ({ name: s.name, icon: 'rect' })), top: 5 };
                     option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
 
-                    if (showDataZoom.value && (chartType === 'line' || chartType === 'area')) {
+                    if (showDataZoom.value && (chartType === 'line' || chartType === 'area' || chartType === 'bar')) {
                         option.dataZoom = [
                             { type: 'inside', xAxisIndex: [0], start: 0, end: 100 },
                             { type: 'slider', show: true, xAxisIndex: [0], start: 0, end: 100, bottom: 10, height: 20 }
