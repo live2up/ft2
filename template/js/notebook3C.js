@@ -133,9 +133,11 @@ const GenericChart = {
             }
         });
 
-        // [新增] 2026-05-17 全屏功能(CSS覆盖层方案)
+        // [新增] 2026-05-17 全屏功能(CSS覆盖层方案 - 简洁版)
         const toggleFullscreen = () => {
             isFullscreen.value = !isFullscreen.value;
+            // 切换body样式,防止背景滚动
+            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
             setTimeout(() => {
                 if (window.chartInstances?.has(chartRef.value)) {
                     window.chartInstances.get(chartRef.value)?.resize();
@@ -146,12 +148,7 @@ const GenericChart = {
         // 监听ESC键退出全屏
         const handleKeydown = (e) => {
             if (e.key === 'Escape' && isFullscreen.value) {
-                isFullscreen.value = false;
-                setTimeout(() => {
-                    if (window.chartInstances?.has(chartRef.value)) {
-                        window.chartInstances.get(chartRef.value)?.resize();
-                    }
-                }, 100);
+                toggleFullscreen();
             }
         };
 
@@ -189,14 +186,10 @@ const GenericChart = {
                     </div>
                 </div>
             </div>
-            <!-- 全屏遮罩层 -->
+            <!-- 全屏遮罩层(简洁版:直接显示图表) -->
             <div v-if="isFullscreen" class="chart-fullscreen-overlay" @click="toggleFullscreen">
-                <div class="chart-fullscreen-content" @click.stop>
-                    <div class="chart-fullscreen-header">
-                        <span class="chart-fullscreen-title">{{ cell.title || '图表全屏' }}</span>
-                        <button class="chart-fullscreen-close" @click="toggleFullscreen">✕</button>
-                    </div>
-                    <div ref="chartRef" class="chart-fullscreen-container"></div>
+                <div class="chart-fullscreen-simple" @click.stop>
+                    <div ref="chartRef" class="chart-fullscreen-chart"></div>
                 </div>
             </div>
         </div>
@@ -532,13 +525,15 @@ const GridChart = {
 
         const handleResize = () => chartInstance?.resize();
 
-        // [新增] 2026-05-17 全屏功能(CSS覆盖层方案)
+        // [新增] 2026-05-17 全屏功能(CSS覆盖层方案 - 简洁版)
         const toggleFullscreen = () => {
             isFullscreen.value = !isFullscreen.value;
+            // 切换body样式,防止背景滚动
+            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
             setTimeout(() => {
                 if (isFullscreen.value) {
                     // 进入全屏,初始化全屏容器中的图表
-                    const fullscreenContainer = document.querySelector('.chart-fullscreen-container');
+                    const fullscreenContainer = document.querySelector('.chart-fullscreen-chart');
                     if (fullscreenContainer) {
                         initChart(fullscreenContainer);
                     }
@@ -577,6 +572,7 @@ const GridChart = {
             window.removeEventListener('resize', handleResize);
             window.removeEventListener('colorSchemeChanged', () => initChart(chartRef.value));
             document.removeEventListener('keydown', handleKeydown);
+            document.body.style.overflow = '';
             if (chartInstance) {
                 if (window.chartInstances) window.chartInstances.delete(chartRef.value);
                 chartInstance.dispose();
@@ -607,14 +603,10 @@ const GridChart = {
                     </div>
                 </div>
             </div>
-            <!-- 全屏遮罩层 -->
+            <!-- 全屏遮罩层(简洁版:直接显示图表) -->
             <div v-if="isFullscreen" class="chart-fullscreen-overlay" @click="toggleFullscreen">
-                <div class="chart-fullscreen-content" @click.stop>
-                    <div class="chart-fullscreen-header">
-                        <span class="chart-fullscreen-title">{{ cell.title || '图表全屏' }}</span>
-                        <button class="chart-fullscreen-close" @click="toggleFullscreen">✕</button>
-                    </div>
-                    <div class="chart-fullscreen-container"></div>
+                <div class="chart-fullscreen-simple" @click.stop>
+                    <div class="chart-fullscreen-chart"></div>
                 </div>
             </div>
         </div>
