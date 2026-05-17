@@ -204,12 +204,12 @@ const PieChart = {
         return { chartRef, pieShowValue, pieShowPercent };
     },
     template: `
-        <div class="cell-chart with-control">
+        <div class="cell-chart">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
-            <div class="chart-with-control">
-                <div ref="chartRef" class="chart-container"
+            <div class="cell-chart-body">
+                <div ref="chartRef" class="chart-container chart-container-main"
                      :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                <div class="chart-control">
+                <div class="chart-controls">
                     <div class="control-label">显示选项</div>
                     <div class="checkbox-group">
                         <label class="checkbox-item">
@@ -234,6 +234,7 @@ const HeatmapChart = {
     setup(props) {
         const heatmapShowData = ref(true);
         const heatmapMultiplier = ref(1);
+        const isFullscreen = ref(false);
 
         const { chartRef, updateChart } = useChart(props, {
             buildOption: (extracted, colors) => {
@@ -258,19 +259,31 @@ const HeatmapChart = {
             }
         });
 
-        watch([heatmapShowData, heatmapMultiplier], () => {
-            updateChart();
+        // [新增] 2026-05-17 全屏
+        const toggleFullscreen = () => {
+            isFullscreen.value = !isFullscreen.value;
+            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
+        };
+        const handleKeydown = (e) => { if (e.key === 'Escape' && isFullscreen.value) toggleFullscreen(); };
+
+        watch([heatmapShowData, heatmapMultiplier], () => { updateChart(); });
+
+        onMounted(() => { document.addEventListener('keydown', handleKeydown); });
+        onUnmounted(() => {
+            document.removeEventListener('keydown', handleKeydown);
+            document.body.style.overflow = '';
         });
 
-        return { chartRef, heatmapShowData, heatmapMultiplier };
+        return { chartRef, heatmapShowData, heatmapMultiplier, isFullscreen, toggleFullscreen };
     },
     template: `
-        <div class="cell-chart with-control heatmap">
+        <div class="cell-chart heatmap" :class="{ 'chart-zoomed': isFullscreen }">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
-            <div class="chart-with-control">
-                <div ref="chartRef" class="chart-container"
+            <div class="cell-chart-body">
+                <div ref="chartRef" class="chart-container chart-container-main"
                      :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                <div class="chart-control">
+                <div class="chart-controls">
                     <div class="control-label">显示选项</div>
                     <div class="checkbox-group">
                         <label class="checkbox-item">
@@ -284,6 +297,10 @@ const HeatmapChart = {
                         <button v-for="m in [1000, 100, 10]" :key="m" :class="{ active: heatmapMultiplier === m }" @click="heatmapMultiplier = m">×{{ m }}</button>
                         <button :class="{ active: heatmapMultiplier === 1 }" @click="heatmapMultiplier = 1">原始</button>
                         <button v-for="m in [0.1, 0.01]" :key="m" :class="{ active: heatmapMultiplier === m }" @click="heatmapMultiplier = m">1/{{ m === 0.1 ? 10 : 100 }}</button>
+                    </div>
+                    <div class="control-label">全屏</div>
+                    <div class="multiplier-buttons">
+                        <button @click="toggleFullscreen">{{ isFullscreen ? '退出' : '放大' }}</button>
                     </div>
                 </div>
             </div>
@@ -301,6 +318,7 @@ const StackedChart = {
         const stackNormalize = ref(false);
         const stackShowRaw = ref(true);
         const stackShowPercent = ref(false);
+        const isFullscreen = ref(false);
 
         const { chartRef, refreshChart } = useChart(props, {
             buildOption: (extracted, colors) => {
@@ -371,17 +389,31 @@ const StackedChart = {
             }
         });
 
+        // [新增] 2026-05-17 全屏
+        const toggleFullscreen = () => {
+            isFullscreen.value = !isFullscreen.value;
+            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
+        };
+        const handleKeydown = (e) => { if (e.key === 'Escape' && isFullscreen.value) toggleFullscreen(); };
+
         watch([stackNormalize, stackShowRaw, stackShowPercent], refreshChart);
 
-        return { chartRef, stackNormalize, stackShowRaw, stackShowPercent };
+        onMounted(() => { document.addEventListener('keydown', handleKeydown); });
+        onUnmounted(() => {
+            document.removeEventListener('keydown', handleKeydown);
+            document.body.style.overflow = '';
+        });
+
+        return { chartRef, stackNormalize, stackShowRaw, stackShowPercent, isFullscreen, toggleFullscreen };
     },
     template: `
-        <div class="cell-chart with-control">
+        <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
-            <div class="chart-with-control">
-                <div ref="chartRef" class="chart-container"
+            <div class="cell-chart-body">
+                <div ref="chartRef" class="chart-container chart-container-main"
                      :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                <div class="chart-control">
+                <div class="chart-controls">
                     <div class="control-label">归一化</div>
                     <div class="checkbox-group">
                         <label class="checkbox-item">
@@ -399,6 +431,10 @@ const StackedChart = {
                             <input type="checkbox" v-model="stackShowPercent">
                             <span>百分比</span>
                         </label>
+                    </div>
+                    <div class="control-label">全屏</div>
+                    <div class="multiplier-buttons">
+                        <button @click="toggleFullscreen">{{ isFullscreen ? '退出' : '放大' }}</button>
                     </div>
                 </div>
             </div>

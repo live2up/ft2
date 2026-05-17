@@ -622,31 +622,6 @@ body {
     padding: 8px 8px;
 }
 
-/* 兼容旧版图表(饼图/堆叠图)的旧类名 */
-.chart-with-control .chart-container {
-    float: left;
-    width: calc(100% - 120px) !important;
-    max-width: 100%;
-}
-
-.chart-control {
-    float: right;
-    padding: 8px 10px;
-    background: #f7f6f3;
-    border-radius: 6px;
-    min-width: 85px;
-    margin-left: 12px;
-}
-
-.chart-with-control.heatmap .chart-container {
-    width: calc(100% - 85px) !important;
-}
-
-.chart-with-control.heatmap .chart-control {
-    min-width: 60px;
-    padding: 8px 8px;
-}
-
 .control-label {
     font-size: 12px;
     font-weight: 600;
