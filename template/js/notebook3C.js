@@ -33,11 +33,6 @@ function useChart(props, chartOptions = {}) {
     const extractData = (charts) => {
         if (!charts?.series?.[0]) return null;
         
-        // [调试] 打印原始数据结构
-        console.log('[extractData] 原始 charts 结构:', charts);
-        console.log('[extractData] series[0]:', charts.series[0]);
-        console.log('[extractData] series[0].data 前5个:', charts.series[0].data?.slice(0, 5));
-        
         return {
             chart_type: charts.series[0].type,
             series: charts.series,
@@ -137,8 +132,6 @@ const GenericChart = {
                         const allDates = (rawSeries[0]?.data || []).map(v => Array.isArray(v) && v.length >= 2 ? v[0] : '');
                         option.xAxis = { type: 'category', boundaryGap: false, data: allDates };
                         
-                        console.log('[区间收益] dataLen:', dataLen, 'startPercent:', startPercent, 'startIdx:', startIdx, 'baseIdx:', baseIdx);
-                        
                         // [核心修复] 使用 Array.from() 创建新数组，避免 Proxy 对象引用问题
                         displaySeries = Array.from(rawSeries).map((s, seriesIdx) => {
                             // [核心修复] 处理 pyecharts 二维数组格式 [[日期, 净值], ...]
@@ -156,9 +149,6 @@ const GenericChart = {
                             
                             const baseValue = numericData[baseIdx];
                             
-                            console.log(`[区间收益] Series ${seriesIdx} (${s.name}): baseValue=${baseValue}, dataLength=${numericData.length}`);
-                            console.log(`[区间收益] Series ${seriesIdx} 前5个原始净值:`, numericData.slice(0, 5));
-                            
                             // [核心修复] 计算累计收益率：所有数据点相对于基准点的收益率
                             // baseIdx 之前的数据点填充 null（不显示）
                             const returnsData = numericData.map((v, idx) => {
@@ -166,10 +156,6 @@ const GenericChart = {
                                 if (!baseValue || baseValue === 0) return 0;  // 基准值为 0 时返回 0
                                 return parseFloat(((v - baseValue) / baseValue * 100).toFixed(4));
                             });
-                            
-                            console.log(`[区间收益] Series ${seriesIdx} 转换后: 非null数据点=${returnsData.filter(v => v !== null).length}`);
-                            console.log(`[区间收益] Series ${seriesIdx} 前5个转换后收益:`, returnsData.slice(0, 5));
-                            console.log(`[区间收益] Series ${seriesIdx} 最后5个转换后收益:`, returnsData.slice(-5));
                             
                             // [核心修复] 创建全新的对象，避免 Proxy 引用问题
                             return {
@@ -198,9 +184,6 @@ const GenericChart = {
 
                     // 统一构建 series（displaySeries 可能是原始数据或转换后的数据）
                     option.series = displaySeries.map((s, i) => {
-                        // [调试] 打印最终传递给 ECharts 的数据
-                        console.log(`[ECharts] Series ${i} (${s.name}) 最终数据:`, s.data?.slice(0, 5));
-                        console.log(`[ECharts] Series ${i} (${s.name}) 数据类型:`, typeof s.data[0], Array.isArray(s.data[0]) ? 'array' : typeof s.data[0]);
                         
                         const baseOption = { name: s.name, type: chartType === 'area' ? 'line' : chartType, data: s.data };
                         if (s.stack) baseOption.stack = s.stack;
@@ -213,8 +196,6 @@ const GenericChart = {
                         return baseOption;
                     });
                     
-                    // [调试] 打印最终 option 配置
-                    console.log('[ECharts] 最终 option.series:', option.series.map(s => ({name: s.name, dataLength: s.data?.length, firstData: s.data?.[0]})));
                 } else if (chartType === 'scatter') {
                     if (extracted.xAxis.length) option.xAxis = { type: 'category', data: extracted.xAxis };
                     if (extracted.yAxis.length) option.yAxis = { type: 'category', data: extracted.yAxis };
