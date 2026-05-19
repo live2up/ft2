@@ -284,26 +284,13 @@ const GenericChart = {
         <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
             <div class="cell-chart-body">
-                <div ref="chartRef" class="chart-container chart-container-main"
-                     :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                <div class="chart-controls">
-                    <div class="control-label">滚动轴</div>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" v-model="showDataZoom">
-                            <span>启用</span>
-                        </label>
-                    </div>
-                    <div class="control-label">区间收益</div>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" v-model="intervalCompare">
-                            <span>启用</span>
-                        </label>
-                    </div>
-                    <div class="control-label">全屏</div>
-                    <div class="multiplier-buttons">
-                        <button @click="toggleFullscreen">{{ isFullscreen ? '退出' : '放大' }}</button>
+                <div class="chart-wrapper">
+                    <div ref="chartRef" class="chart-container chart-container-main"
+                         :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
+                    <div class="chart-toolbar">
+                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">⇄</button>
+                        <button class="tool-btn" :class="{ active: intervalCompare }" @click="intervalCompare = !intervalCompare" title="区间收益">%</button>
+                        <button class="tool-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
                     </div>
                 </div>
             </div>
@@ -342,19 +329,12 @@ const PieChart = {
         <div class="cell-chart">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
             <div class="cell-chart-body">
-                <div ref="chartRef" class="chart-container chart-container-main"
-                     :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                <div class="chart-controls">
-                    <div class="control-label">显示选项</div>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" v-model="pieShowValue">
-                            <span>原始数据</span>
-                        </label>
-                        <label class="checkbox-item">
-                            <input type="checkbox" v-model="pieShowPercent">
-                            <span>百分比</span>
-                        </label>
+                <div class="chart-wrapper">
+                    <div ref="chartRef" class="chart-container chart-container-main"
+                         :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
+                    <div class="chart-toolbar">
+                        <button class="tool-btn" :class="{ active: pieShowValue }" @click="pieShowValue = !pieShowValue" title="显示数值">V</button>
+                        <button class="tool-btn" :class="{ active: pieShowPercent }" @click="pieShowPercent = !pieShowPercent" title="显示百分比">%</button>
                     </div>
                 </div>
             </div>
@@ -417,26 +397,20 @@ const HeatmapChart = {
         <div class="cell-chart heatmap" :class="{ 'chart-zoomed': isFullscreen }">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
             <div class="cell-chart-body">
-                <div ref="chartRef" class="chart-container chart-container-main"
-                     :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                <div class="chart-controls">
-                    <div class="control-label">显示选项</div>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" v-model="heatmapShowData">
-                            <span>显示数据</span>
-                        </label>
-                    </div>
-                    <div class="control-label">数据缩放</div>
-                    <div class="current-multiplier">×{{ heatmapMultiplier }}</div>
-                    <div class="multiplier-buttons">
-                        <button v-for="m in [1000, 100, 10]" :key="m" :class="{ active: heatmapMultiplier === m }" @click="heatmapMultiplier = m">×{{ m }}</button>
-                        <button :class="{ active: heatmapMultiplier === 1 }" @click="heatmapMultiplier = 1">原始</button>
-                        <button v-for="m in [0.1, 0.01]" :key="m" :class="{ active: heatmapMultiplier === m }" @click="heatmapMultiplier = m">1/{{ m === 0.1 ? 10 : 100 }}</button>
-                    </div>
-                    <div class="control-label">全屏</div>
-                    <div class="multiplier-buttons">
-                        <button @click="toggleFullscreen">{{ isFullscreen ? '退出' : '放大' }}</button>
+                <div class="chart-wrapper">
+                    <div ref="chartRef" class="chart-container chart-container-main"
+                         :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
+                    <div class="chart-toolbar">
+                        <select class="tool-select" v-model.number="heatmapMultiplier" title="数据缩放">
+                            <option value="1000">x1000</option>
+                            <option value="100">x100</option>
+                            <option value="10">x10</option>
+                            <option value="1">原始</option>
+                            <option value="0.1">1/10</option>
+                            <option value="0.01">1/100</option>
+                        </select>
+                        <button class="tool-btn" :class="{ active: heatmapShowData }" @click="heatmapShowData = !heatmapShowData" title="显示数据">T</button>
+                        <button class="tool-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
                     </div>
                 </div>
             </div>
@@ -548,30 +522,14 @@ const StackedChart = {
         <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
             <div class="cell-chart-body">
-                <div ref="chartRef" class="chart-container chart-container-main"
-                     :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                <div class="chart-controls">
-                    <div class="control-label">归一化</div>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" v-model="stackNormalize">
-                            <span>启用</span>
-                        </label>
-                    </div>
-                    <div class="control-label">显示选项</div>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" v-model="stackShowRaw">
-                            <span>原始数据</span>
-                        </label>
-                        <label class="checkbox-item">
-                            <input type="checkbox" v-model="stackShowPercent">
-                            <span>百分比</span>
-                        </label>
-                    </div>
-                    <div class="control-label">全屏</div>
-                    <div class="multiplier-buttons">
-                        <button @click="toggleFullscreen">{{ isFullscreen ? '退出' : '放大' }}</button>
+                <div class="chart-wrapper">
+                    <div ref="chartRef" class="chart-container chart-container-main"
+                         :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
+                    <div class="chart-toolbar">
+                        <button class="tool-btn" :class="{ active: stackNormalize }" @click="stackNormalize = !stackNormalize" title="归一化">N</button>
+                        <button class="tool-btn" :class="{ active: stackShowRaw }" @click="stackShowRaw = !stackShowRaw" title="显示数值">V</button>
+                        <button class="tool-btn" :class="{ active: stackShowPercent }" @click="stackShowPercent = !stackShowPercent" title="显示百分比">%</button>
+                        <button class="tool-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
                     </div>
                 </div>
             </div>
@@ -675,19 +633,12 @@ const GridChart = {
         <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
             <h3 v-if="cell.title">{{ cell.title }}</h3>
             <div class="cell-chart-body">
-                <div ref="chartRef" class="chart-container chart-container-main"
-                     :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                <div class="chart-controls">
-                    <div class="control-label">滚动轴</div>
-                    <div class="checkbox-group">
-                        <label class="checkbox-item">
-                            <input type="checkbox" v-model="showDataZoom">
-                            <span>启用</span>
-                        </label>
-                    </div>
-                    <div class="control-label">全屏</div>
-                    <div class="multiplier-buttons">
-                        <button @click="toggleFullscreen">{{ isFullscreen ? '退出' : '放大' }}</button>
+                <div class="chart-wrapper">
+                    <div ref="chartRef" class="chart-container chart-container-main"
+                         :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
+                    <div class="chart-toolbar">
+                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">⇄</button>
+                        <button class="tool-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
                     </div>
                 </div>
             </div>

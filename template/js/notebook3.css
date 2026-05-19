@@ -594,10 +594,9 @@ body {
     max-width: 100%;
 }
 
-/* 图表主体行: 图表 + 控制器并排 */
+/* 图表主体行: 简单 flex */
 .cell-chart-body {
     display: flex;
-    gap: 12px;
     align-items: flex-start;
 }
 
@@ -607,71 +606,78 @@ body {
     min-width: 0;
 }
 
-/* 控制器侧边栏 */
-.chart-controls {
-    flex-shrink: 0;
-    width: 85px;
-    padding: 8px 10px;
-    background: #f7f6f3;
-    border-radius: 6px;
+/* 图表包裹层（相对定位，给工具栏定位） */
+.chart-wrapper {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
 }
 
-.control-label {
-    font-size: 12px;
-    font-weight: 600;
-    color: #37352f;
-    margin-bottom: 6px;
-}
-
-.checkbox-group {
+/* 图表工具行 - 浮在图表右上角 */
+.chart-toolbar {
+    position: absolute;
+    top: 6px;
+    right: 6px;
     display: flex;
-    flex-direction: column;
     gap: 4px;
+    align-items: center;
+    z-index: 10;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+.chart-wrapper:hover .chart-toolbar {
+    opacity: 1;
 }
 
-.checkbox-item {
+/* 工具按钮 */
+.tool-btn {
+    width: 28px;
+    height: 28px;
+    border: 1px solid #e0e0e0;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
     display: flex;
     align-items: center;
-    gap: 4px;
-    font-size: 12px;
-    color: #333;
-    cursor: pointer;
+    justify-content: center;
+    color: #888;
+    transition: all 0.15s;
+    padding: 0;
 }
-
-.current-multiplier {
-    font-size: 12px;
-    font-weight: 600;
-    color: #9b51e0;
-    margin-bottom: 6px;
-}
-
-.multiplier-buttons {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.multiplier-buttons button {
-    padding: 3px 6px;
-    border: 1px solid #e5e5e5;
+.tool-btn:hover {
     background: #fff;
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 11px;
-    color: #666;
-    transition: all 0.2s;
+    border-color: #bbb;
+    color: #333;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
-
-.multiplier-buttons button:hover {
-    background: #f5f5f5;
-    border-color: #9b51e0;
-    color: #9b51e0;
-}
-
-.multiplier-buttons button.active {
+.tool-btn.active {
     background: #9b51e0;
     border-color: #9b51e0;
     color: #fff;
+    box-shadow: 0 1px 4px rgba(156, 81, 224, 0.3);
+}
+
+/* 下拉选择缩放倍数（热力图专用） */
+.tool-select {
+    height: 28px;
+    border: 1px solid #e0e0e0;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.9);
+    font-size: 11px;
+    padding: 0 6px;
+    color: #666;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.15s;
+}
+.tool-select:hover {
+    border-color: #bbb;
+}
+.tool-select:focus {
+    border-color: #9b51e0;
 }
 
 /* ========== 6.1 原位放大样式 ========== */
@@ -695,6 +701,11 @@ body {
     flex: 1;
     min-height: 0;
     height: auto;
+    align-items: stretch;
+}
+
+.chart-zoomed .chart-wrapper {
+    height: 100%;
 }
 
 /* chart div撑满剩余空间 */
