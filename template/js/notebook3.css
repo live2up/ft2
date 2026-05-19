@@ -617,7 +617,7 @@ body {
 /* 图表工具行 - 浮在图表右上角 */
 .chart-toolbar {
     position: absolute;
-    top: 6px;
+    top: 1px;
     right: 6px;
     display: flex;
     gap: 4px;

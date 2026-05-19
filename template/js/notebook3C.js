@@ -8,7 +8,7 @@
  *   优化: 全局ESC、updateChart不合并、滚动轴切换不重建
  */
 
-const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
+const { createApp, ref, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
 
 // [优化] 2026-05-17 全局ESC注册表(仅一个keydown监听器)
 window.__fsEsc = new Set();
@@ -108,7 +108,7 @@ const GenericChart = {
         const intervalEnd = ref(100);         // dataZoom end%
         let intervalListener = null;          // dataZoom 事件监听器
 
-        const { chartRef, updateChart, refreshChart } = useChart(props, {
+        const { chartRef, updateChart } = useChart(props, {
             buildOption: (extracted, colors) => {
                 const chartType = extracted.chart_type;
                 const rawSeries = extracted.series || [];  // 原始数据（不被修改）
@@ -430,7 +430,7 @@ const StackedChart = {
         const stackShowPercent = ref(false);
         const isFullscreen = ref(false);
 
-        const { chartRef, updateChart, refreshChart } = useChart(props, {
+        const { chartRef, updateChart } = useChart(props, {
             buildOption: (extracted, colors) => {
                 const chartType = extracted.chart_type;
                 const series = extracted.series || [];
@@ -896,7 +896,7 @@ const TocMenu = {
         const clearSelection = () => { selectedIndices.value = new Set(); };
         const scrollToSection = (index) => { if (index === -1) window.scrollTo({ top: 0, behavior: 'smooth' }); else { const el = document.getElementById('section-' + index); if (el) el.scrollIntoView({ behavior: 'smooth' }); } };
         const toggleMenu = () => { menuExpanded.value = !menuExpanded.value; setTimeout(() => { window.dispatchEvent(new Event('resize')); }, 350); };
-        const checkScreenWidth = () => { const wasNarrow = isNarrow.value; isNarrow.value = window.innerWidth <= 1200; if (!isNarrow.value) menuExpanded.value = true; };
+        const checkScreenWidth = () => { isNarrow.value = window.innerWidth <= 1200; if (!isNarrow.value) menuExpanded.value = true; };
         const showToast = (message, type = 'info', duration = 3000) => { if (typeof window !== 'undefined' && window.showToast) window.showToast(message, type, duration); };
 
         const stitchImages = async (imageBlobs) => {
