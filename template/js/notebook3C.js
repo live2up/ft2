@@ -10,8 +10,11 @@
 
 const { createApp, ref, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
 
-// [优化] 2026-05-17 全局ESC注册表(仅一个keydown监听器)
+// [优化] 2026-05-18 全局ESC注册表(仅一个keydown监听器)
 window.__fsEsc = new Set();
+
+// [提取] 2026-05-18 默认色板常量，消除 useChart/GridChart 中的硬编码重复
+const DEFAULT_COLORS = ['#e74c3c', '#f39c12', '#af7ac5', '#5499c7', '#f4d03f', '#82e0aa'];
 
 // =============================================================================
 // 第一部分：Chart Composable - 图表组件共用逻辑
@@ -23,11 +26,11 @@ function useChart(props, chartOptions = {}) {
 
     const getColors = (chartType) => {
         const colorPalettes = window.colorPalettes;
-        if (!colorPalettes) return ['#e74c3c', '#f39c12', '#af7ac5', '#5499c7', '#f4d03f', '#82e0aa'];
+        if (!colorPalettes) return DEFAULT_COLORS;
         const group = colorPalettes.typeToGroup?.[chartType] || 'chart';
         const paletteKey = colorPalettes.groups?.[group] || colorPalettes.global;
         const palette = colorPalettes.palettes?.[paletteKey];
-        return palette ? palette.colors : ['#e74c3c', '#f39c12', '#af7ac5', '#5499c7', '#f4d03f', '#82e0aa'];
+        return palette ? palette.colors : DEFAULT_COLORS;
     };
 
     const extractData = (charts) => {
@@ -87,6 +90,23 @@ function useChart(props, chartOptions = {}) {
     return { chartRef, initChart, updateChart, getChartOption, getColors, extractData, refreshChart: initChart };
 }
 
+// [提取] 2026-05-18 全屏 composable，消除 GenericChart/HeatmapChart/StackedChart/GridChart 中的重复
+function useFullscreen() {
+    const isFullscreen = ref(false);
+    const toggleFullscreen = () => {
+        isFullscreen.value = !isFullscreen.value;
+        document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
+        setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
+    };
+    const handleKeydown = () => { if (isFullscreen.value) toggleFullscreen(); };
+    onMounted(() => { window.__fsEsc.add(handleKeydown); });
+    onUnmounted(() => {
+        window.__fsEsc.delete(handleKeydown);
+        document.body.style.overflow = '';
+    });
+    return { isFullscreen, toggleFullscreen };
+}
+
 // =============================================================================
 // 第二部分：图表组件
 // =============================================================================
@@ -97,11 +117,11 @@ const GenericChart = {
     props: { cell: { type: Object, required: true } },
     setup(props) {
         const showDataZoom = ref(false);
-        const isFullscreen = ref(false);
         const intervalCompare = ref(false);  // 区间收益模式
         const intervalStart = ref(0);         // dataZoom start%（缓存当前滑块位置）
         const intervalEnd = ref(100);         // dataZoom end%
         let intervalListener = null;          // dataZoom 事件监听器
+        const { isFullscreen, toggleFullscreen } = useFullscreen();
 
         const { chartRef, updateChart } = useChart(props, {
             buildOption: (extracted, colors) => {
@@ -204,16 +224,6 @@ const GenericChart = {
             }
         });
 
-        // [新增] 2026-05-17 原位放大: chart div不动,容器position:fixed覆盖视口
-        const toggleFullscreen = () => {
-            isFullscreen.value = !isFullscreen.value;
-            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
-            setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
-        };
-
-        // [优化] 2026-05-17 全局ESC注册; 滚动轴切换用updateChart避免重建
-        const handleKeydown = () => { if (isFullscreen.value) toggleFullscreen(); };
-
         watch([showDataZoom], updateChart);
 
         // === 区间收益逻辑 ===
@@ -248,15 +258,12 @@ const GenericChart = {
             }
         });
 
-        onMounted(() => { window.__fsEsc.add(handleKeydown); });
         onUnmounted(() => {
             if (intervalListener) {
                 const instance = chartRef.value ? echarts.getInstanceByDom(chartRef.value) : null;
                 if (instance) instance.off('dataZoom', intervalListener);
                 intervalListener = null;
             }
-            window.__fsEsc.delete(handleKeydown);
-            document.body.style.overflow = '';
         });
 
         return { chartRef, showDataZoom, isFullscreen, toggleFullscreen, intervalCompare };
@@ -330,7 +337,7 @@ const HeatmapChart = {
     setup(props) {
         const heatmapShowData = ref(true);
         const heatmapMultiplier = ref(1);
-        const isFullscreen = ref(false);
+        const { isFullscreen, toggleFullscreen } = useFullscreen();
 
         const { chartRef, updateChart } = useChart(props, {
             buildOption: (extracted, colors) => {
@@ -355,22 +362,7 @@ const HeatmapChart = {
             }
         });
 
-        // [新增] 2026-05-17 全屏
-        const toggleFullscreen = () => {
-            isFullscreen.value = !isFullscreen.value;
-            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
-            setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
-        };
-        // [优化] 2026-05-17 全局ESC
-        const handleKeydown = () => { if (isFullscreen.value) toggleFullscreen(); };
-
         watch([heatmapShowData, heatmapMultiplier], () => { updateChart(); });
-
-        onMounted(() => { window.__fsEsc.add(handleKeydown); });
-        onUnmounted(() => {
-            window.__fsEsc.delete(handleKeydown);
-            document.body.style.overflow = '';
-        });
 
         return { chartRef, heatmapShowData, heatmapMultiplier, isFullscreen, toggleFullscreen };
     },
@@ -409,7 +401,7 @@ const StackedChart = {
         const stackNormalize = ref(false);
         const stackShowRaw = ref(true);
         const stackShowPercent = ref(false);
-        const isFullscreen = ref(false);
+        const { isFullscreen, toggleFullscreen } = useFullscreen();
 
         const { chartRef, updateChart } = useChart(props, {
             buildOption: (extracted, colors) => {
@@ -480,22 +472,7 @@ const StackedChart = {
             }
         });
 
-        // [新增] 2026-05-17 全屏
-        const toggleFullscreen = () => {
-            isFullscreen.value = !isFullscreen.value;
-            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
-            setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
-        };
-        // [优化] 2026-05-17 全局ESC + updateChart
-        const handleKeydown = () => { if (isFullscreen.value) toggleFullscreen(); };
-
         watch([stackNormalize, stackShowRaw, stackShowPercent], updateChart);
-
-        onMounted(() => { window.__fsEsc.add(handleKeydown); });
-        onUnmounted(() => {
-            window.__fsEsc.delete(handleKeydown);
-            document.body.style.overflow = '';
-        });
 
         return { chartRef, stackNormalize, stackShowRaw, stackShowPercent, isFullscreen, toggleFullscreen };
     },
@@ -526,14 +503,14 @@ const GridChart = {
         const chartRef = ref(null);
         let chartInstance = null;
         const showDataZoom = ref(false);
-        const isFullscreen = ref(false);
+        const { isFullscreen, toggleFullscreen } = useFullscreen();
 
         const getColors = () => {
             const colorPalettes = window.colorPalettes;
-            if (!colorPalettes) return ['#e74c3c', '#f39c12', '#af7ac5', '#5499c7', '#f4d03f', '#82e0aa'];
+            if (!colorPalettes) return DEFAULT_COLORS;
             const paletteKey = colorPalettes.groups?.chart || colorPalettes.global;
             const palette = colorPalettes.palettes?.[paletteKey];
-            return palette ? palette.colors : ['#e74c3c', '#f39c12', '#af7ac5', '#5499c7', '#f4d03f', '#82e0aa'];
+            return palette ? palette.colors : DEFAULT_COLORS;
         };
 
         const buildGridOption = () => {
@@ -579,30 +556,17 @@ const GridChart = {
 
         const handleResize = () => chartInstance?.resize();
 
-        // [新增] 2026-05-17 原位放大
-        const toggleFullscreen = () => {
-            isFullscreen.value = !isFullscreen.value;
-            document.body.style.overflow = isFullscreen.value ? 'hidden' : '';
-            setTimeout(() => chartInstance?.resize(), 100);
-        };
-
-        // [优化] 2026-05-17 全局ESC注册
-        const handleKeydown = () => { if (isFullscreen.value) toggleFullscreen(); };
-
         watch([showDataZoom], () => { if (chartInstance) chartInstance.setOption(buildGridOption(), true); });
 
         onMounted(() => {
             nextTick(() => initChart());
             window.addEventListener('resize', handleResize);
             window.addEventListener('colorSchemeChanged', initChart);
-            window.__fsEsc.add(handleKeydown);
         });
 
         onUnmounted(() => {
             window.removeEventListener('resize', handleResize);
             window.removeEventListener('colorSchemeChanged', initChart);
-            window.__fsEsc.delete(handleKeydown);
-            document.body.style.overflow = '';
             if (chartInstance) {
                 chartInstance.dispose();
             }
