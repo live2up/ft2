@@ -32,6 +32,12 @@ function useChart(props, chartOptions = {}) {
 
     const extractData = (charts) => {
         if (!charts?.series?.[0]) return null;
+        
+        // [调试] 打印原始数据结构
+        console.log('[extractData] 原始 charts 结构:', charts);
+        console.log('[extractData] series[0]:', charts.series[0]);
+        console.log('[extractData] series[0].data 前5个:', charts.series[0].data?.slice(0, 5));
+        
         return {
             chart_type: charts.series[0].type,
             series: charts.series,
@@ -105,8 +111,8 @@ const GenericChart = {
         const { chartRef, updateChart, refreshChart } = useChart(props, {
             buildOption: (extracted, colors) => {
                 const chartType = extracted.chart_type;
-                const series = extracted.series || [];
-                const option = { color: colors, series: series };
+                const rawSeries = extracted.series || [];  // 原始数据（不被修改）
+                const option = { color: colors, series: rawSeries };
                 if (['line', 'bar', 'area'].includes(chartType)) {
                     const isBarChart = chartType === 'bar';
                     const first = extracted.xAxis[0];
@@ -115,8 +121,68 @@ const GenericChart = {
                     option.xAxis = { type: xAxisType, boundaryGap: isBarChart, data: extracted.xAxis };
                     option.yAxis = { type: 'value', scale: true, boundaryGap: ['10%', '10%'] };
                     option.grid = { left: 8, right: 8, bottom: showDataZoom.value ? 50 : 5, top: 28, containLabel: true };
-                    option.legend = { data: series.map(s => ({ name: s.name, icon: 'rect' })), top: 5 };
+                    option.legend = { data: rawSeries.map(s => ({ name: s.name, icon: 'rect' })), top: 5 };
                     option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
+
+                    // === 区间收益：基于滚动区间将原始数据转为累计收益百分比 ===
+                    let displaySeries = rawSeries;  // 默认不转换
+                    if (intervalCompare.value) {
+                        const dataLen = rawSeries[0]?.data?.length || 0;
+                        // [修复] 如果没有启用滚动轴，默认用 0-100%（从第一个数据点开始）
+                        const startPercent = showDataZoom.value ? intervalStart.value : 0;
+                        const startIdx = Math.floor(dataLen * startPercent / 100);
+                        const baseIdx = startIdx > 0 ? startIdx - 1 : 0;  // 基准点：可见起点前一个数据点
+                        
+                        // [修复] pyecharts 2D 数组：从第一组数据提取日期填充 xAxis
+                        const allDates = (rawSeries[0]?.data || []).map(v => Array.isArray(v) && v.length >= 2 ? v[0] : '');
+                        option.xAxis = { type: 'category', boundaryGap: false, data: allDates };
+                        
+                        console.log('[区间收益] dataLen:', dataLen, 'startPercent:', startPercent, 'startIdx:', startIdx, 'baseIdx:', baseIdx);
+                        
+                        // [核心修复] 使用 Array.from() 创建新数组，避免 Proxy 对象引用问题
+                        displaySeries = Array.from(rawSeries).map((s, seriesIdx) => {
+                            // [核心修复] 处理 pyecharts 二维数组格式 [[日期, 净值], ...]
+                            const numericData = (s.data || []).map(v => {
+                                if (Array.isArray(v) && v.length >= 2) {
+                                    // pyecharts 格式：[日期, 净值]，取第二个元素
+                                    return parseFloat(v[1]);
+                                } else if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+                                    // 对象格式：{value: 1.05} 或 {date: '2020-01-02', value: 1.05}
+                                    return parseFloat(v.value || v[1] || 0);
+                                }
+                                // 一维数组：直接是数值
+                                return parseFloat(v);
+                            }).filter(v => !isNaN(v));  // 过滤掉 NaN
+                            
+                            const baseValue = numericData[baseIdx];
+                            
+                            console.log(`[区间收益] Series ${seriesIdx} (${s.name}): baseValue=${baseValue}, dataLength=${numericData.length}`);
+                            console.log(`[区间收益] Series ${seriesIdx} 前5个原始净值:`, numericData.slice(0, 5));
+                            
+                            // [核心修复] 计算累计收益率：所有数据点相对于基准点的收益率
+                            // baseIdx 之前的数据点填充 null（不显示）
+                            const returnsData = numericData.map((v, idx) => {
+                                if (idx < baseIdx) return null;  // 基准点之前的数据不显示
+                                if (!baseValue || baseValue === 0) return 0;  // 基准值为 0 时返回 0
+                                return parseFloat(((v - baseValue) / baseValue * 100).toFixed(4));
+                            });
+                            
+                            console.log(`[区间收益] Series ${seriesIdx} 转换后: 非null数据点=${returnsData.filter(v => v !== null).length}`);
+                            console.log(`[区间收益] Series ${seriesIdx} 前5个转换后收益:`, returnsData.slice(0, 5));
+                            console.log(`[区间收益] Series ${seriesIdx} 最后5个转换后收益:`, returnsData.slice(-5));
+                            
+                            // [核心修复] 创建全新的对象，避免 Proxy 引用问题
+                            return {
+                                name: s.name,
+                                type: s.type,
+                                data: returnsData,
+                                stack: s.stack
+                            };
+                        });
+                        
+                        // Y轴百分比标注
+                        option.yAxis = { type: 'value', scale: true, axisLabel: { formatter: '{value}%' } };
+                    }
 
                     if (showDataZoom.value && (chartType === 'line' || chartType === 'area' || chartType === 'bar')) {
                         // [区间收益] 开启时保留当前滑块位置，不重置为 0-100
@@ -130,29 +196,12 @@ const GenericChart = {
                         option.dataZoom = [];  // 显式清空,避免setOption合并残留
                     }
 
-                    // === 区间收益转换 ===
-                    if (intervalCompare.value) {
-                        const dataLen = series[0]?.data?.length || 0;
-                        const startIdx = Math.floor(dataLen * intervalStart.value / 100);
-                        const baseIdx = startIdx > 0 ? startIdx - 1 : 0;  // 基准点：前一个数据点
+                    // 统一构建 series（displaySeries 可能是原始数据或转换后的数据）
+                    option.series = displaySeries.map((s, i) => {
+                        // [调试] 打印最终传递给 ECharts 的数据
+                        console.log(`[ECharts] Series ${i} (${s.name}) 最终数据:`, s.data?.slice(0, 5));
+                        console.log(`[ECharts] Series ${i} (${s.name}) 数据类型:`, typeof s.data[0], Array.isArray(s.data[0]) ? 'array' : typeof s.data[0]);
                         
-                        series = series.map(s => {
-                            const baseValue = s.data?.[baseIdx];
-                            return {
-                                ...s,
-                                data: (s.data || []).map(v =>
-                                    typeof v === 'number' && typeof baseValue === 'number' && baseValue !== 0
-                                        ? parseFloat(((v - baseValue) / baseValue * 100).toFixed(4))
-                                        : v
-                                )
-                            };
-                        });
-                        
-                        // Y轴显示百分比
-                        option.yAxis.axisLabel = { formatter: '{value}%' };
-                    }
-
-                    option.series = series.map((s, i) => {
                         const baseOption = { name: s.name, type: chartType === 'area' ? 'line' : chartType, data: s.data };
                         if (s.stack) baseOption.stack = s.stack;
                         if (chartType === 'line' || chartType === 'area') {
@@ -160,9 +209,12 @@ const GenericChart = {
                             baseOption.showSymbol = false;
                             if (chartType === 'area') baseOption.areaStyle = { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: colors[i % colors.length] + '60' }, { offset: 1, color: colors[i % colors.length] + '10' }] } };
                         }
-                        if (isBarChart) baseOption.itemStyle = { color: series.length === 1 && !s.stack ? function(params) { return params.value >= 0 ? colors[0] : colors[1]; } : colors[i % colors.length], borderRadius: [4, 4, 0, 0] };
+                        if (isBarChart) baseOption.itemStyle = { color: rawSeries.length === 1 && !s.stack ? function(params) { return params.value >= 0 ? colors[0] : colors[1]; } : colors[i % colors.length], borderRadius: [4, 4, 0, 0] };
                         return baseOption;
                     });
+                    
+                    // [调试] 打印最终 option 配置
+                    console.log('[ECharts] 最终 option.series:', option.series.map(s => ({name: s.name, dataLength: s.data?.length, firstData: s.data?.[0]})));
                 } else if (chartType === 'scatter') {
                     if (extracted.xAxis.length) option.xAxis = { type: 'category', data: extracted.xAxis };
                     if (extracted.yAxis.length) option.yAxis = { type: 'category', data: extracted.yAxis };

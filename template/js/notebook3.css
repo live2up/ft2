@@ -616,12 +616,6 @@ body {
     border-radius: 6px;
 }
 
-/* 热力图单独设置更窄的宽度 */
-.cell-chart.heatmap .chart-controls {
-    width: 60px;
-    padding: 8px 8px;
-}
-
 .control-label {
     font-size: 12px;
     font-weight: 600;
