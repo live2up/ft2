@@ -97,6 +97,10 @@ const GenericChart = {
     setup(props) {
         const showDataZoom = ref(false);
         const isFullscreen = ref(false);
+        const intervalCompare = ref(false);  // 区间收益模式
+        const intervalStart = ref(0);         // dataZoom start%（缓存当前滑块位置）
+        const intervalEnd = ref(100);         // dataZoom end%
+        let intervalListener = null;          // dataZoom 事件监听器
 
         const { chartRef, updateChart, refreshChart } = useChart(props, {
             buildOption: (extracted, colors) => {
@@ -115,12 +119,37 @@ const GenericChart = {
                     option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
 
                     if (showDataZoom.value && (chartType === 'line' || chartType === 'area' || chartType === 'bar')) {
+                        // [区间收益] 开启时保留当前滑块位置，不重置为 0-100
+                        const dzStart = intervalCompare.value ? intervalStart.value : 0;
+                        const dzEnd = intervalCompare.value ? intervalEnd.value : 100;
                         option.dataZoom = [
-                            { type: 'inside', xAxisIndex: [0], start: 0, end: 100 },
-                            { type: 'slider', show: true, xAxisIndex: [0], start: 0, end: 100, bottom: 10, height: 20 }
+                            { type: 'inside', xAxisIndex: [0], start: dzStart, end: dzEnd },
+                            { type: 'slider', show: true, xAxisIndex: [0], start: dzStart, end: dzEnd, bottom: 10, height: 20 }
                         ];
                     } else if (chartType !== 'scatter') {
                         option.dataZoom = [];  // 显式清空,避免setOption合并残留
+                    }
+
+                    // === 区间收益转换 ===
+                    if (intervalCompare.value) {
+                        const dataLen = series[0]?.data?.length || 0;
+                        const startIdx = Math.floor(dataLen * intervalStart.value / 100);
+                        const baseIdx = startIdx > 0 ? startIdx - 1 : 0;  // 基准点：前一个数据点
+                        
+                        series = series.map(s => {
+                            const baseValue = s.data?.[baseIdx];
+                            return {
+                                ...s,
+                                data: (s.data || []).map(v =>
+                                    typeof v === 'number' && typeof baseValue === 'number' && baseValue !== 0
+                                        ? parseFloat(((v - baseValue) / baseValue * 100).toFixed(4))
+                                        : v
+                                )
+                            };
+                        });
+                        
+                        // Y轴显示百分比
+                        option.yAxis.axisLabel = { formatter: '{value}%' };
                     }
 
                     option.series = series.map((s, i) => {
@@ -154,13 +183,50 @@ const GenericChart = {
 
         watch([showDataZoom], updateChart);
 
+        // === 区间收益逻辑 ===
+        const handleDataZoom = () => {
+            const instance = chartRef.value ? echarts.getInstanceByDom(chartRef.value) : null;
+            if (instance) {
+                const opt = instance.getOption();
+                const zoom = (opt.dataZoom || []).find(z => z.type === 'slider') || (opt.dataZoom || [])[0];
+                intervalStart.value = zoom?.start ?? 0;
+                intervalEnd.value = zoom?.end ?? 100;
+            }
+            updateChart();
+        };
+
+        watch(intervalCompare, (val) => {
+            if (val) {
+                // 开启：先读取当前 dataZoom 位置，再注册监听
+                handleDataZoom();
+                if (!intervalListener) {
+                    intervalListener = handleDataZoom;
+                    const instance = chartRef.value ? echarts.getInstanceByDom(chartRef.value) : null;
+                    if (instance) instance.on('dataZoom', intervalListener);
+                }
+            } else {
+                // 关闭：移除监听，恢复原始数据
+                if (intervalListener) {
+                    const instance = chartRef.value ? echarts.getInstanceByDom(chartRef.value) : null;
+                    if (instance) instance.off('dataZoom', intervalListener);
+                    intervalListener = null;
+                }
+                updateChart();
+            }
+        });
+
         onMounted(() => { window.__fsEsc.add(handleKeydown); });
         onUnmounted(() => {
+            if (intervalListener) {
+                const instance = chartRef.value ? echarts.getInstanceByDom(chartRef.value) : null;
+                if (instance) instance.off('dataZoom', intervalListener);
+                intervalListener = null;
+            }
             window.__fsEsc.delete(handleKeydown);
             document.body.style.overflow = '';
         });
 
-        return { chartRef, showDataZoom, isFullscreen, toggleFullscreen };
+        return { chartRef, showDataZoom, isFullscreen, toggleFullscreen, intervalCompare };
     },
     template: `
         <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
@@ -173,6 +239,13 @@ const GenericChart = {
                     <div class="checkbox-group">
                         <label class="checkbox-item">
                             <input type="checkbox" v-model="showDataZoom">
+                            <span>启用</span>
+                        </label>
+                    </div>
+                    <div class="control-label">区间收益</div>
+                    <div class="checkbox-group">
+                        <label class="checkbox-item">
+                            <input type="checkbox" v-model="intervalCompare">
                             <span>启用</span>
                         </label>
                     </div>

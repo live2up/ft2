@@ -1,5 +1,5 @@
 /**
- * FT Table Component v1.6.20260331-5
+ * FT Table Component v1.6.20260519-1
  * 版本号说明：主版本。次版本。日期（YYYYMMDD）-修订号
  *
  * 新功能 v1.6：
@@ -23,6 +23,9 @@
  *
  * 优化 v1.6.20260331-5：
  * - 移除字段过滤逻辑，支持操作列等虚拟列（字段不存在于数据但有插槽的列）
+ *
+ * 同步 v1.6.20260519-1：
+ * - 从 itougu 项目同步，两组件内容一致，确认无差异，统一版本号
  * */
 
 const FtTable = {
@@ -752,6 +755,17 @@ const FtTable = {
       return value;
     };
 
+    // 解析列宽样式（参考 VxeTable 规范）
+    // width 支持三种格式：
+    //   数字 100      → 固定 100px
+    //   字符串 '20%'  → 百分比宽度
+    //   字符串 '100px' → 固定像素
+    const getColWidthStyle = (col) => {
+      if (!col.width) return null;
+      const w = typeof col.width === 'number' ? col.width + 'px' : col.width;
+      return { width: w, minWidth: w };
+    };
+
     // 获取单元格样式类
     const getCellClass = (value, col, colIndex, rowIndex) => {
       // 如果在热力图范围内，不应用正负颜色类（避免与热力图背景色冲突）
@@ -1093,6 +1107,7 @@ const FtTable = {
       handlePageChange,
       handlePageSizeChange,
       formatValue,
+      getColWidthStyle,
       getCellClass,
       isHeatmapCell,
       getHeatmapStyle,
@@ -1118,6 +1133,7 @@ const FtTable = {
                 v-for="(col, index) in displayCols" 
                 :key="col.field"
                 :class="[getFreezeClass(index), { 'no-sort': col.sort === false }]"
+                :style="getColWidthStyle(col)"
                 @click="col.sort !== false && handleSort(col)"
               >
                 {{ col.title }}
@@ -1136,7 +1152,7 @@ const FtTable = {
                 v-for="(col, colIndex) in displayCols" 
                 :key="col.field"
                 :class="[getFreezeClass(colIndex), getCellClass(row[col.field], col, colIndex, rowIndex), { 'heatmap-cell': isHeatmapCell(col, colIndex, rowIndex) }]"
-                :style="getHeatmapStyle(row[col.field], col, colIndex, rowIndex)"
+                :style="{ ...getColWidthStyle(col), ...getHeatmapStyle(row[col.field], col, colIndex, rowIndex) }"
               >
                 <!-- 有插槽：调用插槽渲染 -->
                 <template v-if="col.slot && $slots[col.slot]">
