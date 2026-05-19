@@ -146,8 +146,8 @@ const GenericChart = {
                     const isDateStr = typeof first === 'string' && /^\d{4}-\d{2}-\d{2}/.test(first);
                     const xAxisType = isDateStr ? 'time' : 'category';
                     option.xAxis = { type: xAxisType, boundaryGap: isBarChart, data: extracted.xAxis };
-                    option.yAxis = { type: 'value', scale: true, boundaryGap: ['10%', '10%'] };
-                    option.grid = { left: 8, right: 8, bottom: showDataZoom.value ? 50 : 5, top: 28, containLabel: true };
+                    option.yAxis = { type: 'value', scale: true };
+                    option.grid = { left: 8, right: 40, bottom: showDataZoom.value ? 50 : 5, top: 28, containLabel: true };
                     option.legend = { data: rawSeries.map(s => ({ name: s.name, icon: 'rect' })), top: 5 };
                     option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
 
@@ -479,7 +479,7 @@ const StackedChart = {
                     };
                 }
                 const isBarChart = chartType === 'bar';
-                const option = { color: colors, xAxis: { type: 'category', boundaryGap: isBarChart, data: extracted.xAxis }, yAxis: yAxisConfig, grid: { left: 8, right: 8, bottom: 5, top: 28, containLabel: true }, legend: { data: series.map(s => ({ name: s.name, icon: 'rect' })), top: 5 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: tooltipFormatter }, series: displaySeries.map((s, i) => { const baseOption = { name: s.name, type: chartType === 'area' ? 'line' : chartType, data: s.data, stack: s.stack, label: { show: showRaw || showPercentStack, position: 'inside', formatter: labelFormatter(i) } }; if (chartType === 'line' || chartType === 'area') { baseOption.smooth = true; baseOption.showSymbol = false; if (chartType === 'area') baseOption.areaStyle = { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: colors[i % colors.length] + '60' }, { offset: 1, color: colors[i % colors.length] + '10' }] } }; } if (isBarChart) baseOption.itemStyle = { color: colors[i % colors.length], borderRadius: [4, 4, 0, 0] }; return baseOption; }) };
+                const option = { color: colors, xAxis: { type: 'category', boundaryGap: isBarChart, data: extracted.xAxis }, yAxis: yAxisConfig, grid: { left: 8, right: 40, bottom: 5, top: 28, containLabel: true }, legend: { data: series.map(s => ({ name: s.name, icon: 'rect' })), top: 5 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: tooltipFormatter }, series: displaySeries.map((s, i) => { const baseOption = { name: s.name, type: chartType === 'area' ? 'line' : chartType, data: s.data, stack: s.stack, label: { show: showRaw || showPercentStack, position: 'inside', formatter: labelFormatter(i) } }; if (chartType === 'line' || chartType === 'area') { baseOption.smooth = true; baseOption.showSymbol = false; if (chartType === 'area') baseOption.areaStyle = { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: colors[i % colors.length] + '60' }, { offset: 1, color: colors[i % colors.length] + '10' }] } }; } if (isBarChart) baseOption.itemStyle = { color: colors[i % colors.length], borderRadius: [4, 4, 0, 0] }; return baseOption; }) };
                 return option;
             }
         });
@@ -554,37 +554,45 @@ const GridChart = {
                 option.legend.icon = 'rect';
             }
 
-            // [适配] xAxis 补 type: pyecharts 输出无 type, ECharts 需显式声明
+            // [适配] xAxis 补 type + axisLabel 防溢出
             if (option.xAxis && Array.isArray(option.xAxis)) {
                 option.xAxis = option.xAxis.map(x => {
                     if (!x.type && x.data) {
                         const first = String(x.data[0] || '');
                         x.type = /^\d{4}-\d{2}-\d{2}/.test(first) ? 'time' : 'category';
                     }
+                    x.axisLabel = { margin: 8, ...(x.axisLabel || {}) };
                     return x;
                 });
             }
 
-            // [适配] yAxis 补 type
+            // [适配] yAxis 补 type + scale
             if (option.yAxis && Array.isArray(option.yAxis)) {
-                option.yAxis = option.yAxis.map(y => ({ type: 'value', ...y }));
+                option.yAxis = option.yAxis.map(y => ({ type: 'value', scale: true, ...y }));
             }
 
             if (option.grid && Array.isArray(option.grid)) {
-                option.grid = option.grid.map(g => ({ ...g, left: 8, right: 8, containLabel: true }));
+                option.grid = option.grid.map(g => ({ ...g, left: 8, right: 40, top: g.top, height: g.height }));
             }
             if (option.series && Array.isArray(option.series)) {
                 option.series.forEach(s => { if (s.type === 'line') { s.smooth = true; s.showSymbol = false; } });
             }
 
             if (showDataZoom.value) {
-                const gridCount = option.grid ? option.grid.length : 1;
+                const gridLen = (option.grid || []).length;
+                const allIdx = Array.from({length: gridLen}, (_, i) => i);
                 const dc = [];
-                for (let i = 0; i < gridCount; i++) {
-                    dc.push({ type: 'inside', xAxisIndex: [i], start: 0, end: 100 });
-                    dc.push({ type: 'slider', show: true, xAxisIndex: [i], start: 0, end: 100, bottom: 10, height: 20 });
+                // 一个 inside 联动所有 grid
+                if (allIdx.length) dc.push({ type: 'inside', xAxisIndex: allIdx, start: 0, end: 100 });
+                // 只在最后 grid 底部显示滑块，联动所有 grid
+                if (allIdx.length) {
+                    dc.push({ type: 'slider', show: true, xAxisIndex: allIdx,
+                              start: 0, end: 100, bottom: 6, height: 16 });
+                    const lastGrid = option.grid[gridLen - 1];
+                    lastGrid.bottom = 22;
+                    delete lastGrid.height;
                 }
-                if (dc.length > 0) option.dataZoom = dc;
+                option.dataZoom = dc;
             } else {
                 option.dataZoom = [];
             }
