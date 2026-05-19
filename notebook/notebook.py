@@ -102,7 +102,39 @@ class Notebook:
             self.children.append(cell)
     
     def chartg(self, chart_type, data, height=200, **kwargs):
-        """添加 Grid 图表（累加模式）"""
+        """
+        添加 Grid 图表（累加模式）
+
+        连续多次 chartg() 调用自动合并为一个 Grid 布局输出，
+        适用于同一时间轴的多个数据纵向堆叠（如净值+仓位+信号）。
+
+        Args:
+            chart_type: 图表类型 ('line', 'bar', 'area', 'kline')
+            data: 图表数据（格式同 chart()）
+            height: 该子图高度（px），用于计算 Grid 中的占比
+            **kwargs: 同 chart()
+
+        触发合并时机:
+            - 调用任何非 chartg 的 cell 方法时
+            - 退出 with nb.section(...) 时
+            - 调用 export_html() 时
+
+        Grid 特性:
+            - 所有子图共享 xAxis，独立 yAxis
+            - datazoom 滑块联动全部子图
+            - 各子图的 legend 分别定位在各自 grid 顶部
+
+        Examples:
+            nb.chartg('line', nav_data, height=300, title='净值')
+            nb.chartg('bar', pos_data, height=150, title='仓位')
+            nb.chartg('line', sig_data, height=100, title='信号')
+            # 自动合并为一个 Grid 输出
+
+            with nb.section("综合分析"):
+                nb.chartg('line', nav_data, height=300)
+                nb.chartg('bar', vol_data, height=150)
+            # 退出 section 时触发合并
+        """
         self._chartg_buffer.append({
             'type': chart_type,
             'data': data,

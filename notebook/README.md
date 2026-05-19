@@ -300,6 +300,25 @@ nb.export_html()
 | kline | `{'xAxis': [日期], 'series': [{'data': [[开,收,低,高]]}]}` |
 | scatter | 仅标准格式 dict |
 
+### Grid 多图叠加（chartg）
+
+**适用场景**：同一时间轴的多个数据纵向堆叠，如净值 + 仓位 + 信号。
+
+```python
+nb.chartg('line', nav_data, height=300)           # 净值曲线
+nb.chartg('bar', pos_data, height=150)             # 仓位水平
+nb.chartg('line', sig_data, height=100)            # 交易信号
+# 自动合并为一个 Grid 布局输出
+```
+
+**Grid 特性：**
+- 所有子图**共享 xAxis**，各自独立 yAxis
+- datazoom 滑块**联动全部子图**
+- 各子图的 legend 分别定位在各自 grid 顶部
+- 最后一个子图显示 x 轴标签，其余自动隐藏
+
+**触发合并时机**：下一个非 chartg 调用、退出 section、或 export_html 时。|
+
 ### 表格可选参数
 
 ```python

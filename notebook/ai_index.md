@@ -273,13 +273,20 @@ nb.chart('line', data,
 ### 4. Grid 图表 `nb.chartg()`
 
 将多个图表垂直合并为一个 Grid 布局，**累加模式**。
+主要用于**同一时间轴的多个数据纵向堆叠**（如净值+仓位+信号）。
 
 ```python
-nb.chartg('line', data1, height=200, yaxis_opts={'min_': 0.9})
-nb.chartg('bar', data2, height=150)
+nb.chartg('line', nav_data, height=300, yaxis_opts={'min_': 0.9})
+nb.chartg('bar', pos_data, height=150)
 # 在下一个 cell 或 section 退出时自动合并输出
 # 总高度 = sum(heights)
 ```
+
+**Grid 特性：**
+- 所有子图**共享 xAxis**（联动的 datazoom），各自独立 yAxis
+- datazoom 滑块**联动全部子图**
+- 各子图的 legend 分别定位在各自 grid 顶部
+- 最后一个子图显示 x 轴标签
 
 **触发合并的时机：**
 - 调用任何非 chartg 的 cell 方法时
@@ -442,14 +449,16 @@ with nb.section("分组收益"):
 nb.export_html()
 ```
 
-### Grid 多图合并
+### Grid 多图合并（同时间轴)
 
 ```python
-nb = Notebook("多指标分析")
+nb = Notebook("策略综合分析")
 
-nb.chartg('line', nav_data, height=300, yaxis_opts={'min_': 0.9})
-nb.chartg('bar', return_data, height=200)
-# 自动合并为一个 Grid 布局输出
+# 同一时间轴的多个指标纵向堆叠
+nb.chartg('line', nav_data, height=300, yaxis_opts={'min_': 0.9})  # 净值
+nb.chartg('bar', pos_data, height=150)                               # 仓位
+nb.chartg('line', sig_data, height=100)                              # 信号
+# 自动合并为一个 Grid 布局，datazoom 联动全部
 
 nb.export_html()
 ```
