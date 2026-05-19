@@ -35,13 +35,25 @@ function useChart(props, chartOptions = {}) {
 
     const extractData = (charts) => {
         if (!charts?.series?.[0]) return null;
-        
+
+        // [修复] 2026-05-19 pyecharts Line/Bar add_yaxis 合并 xAxis+y 为 2D 格式
+        // 检测: data[0] 是 [x, y] 两元素数组 → 转回 1D (x 已在 xAxis.data 中)
+        const series = (charts.series || []).map(s => {
+            const d = s.data;
+            if (!Array.isArray(d) || d.length === 0) return s;
+            const first = d[0];
+            if (Array.isArray(first) && first.length === 2 && s.type !== 'candlestick') {
+                return { ...s, data: d.map(item => item[1]) };
+            }
+            return s;
+        });
+
         return {
-            chart_type: charts.series[0].type,
-            series: charts.series,
+            chart_type: series[0]?.type || charts.series[0].type,
+            series: series,
             xAxis: charts.xAxis?.[0]?.data || [],
             yAxis: charts.yAxis?.[0]?.data || [],
-            raw: charts
+            raw: { ...charts, series }
         };
     };
 
@@ -520,18 +532,50 @@ const GridChart = {
             const option = JSON.parse(JSON.stringify(charts));
             option.color = colors;
             option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
+
+            // [适配] pyecharts Grid 输出适配: legend 数组 → 每个对应其 grid 位置
+            // legend[i] 对应 grid[i], 放在各自 grid 顶部
+            if (option.legend && Array.isArray(option.legend)) {
+                const grids = option.grid || [];
+                option.legend = option.legend.map((leg, i) => {
+                    const g = grids[i] || {};
+                    const topPct = g.top ? parseFloat(g.top) - 3 : 5;
+                    return {
+                        data: (leg.data || []).map(d => ({
+                            name: typeof d === 'string' ? d : (d.name || d),
+                            icon: 'rect'
+                        })),
+                        top: Math.max(0, topPct) + '%',
+                        left: 'center',
+                        textStyle: { fontSize: 11 }
+                    };
+                });
+            } else if (option.legend) {
+                option.legend.icon = 'rect';
+            }
+
+            // [适配] xAxis 补 type: pyecharts 输出无 type, ECharts 需显式声明
+            if (option.xAxis && Array.isArray(option.xAxis)) {
+                option.xAxis = option.xAxis.map(x => {
+                    if (!x.type && x.data) {
+                        const first = String(x.data[0] || '');
+                        x.type = /^\d{4}-\d{2}-\d{2}/.test(first) ? 'time' : 'category';
+                    }
+                    return x;
+                });
+            }
+
+            // [适配] yAxis 补 type
+            if (option.yAxis && Array.isArray(option.yAxis)) {
+                option.yAxis = option.yAxis.map(y => ({ type: 'value', ...y }));
+            }
+
             if (option.grid && Array.isArray(option.grid)) {
                 option.grid = option.grid.map(g => ({ ...g, left: 8, right: 8, containLabel: true }));
-            }
-            if (option.yAxis && Array.isArray(option.yAxis)) {
-                option.yAxis = option.yAxis.map(y => ({ ...y, scale: true, boundaryGap: ['10%', '10%'] }));
             }
             if (option.series && Array.isArray(option.series)) {
                 option.series.forEach(s => { if (s.type === 'line') { s.smooth = true; s.showSymbol = false; } });
             }
-            if (option.legend && Array.isArray(option.legend)) {
-                option.legend = option.legend.map(leg => ({ ...leg, icon: 'rect' }));
-            } else if (option.legend) { option.legend.icon = 'rect'; }
 
             if (showDataZoom.value) {
                 const gridCount = option.grid ? option.grid.length : 1;
@@ -542,7 +586,7 @@ const GridChart = {
                 }
                 if (dc.length > 0) option.dataZoom = dc;
             } else {
-                option.dataZoom = [];  // 显式清空,避免残留
+                option.dataZoom = [];
             }
             return option;
         };
@@ -582,8 +626,8 @@ const GridChart = {
                     <div ref="chartRef" class="chart-container chart-container-main"
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
                     <div class="chart-toolbar">
-                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">⇄</button>
-                        <button class="tool-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
+                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">&#x21C4;</button>
+                        <button class="tool-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">&#x26F6;</button>
                     </div>
                 </div>
             </div>

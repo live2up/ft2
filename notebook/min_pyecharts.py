@@ -382,6 +382,10 @@ MinPie     = make_min_class(Pie)
 
 def minimize_option(option_dict: dict) -> dict:
     """对已有的 option dict 做精简(不需要创建 MinChart 实例)"""
+    # [优化] 2026-05-19 Grid 布局自动走 minimize_grid_option
+    if option_dict.get('grid'):
+        return minimize_grid_option(option_dict)
+
     series = option_dict.get('series', [])
     chart_key = None
     if series:
@@ -399,3 +403,185 @@ def minimize_option(option_dict: dict) -> dict:
     result = _strip_reactive_opts(result, option_dict)
     result = _preserve_structural(result, option_dict)
     return result
+
+
+_GRID_BASELINE_CACHE: dict = {}
+
+
+def _build_grid_baseline(charts_config: list) -> dict:
+    """
+    为 Grid 布局构建同结构 baseline
+    
+    核心思路: baseline 必须和实际输出同构(同数量子图、同类型、同位置),
+    只是数据为最小值。这样 deep_diff 才能正确剥离所有 v5 默认值。
+    
+    Args:
+        charts_config: [{'type': str, 'height': int, 'kwargs': dict}, ...]
+    """
+    from pyecharts.charts import Grid
+
+    cache_key = tuple((c['type'], c['height']) for c in charts_config)
+    if cache_key in _GRID_BASELINE_CACHE:
+        return _GRID_BASELINE_CACHE[cache_key]
+
+    heights = [c['height'] for c in charts_config]
+    total = sum(heights)
+
+    baseline_grid = Grid()
+    top = 5
+    for i, cfg in enumerate(charts_config):
+        ChartClass = CHART_MAP.get(cfg['type'])
+        if not ChartClass:
+            ChartClass = Line
+        c = ChartClass()
+        _add_minimal_data(c)
+        core_opts = _build_core_opts(c)
+        c.set_global_opts(**core_opts)
+
+        height_percent = heights[i] / total * 100
+        baseline_grid.add(
+            c,
+            grid_opts=opts.GridOpts(
+                pos_top=f"{top}%",
+                height=f"{height_percent - 5}%",
+            )
+        )
+        top += height_percent
+
+    baseline_dict = json.loads(baseline_grid.dump_options())
+    _GRID_BASELINE_CACHE[cache_key] = baseline_dict
+    return baseline_dict
+
+
+def minimize_grid_option(option_dict: dict, charts_config: list = None) -> dict:
+    """
+    对 Grid 布局的 option dict 做精简
+    
+    和 minimize_option 的区别: Grid 包含多种 series type,
+    需要构建"同结构 baseline"(同数量子图、同类型、同位置)才能正确 diff。
+    
+    Args:
+        option_dict: Grid 布局的 option dict(含 grid/xAxis/yAxis/series 等)
+        charts_config: 子图配置列表,用于构建同结构 baseline
+            [{'type': str, 'height': int, 'kwargs': dict}, ...]
+            如果为 None, 从 option_dict 中自动推断
+    
+    [新增] 2026-05-19 替代 _build_grid 的手工合并方式,
+    让 pyecharts Grid 输出后走 deep_diff 精简, 维护边界更清晰
+    """
+    if charts_config is None:
+        charts_config = _infer_charts_config(option_dict)
+
+    baseline = _build_grid_baseline(charts_config)
+    result = deep_diff(option_dict, baseline)
+    result = _strip_reactive_opts(result, option_dict)
+    result = _preserve_structural(result, option_dict)
+    result = _preserve_grid_structural(result, option_dict)
+    return result
+
+
+_GRID_STRUCTURAL_KEYS = {'gridIndex', 'xAxisIndex', 'yAxisIndex'}
+
+
+def _preserve_grid_structural(result: dict, current: dict) -> dict:
+    """
+    Grid 布局结构性字段保护
+
+    gridIndex/xAxisIndex/yAxisIndex 即使和 baseline 相同也不能移除,
+    因为 ECharts 默认值为 0, Grid 多子图场景下必须显式指定索引。
+    grid 数组也必须保留(含 top/height 定位信息)。
+    yAxis/xAxis 条目即使被完全精简也需要保留 gridIndex 占位,
+    否则 ECharts 无法将轴与 grid 正确关联。
+
+    [修复] 2026-05-19 新增 grid top/height 和 xAxis/yAxis type 的保护
+    旧逻辑只在 result_grids 为空时才补充 top/height,但 deep_diff 后 grid
+    数组非空(如 containLabel 存活),导致 top/height 永远补不回来。
+    同样 xAxis/yAxis 的 type 字段被 deep_diff 剥离后也需补回。
+    """
+    _GRID_LAYOUT_KEYS = {'top', 'height', 'containLabel'}
+    _GRID_AXIS_KEYS = {'type', 'name', 'gridIndex'}
+
+    for key in ('series', 'xAxis', 'yAxis'):
+        current_list = current.get(key, [])
+        result_list = result.get(key, [])
+        for i, ci in enumerate(current_list):
+            if not isinstance(ci, dict):
+                continue
+            if i >= len(result_list):
+                if any(k in ci for k in _GRID_STRUCTURAL_KEYS):
+                    result_list.append({k: ci[k] for k in _GRID_STRUCTURAL_KEYS if k in ci})
+            elif isinstance(result_list[i], dict):
+                for sk in _GRID_STRUCTURAL_KEYS:
+                    if sk in ci and sk not in result_list[i]:
+                        result_list[i][sk] = ci[sk]
+        if current_list and key in ('xAxis', 'yAxis'):
+            # 确保 xAxis/yAxis 条目数 >= current, 每个至少保留 gridIndex
+            if not isinstance(result.get(key), list):
+                result[key] = []
+            result_list = result[key]
+            for i, ci in enumerate(current_list):
+                if i >= len(result_list):
+                    result_list.append({'gridIndex': ci.get('gridIndex', i)})
+                else:
+                    # [修复] 补回 type 等关键字段
+                    for ak in _GRID_AXIS_KEYS:
+                        if ak in ci and ak not in result_list[i]:
+                            result_list[i][ak] = ci[ak]
+
+    # [修复] 确保 grid 数组的 top/height/containLabel 不被剥离
+    current_grids = current.get('grid', [])
+    if isinstance(current_grids, list) and current_grids:
+        if not isinstance(result.get('grid'), list):
+            result['grid'] = []
+        # 保证 grid 条目数一致, 逐项合并 layout 字段
+        for i, g in enumerate(current_grids):
+            if i >= len(result['grid']):
+                result['grid'].append(
+                    {k: v for k, v in g.items() if k in _GRID_LAYOUT_KEYS}
+                )
+            elif isinstance(result['grid'][i], dict):
+                for lk in _GRID_LAYOUT_KEYS:
+                    if lk in g and lk not in result['grid'][i]:
+                        result['grid'][i][lk] = g[lk]
+
+    return result
+
+
+def _infer_charts_config(option_dict: dict) -> list:
+    """
+    从 Grid option dict 中推断 charts_config(自动推断模式)
+    
+    从 series 类型 + grid 数量反推子图配置,
+    用于没有显式 charts_config 的场景(如 CellBuilder.pyecharts 传入 Grid)
+    """
+    series_list = option_dict.get('series', [])
+    grid_list = option_dict.get('grid', [])
+
+    if not series_list:
+        return []
+
+    n_grids = len(grid_list) or 1
+    default_height = 200
+
+    configs = []
+    for i in range(n_grids):
+        if i < len(series_list):
+            series_type = series_list[i].get('type', 'line')
+        else:
+            series_type = 'line'
+        chart_key = _SERIES_TYPE_TO_CHART_KEY.get(series_type, 'line')
+
+        grid_item = grid_list[i] if i < len(grid_list) else {}
+        height_str = grid_item.get('height', '45%')
+        try:
+            height_val = int(float(height_str.rstrip('%')) * default_height / 45)
+        except (ValueError, TypeError):
+            height_val = default_height
+
+        configs.append({
+            'type': chart_key,
+            'height': height_val,
+            'kwargs': {}
+        })
+
+    return configs

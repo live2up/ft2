@@ -679,7 +679,9 @@ class CellBuilder:
 def _build_grid(charts_config, total_height=600):
     """
     构建网格布局（多个图表垂直排列）
-    
+
+    使用 pyecharts Grid 组织布局, 再经 min_pyecharts 精简输出。
+
     Args:
         charts_config: 图表配置列表
             [
@@ -687,30 +689,39 @@ def _build_grid(charts_config, total_height=600):
                 ...
             ]
         total_height: 总高度
-    
+
     Returns:
-        ECharts option 字典
+        ECharts option 字典（已精简）
+
+    [优化] 2026-05-19 改用 pyecharts Grid 替代手工合并,
+    让 min_pyecharts 的 minimize_grid_option 负责精简, 维护边界更清晰
     """
     import json
-    
+    from pyecharts.charts import Grid
+    from pyecharts import options as opts
+    from .min_pyecharts import minimize_grid_option
+
+    _init_chart_registry()
+
     heights = [c['height'] for c in charts_config]
     total = sum(heights)
-    chart_options_list = []
-    
-    # 构建每个图表的 option
+
+    grid = Grid()
+    top = 5
     for cfg in charts_config:
         chart_type = cfg['type']
         data = cfg['data']
         kwargs = cfg.get('kwargs', {})
         series_opts = kwargs.pop('series_opts', {})
-        
+
         spec = CHART_REGISTRY.get(chart_type)
         if not spec:
             raise ValueError(f"不支持的图表类型: {chart_type}")
-        
+
         chart = spec['builder'](data, series_opts)
-        
-        # 应用全局配置
+
+        chart.set_global_opts(tooltip_opts=opts.TooltipOpts(trigger='axis'))
+
         global_opts_keys = [
             'title_opts', 'legend_opts', 'tooltip_opts',
             'xaxis_opts', 'yaxis_opts', 'datazoom_opts',
@@ -719,70 +730,18 @@ def _build_grid(charts_config, total_height=600):
         global_opts = {k: kwargs.pop(k) for k in global_opts_keys if k in kwargs}
         if global_opts:
             chart.set_global_opts(**{k: _create_opts(k, v) for k, v in global_opts.items()})
-        
-        chart_options = json.loads(chart.dump_options())
-        chart_options_list.append(chart_options)
-    
-    # 合并为 grid 布局
-    option = {
-        'grid': [],
-        'xAxis': [],
-        'yAxis': [],
-        'series': [],
-        'tooltip': {'trigger': 'axis'},
-        'legend': [],
-        'title': []
-    }
-    
-    top = 5
-    for i, chart_opt in enumerate(chart_options_list):
-        grid_height = heights[i]
-        height_percent = grid_height / total * 100
-        
-        # Grid 配置
-        option['grid'].append({
-            'top': f"{top}%",
-            'height': f"{height_percent - 5}%",
-            'containLabel': True
-        })
-        
-        # 标题配置
-        titles = chart_opt.get('title', [])
-        if not isinstance(titles, list):
-            titles = [titles] if titles else []
-        for title in titles:
-            title_copy = title.copy()
-            title_copy['top'] = f"{top}%"
-            option['title'].append(title_copy)
-        
-        # 图例配置
-        legends = chart_opt.get('legend', [])
-        if not isinstance(legends, list):
-            legends = [legends]
-        for legend in legends:
-            legend_copy = legend.copy()
-            legend_copy['top'] = f"{top}%"
-            option['legend'].append(legend_copy)
-        
-        # X轴配置
-        for xaxis in chart_opt.get('xAxis', []):
-            xaxis_copy = xaxis.copy()
-            xaxis_copy['gridIndex'] = i
-            option['xAxis'].append(xaxis_copy)
-        
-        # Y轴配置
-        for yaxis in chart_opt.get('yAxis', []):
-            yaxis_copy = yaxis.copy()
-            yaxis_copy['gridIndex'] = i
-            option['yAxis'].append(yaxis_copy)
-        
-        # 系列配置
-        for series in chart_opt.get('series', []):
-            series_copy = series.copy()
-            series_copy['xAxisIndex'] = i
-            series_copy['yAxisIndex'] = i
-            option['series'].append(series_copy)
-        
+
+        height_percent = cfg['height'] / total * 100
+        grid.add(
+            chart,
+            grid_opts=opts.GridOpts(
+                pos_top=f"{top}%",
+                height=f"{height_percent - 5}%",
+                is_contain_label=True,
+            )
+        )
         top += height_percent
-    
-    return option
+
+    option_dict = json.loads(grid.dump_options())
+    option_dict = minimize_grid_option(option_dict, charts_config)
+    return option_dict
