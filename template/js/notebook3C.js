@@ -290,7 +290,7 @@ const GenericChart = {
                     <div class="chart-toolbar">
                         <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">⇄</button>
                         <button class="tool-btn" :class="{ active: intervalCompare }" @click="intervalCompare = !intervalCompare" title="区间收益">%</button>
-                        <button class="tool-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
+                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
                     </div>
                 </div>
             </div>
@@ -395,7 +395,7 @@ const HeatmapChart = {
                             <option value="0.01">1/100</option>
                         </select>
                         <button class="tool-btn" :class="{ active: heatmapShowData }" @click="heatmapShowData = !heatmapShowData" title="显示数据">T</button>
-                        <button class="tool-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
+                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
                     </div>
                 </div>
             </div>
@@ -499,7 +499,7 @@ const StackedChart = {
                         <button class="tool-btn" :class="{ active: stackNormalize }" @click="stackNormalize = !stackNormalize" title="归一化">N</button>
                         <button class="tool-btn" :class="{ active: stackShowRaw }" @click="stackShowRaw = !stackShowRaw" title="显示数值">V</button>
                         <button class="tool-btn" :class="{ active: stackShowPercent }" @click="stackShowPercent = !stackShowPercent" title="显示百分比">%</button>
-                        <button class="tool-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
+                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
                     </div>
                 </div>
             </div>
@@ -635,7 +635,7 @@ const GridChart = {
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
                     <div class="chart-toolbar">
                         <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">&#x21C4;</button>
-                        <button class="tool-btn" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">&#x26F6;</button>
+                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">&#x26F6;</button>
                     </div>
                 </div>
             </div>

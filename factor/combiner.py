@@ -62,6 +62,14 @@ class OrthogonalizationMethod(Enum):
     GRAM_SCHMIDT = "gram_schmidt"          # 格拉姆-施密特正交化
 
 
+class StandardizationMethod(Enum):
+    """因子标准化方法枚举"""
+    NONE = "none"                          # 不标准化（直接用原始值）
+    ZSCORE = "zscore"                      # 横截面Z-score标准化
+    RANK = "rank"                          # 横截面排名标准化（百分位）
+    MINMAX = "minmax"                      # 横截面Min-Max标准化（归一化到[0,1]）
+
+
 @dataclass
 class CombinationResult:
     """组合结果数据类"""
@@ -69,6 +77,7 @@ class CombinationResult:
     weights: Dict[str, float]              # 各因子权重
     method: CombinationMethod              # 组合方法
     orthogonalization: OrthogonalizationMethod  # 正交化方法
+    standardization: StandardizationMethod      # 标准化方法
     metrics: Dict[str, Any]                # 组合指标
     timestamp: datetime = datetime.now()   # 时间戳
 
@@ -803,11 +812,78 @@ class FactorCombiner:
         weights = {name: float(w) for name, w in zip(factor_names, weights_raw)}
         return weights
     
+    def standardize(self,
+                    factor: pd.DataFrame,
+                    method: StandardizationMethod = StandardizationMethod.ZSCORE,
+                    clip: float = 3.0) -> pd.DataFrame:
+        """
+        因子横截面标准化
+        
+        对每个时间截面（每行）独立进行标准化，去除因子量纲差异。
+        这是多因子组合前的必要步骤，否则量纲不同的因子直接加权
+        会被量纲大的因子主导。
+        
+        Args:
+            factor: 因子值DataFrame，index为日期，columns为标的代码
+            method: 标准化方法
+            clip: Z-score截尾阈值（仅ZSCORE方法有效），默认3.0即±3σ
+            
+        Returns:
+            pd.DataFrame: 标准化后的因子值
+        """
+        if method == StandardizationMethod.NONE:
+            return factor.copy()
+            
+        result = factor.copy()
+        
+        if method == StandardizationMethod.ZSCORE:
+            # 横截面Z-score: (x - mean) / std，每行独立计算
+            row_mean = result.mean(axis=1, skipna=True)
+            row_std = result.std(axis=1, ddof=1, skipna=True)
+            
+            # 避免除以0
+            row_std = row_std.replace(0, np.nan)
+            
+            result = result.sub(row_mean, axis=0).div(row_std, axis=0)
+            
+            # 截尾去极值
+            if clip is not None and clip > 0:
+                result = result.clip(-clip, clip)
+                
+            # NaN填充为0（中庸得分）
+            result = result.fillna(0)
+            
+        elif method == StandardizationMethod.RANK:
+            # 横截面排名百分位: rank / N，映射到[0, 1]
+            result = result.rank(axis=1, pct=True, na_option='keep')
+            # 映射到[-1, 1]区间，均值接近0
+            result = result * 2 - 1
+            result = result.fillna(0)
+            
+        elif method == StandardizationMethod.MINMAX:
+            # 横截面Min-Max: (x - min) / (max - min)，映射到[0, 1]
+            row_min = result.min(axis=1, skipna=True)
+            row_max = result.max(axis=1, skipna=True)
+            row_range = row_max - row_min
+            
+            # 避免除以0
+            row_range = row_range.replace(0, np.nan)
+            
+            result = result.sub(row_min, axis=0).div(row_range, axis=0)
+            result = result.fillna(0.5)  # NaN填充为中值
+            
+        else:
+            raise ValueError(f"不支持的标准化方法: {method}")
+            
+        return result
+    
     def combine(self,
                factor_names: List[str],
                method: CombinationMethod = CombinationMethod.EQUAL_WEIGHT,
                orthogonalization: OrthogonalizationMethod = OrthogonalizationMethod.NONE,
+               standardization: StandardizationMethod = StandardizationMethod.ZSCORE,
                lookforward: int = 1,
+               clip: float = 3.0,
                **kwargs) -> CombinationResult:
         """
         组合因子
@@ -816,7 +892,9 @@ class FactorCombiner:
             factor_names: 因子名称列表
             method: 组合方法
             orthogonalization: 正交化方法
+            standardization: 标准化方法（默认Z-score，组合前去除量纲差异）
             lookforward: 未来期数
+            clip: Z-score截尾阈值（仅ZSCORE方法有效），默认3.0
             **kwargs: 额外参数
             
         Returns:
@@ -826,7 +904,7 @@ class FactorCombiner:
             raise ValueError("需要至少一个因子进行组合")
             
         # 检查缓存
-        cache_key = f"{'_'.join(sorted(factor_names))}_{method.value}_{orthogonalization.value}"
+        cache_key = f"{'_'.join(sorted(factor_names))}_{method.value}_{orthogonalization.value}_{standardization.value}"
         if cache_key in self._combination_results:
             logger.info(f"使用缓存的组合结果: {cache_key}")
             return self._combination_results[cache_key]
@@ -840,6 +918,10 @@ class FactorCombiner:
             aligned_factors = [orthogonalized[name] for name in factor_names]
         else:
             aligned_factors, aligned_returns = self._align_data(factor_names)
+            
+        # 横截面标准化（组合前去除量纲差异）
+        aligned_factors = [self.standardize(f, method=standardization, clip=clip)
+                          for f in aligned_factors]
             
         # 计算权重
         weights = self.calculate_weights(factor_names, method, lookforward, **kwargs)
@@ -871,6 +953,7 @@ class FactorCombiner:
             weights=weights,
             method=method,
             orthogonalization=orthogonalization,
+            standardization=standardization,
             metrics=metrics
         )
         

@@ -24,8 +24,8 @@ from .base import (
 from .calculator import FactorCalculator, DataSource, FactorDependencyGraph, create_sample_data
 from .validator import FactorValidator, ValidationMetric, ValidationResult, validation_metric
 from .combiner import (
-    FactorCombiner, CombinationMethod, OrthogonalizationMethod, 
-    CombinationResult
+    FactorCombiner, CombinationMethod, OrthogonalizationMethod,
+    StandardizationMethod, CombinationResult
 )
 from .manager import (
     FactorManager, StorageFormat, FactorStatus, 
@@ -58,6 +58,7 @@ __all__ = [
     'FactorCombiner',
     'CombinationMethod',
     'OrthogonalizationMethod',
+    'StandardizationMethod',
     'CombinationResult',
     
     # 管理器
