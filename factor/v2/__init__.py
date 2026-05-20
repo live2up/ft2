@@ -1,10 +1,12 @@
 """
-factor.v2 - 因子挖掘 V2 模块
+factor.v2 - 因子挖掘 V2 模块（完全自包含，零 V1 依赖）
 
 V2 增量重构，地基先行、网格优先：
+- base: Factor/FactorRegistry/FactorFrequency 等基类（V2 自有）
 - scheduler: 调仓日生成抽象层
 - allocator: 权重分配器抽象层
 - pipeline: 因子→回测桥接层
+- validator: 因子检验器（IC/IR/衰减/命中率）
 - cache_store: 因子值持久化缓存
 - grid_search: 因子参数网格搜索（Phase A 主力工具）
 - bo_search: 贝叶斯优化（网格之后的可选增强）
@@ -12,11 +14,20 @@ V2 增量重构，地基先行、网格优先：
 - gp_evaluator: GP 多频率适应度评估器
 
 设计原则：
-1. 所有新增模块在 factor/v2/ 下，不影响 V1 factor/ 模块
+1. factor/v2/ 为完全自包含的独立包，无任何对 factor/（V1）的 import 依赖
 2. 网格搜索保留为基线工具，新方法可插拔
 3. 遵循 AGENTS.md 注释规范
 """
 
+from .base import (
+    Factor,
+    FactorRegistry,
+    FactorMeta,
+    FactorMetadata,
+    FactorCategory,
+    FactorFrequency,
+    factor as factor_decorator,
+)
 from .scheduler import (
     RebalanceScheduler,
     FixedScheduler,
@@ -61,8 +72,22 @@ from .gp_evaluator import (
     GPMultiFreqEvaluator,
     GPEvaluationResult,
 )
+from .validator import (
+    FactorValidator,
+    ValidationMetric,
+    ValidationResult,
+    validation_metric,
+)
 
 __all__ = [
+    # 基类（V2 自包含）
+    'Factor',
+    'FactorRegistry',
+    'FactorMeta',
+    'FactorMetadata',
+    'FactorCategory',
+    'FactorFrequency',
+    'factor_decorator',
     # 调度器
     'RebalanceScheduler',
     'FixedScheduler',
@@ -99,4 +124,9 @@ __all__ = [
     # GP 评估器
     'GPMultiFreqEvaluator',
     'GPEvaluationResult',
+    # 检验器（V2 自包含）
+    'FactorValidator',
+    'ValidationMetric',
+    'ValidationResult',
+    'validation_metric',
 ]

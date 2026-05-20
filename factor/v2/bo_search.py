@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from factor.base import Factor
+from .base import Factor
 
 from .scheduler import FixedScheduler, IntervalScheduler, RebalanceScheduler
 from .allocator import TopNEqualWeight, WeightAllocator

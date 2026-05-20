@@ -398,11 +398,11 @@ class FactorPipeline:
             result.annual_volatility = float(period_vol * np.sqrt(annual_factor))
 
             # 夏普比率（年化）
-            rf_period = self.rf_annual / periods_per_year
+            rf_period = self.rf_annual / annual_factor
             excess = period_returns - rf_period
             if result.annual_volatility > 0:
                 result.sharpe_ratio = float(
-                    (np.mean(excess) / max(period_vol, 1e-10)) * np.sqrt(periods_per_year)
+                    (np.mean(excess) / max(period_vol, 1e-10)) * np.sqrt(annual_factor)
                 )
 
             # 索提诺比率：只考虑下行波动
@@ -411,7 +411,7 @@ class FactorPipeline:
                 downside_vol = np.std(downside, ddof=1)
                 if downside_vol > 0:
                     result.sortino_ratio = float(
-                        (np.mean(period_returns) / downside_vol) * np.sqrt(periods_per_year)
+                        (np.mean(period_returns) / downside_vol) * np.sqrt(annual_factor)
                     )
 
         # 最大回撤

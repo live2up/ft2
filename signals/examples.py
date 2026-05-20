@@ -7,11 +7,13 @@ signals 模块完整使用示例
 """
 
 import sys
+import os
 import pandas as pd
 import numpy as np
 from datetime import datetime
 
-sys.path.insert(0, r'd:\01-Doc\程序化\ft2')
+# [修复] 2026-05-20 消除硬编码绝对路径，改为 os.path 相对路径
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 
 from signals import (
     Signal, SignalType, SignalDirection,

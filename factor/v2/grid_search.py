@@ -41,9 +41,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from factor.base import Factor, FactorFrequency
-from factor.calculator import FactorCalculator
-from factor.validator import FactorValidator
+from .base import Factor, FactorFrequency
+from .validator import FactorValidator
 
 from .scheduler import (
     RebalanceScheduler,
