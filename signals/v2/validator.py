@@ -113,7 +113,8 @@ import pandas as pd
 from typing import Dict, List, Optional, Callable, Any, Union
 from dataclasses import dataclass, field
 
-sys.path.insert(0, r'D:\01-Doc\程序化\ft2')
+# [修复] 2026-05-20 消除硬编码绝对路径，改为 os.path 相对路径
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
 
 from .expression import Expression, TreeNode
 
