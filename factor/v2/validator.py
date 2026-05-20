@@ -212,8 +212,21 @@ class FactorValidator:
 
         lookforward = lookforward or self.ic_lookforward
 
-        factor_aligned = self.factor_values.iloc[:-lookforward] if lookforward > 0 else self.factor_values
-        returns_aligned = self.future_returns.iloc[lookforward:] if lookforward > 0 else self.future_returns
+        # [修复] 2026-05-20 多期IC对齐：lookforward>1 时累积N期前瞻收益
+        # 旧实现 factor[:-N] vs future_returns[N:]，只偏移日期范围，未真正使用多期收益
+        # 导致 decay_rate() 中所有 lookforward 实际都算的是1日IC，衰减曲线无意义
+        # 新实现：用1期前瞻收益反向滚动计算N期累积收益，再直接对齐
+        if lookforward == 1:
+            factor_aligned = self.factor_values.iloc[:-1]
+            returns_aligned = self.future_returns.iloc[1:]
+        else:
+            # fw_cum[t] = (1+r[t→t+1])*(1+r[t+1→t+2])*...*(1+r[t+N-1→t+N]) - 1
+            fw_cum = (1.0 + self.future_returns).iloc[::-1].rolling(
+                window=lookforward, min_periods=lookforward
+            ).apply(np.prod, raw=True).iloc[::-1] - 1.0
+            tail = lookforward - 1
+            factor_aligned = self.factor_values.iloc[:-tail] if tail > 0 else self.factor_values.iloc[:-1]
+            returns_aligned = fw_cum.iloc[:-tail] if tail > 0 else fw_cum.iloc[1:]
 
         common_dates = factor_aligned.index.intersection(returns_aligned.index)
         if len(common_dates) == 0:
@@ -400,8 +413,17 @@ class FactorValidator:
         if not self._validate_data():
             return np.nan
 
-        factor_aligned = self.factor_values.iloc[:-lookforward] if lookforward > 0 else self.factor_values
-        returns_aligned = self.future_returns.iloc[lookforward:] if lookforward > 0 else self.future_returns
+        # [修复] 2026-05-20 同 IC 对齐逻辑：lookforward>1 时累积N期前瞻收益
+        if lookforward == 1:
+            factor_aligned = self.factor_values.iloc[:-1]
+            returns_aligned = self.future_returns.iloc[1:]
+        else:
+            fw_cum = (1.0 + self.future_returns).iloc[::-1].rolling(
+                window=lookforward, min_periods=lookforward
+            ).apply(np.prod, raw=True).iloc[::-1] - 1.0
+            tail = lookforward - 1
+            factor_aligned = self.factor_values.iloc[:-tail] if tail > 0 else self.factor_values.iloc[:-1]
+            returns_aligned = fw_cum.iloc[:-tail] if tail > 0 else fw_cum.iloc[1:]
 
         common_dates = factor_aligned.index.intersection(returns_aligned.index)
         if len(common_dates) == 0:

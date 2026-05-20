@@ -93,6 +93,11 @@ class FactorGridConfig:
     # 是否计算 IC 辅助指标
     calc_ic: bool = True
     
+    # [新增] 2026-05-20 OOS 样本外验证比例
+    # 0.0 = 全量 in-sample（无样本外），0.3 = 后30%数据留作验证
+    # 设为 0.0 可恢复旧行为（纯探索模式）
+    oos_ratio: float = 0.3
+    
     # 缓存配置
     cache_dir: Optional[str] = None   # 缓存目录，None 表示不使用缓存
     
@@ -132,7 +137,13 @@ class GridSearchResult:
     avg_turnover: float = 0.0
     win_rate: float = 0.0
     
-    # 排序键（默认用 Sharpe）
+    # [新增] 2026-05-20 OOS 样本外绩效
+    oos_sharpe_ratio: float = 0.0
+    oos_annual_return: float = 0.0
+    oos_max_drawdown: float = 0.0
+    is_sharpe_ratio: float = 0.0     # IS Sharpe（与 sharpe_ratio 重复时使用）
+    
+    # 排序键（默认用 OOS Sharpe，无 OOS 时回退 IS Sharpe）
     rank_score: float = 0.0
     
     def __repr__(self) -> str:
@@ -178,7 +189,8 @@ class FactorGridSearch:
 
         # 未来收益率（用于 IC 计算）
         if future_returns is not None:
-            self.future_returns = future_returns
+            # [修复] 2026-05-20 防御性 copy()，避免外部修改影响内部
+            self.future_returns = future_returns.copy()
         else:
             # [新增] 2026-05-20 09-20 自动从 returns 生成 future_returns
             # shift(-1) 将下期收益对齐到当期因子值日期
@@ -221,11 +233,28 @@ class FactorGridSearch:
         n_topn = len(self.config.topn_grid)
         total = n_param * n_freq * n_topn
 
+        # [新增] 2026-05-20 OOS 样本外验证：按时间切分 IS 和 OOS 区间
+        oos_ratio = self.config.oos_ratio
+        n_total_rows = len(self.returns)
+        if oos_ratio > 0 and n_total_rows > 120:
+            split_idx = int(n_total_rows * (1.0 - oos_ratio))
+            split_date = self.returns.index[split_idx]
+            returns_is = self.returns.iloc[:split_idx]
+            returns_oos = self.returns.iloc[split_idx:]
+        else:
+            split_date = None
+            returns_is = self.returns
+            returns_oos = None
+
         if verbose:
             print(f"[网格搜索] 因子: {self.config.factor_class.__name__}")
             print(f"  参数组合: {n_param}, 频率: {n_freq}, TopN: {n_topn}")
             print(f"  总计: {total} 次回测")
             print(f"  数据区间: {self.returns.index[0].date()} → {self.returns.index[-1].date()}")
+            if split_date:
+                print(f"  IS/OOS 切分: {split_date.date()}  (OOS={oos_ratio:.0%})")
+            else:
+                print(f"  OOS: 关闭 (全量 in-sample)")
 
         count = 0
         self.results = []
@@ -240,9 +269,10 @@ class FactorGridSearch:
                     print(f"  [跳过] {param_key}: 因子值不足")
                 continue
 
-            # 4) 计算 IC 辅助指标（只算一次）
+            # 4) 计算 IC 辅助指标（只算一次，只用 IS 区间避免泄漏）
             if self.config.calc_ic:
-                ic_mean, ir_value, half_life = self._calc_ic_metrics(factor_values)
+                fv_is = factor_values.loc[factor_values.index <= split_date] if split_date else factor_values
+                ic_mean, ir_value, half_life = self._calc_ic_metrics(fv_is)
             else:
                 ic_mean, ir_value, half_life = 0.0, 0.0, None
 
@@ -263,15 +293,39 @@ class FactorGridSearch:
                         else:
                             allocator = TopNEqualWeight(top_n)
 
-                        # 构建 Pipeline 并评估
-                        pipeline = FactorPipeline(
-                            returns=self.returns,
+                        # IS 评估
+                        pipeline_is = FactorPipeline(
+                            returns=returns_is,
                             scheduler=scheduler,
                             allocator=allocator,
                             cost_rate=self.config.cost_rate,
                             rf_annual=self.config.rf_annual,
                         )
-                        bt_result = pipeline.evaluate(factor_values)
+                        bt_is = pipeline_is.evaluate(
+                            factor_values.loc[:split_date] if split_date else factor_values
+                        )
+
+                        # OOS 评估
+                        oos_sharpe = 0.0
+                        oos_return = 0.0
+                        oos_mdd = 0.0
+                        if returns_oos is not None:
+                            try:
+                                pipeline_oos = FactorPipeline(
+                                    returns=returns_oos,
+                                    scheduler=scheduler,
+                                    allocator=allocator,
+                                    cost_rate=self.config.cost_rate,
+                                    rf_annual=self.config.rf_annual,
+                                )
+                                bt_oos = pipeline_oos.evaluate(
+                                    factor_values.loc[split_date:]
+                                )
+                                oos_sharpe = bt_oos.sharpe_ratio
+                                oos_return = bt_oos.annual_return
+                                oos_mdd = bt_oos.max_drawdown
+                            except Exception:
+                                pass
 
                         # 汇总结果
                         result = GridSearchResult(
@@ -279,53 +333,62 @@ class FactorGridSearch:
                             factor_params=params,
                             frequency=freq,
                             top_n=top_n,
-                            sharpe_ratio=bt_result.sharpe_ratio,
-                            annual_return=bt_result.annual_return,
-                            max_drawdown=bt_result.max_drawdown,
-                            calmar_ratio=bt_result.calmar_ratio,
-                            total_return=bt_result.total_return,
-                            annual_volatility=bt_result.annual_volatility,
+                            sharpe_ratio=oos_sharpe if oos_sharpe != 0 else bt_is.sharpe_ratio,
+                            annual_return=oos_return if oos_return != 0 else bt_is.annual_return,
+                            max_drawdown=oos_mdd if oos_mdd != 0 else bt_is.max_drawdown,
+                            calmar_ratio=bt_is.calmar_ratio,
+                            total_return=bt_is.total_return,
+                            annual_volatility=bt_is.annual_volatility,
                             ic_mean=ic_mean,
                             ir=ir_value,
                             half_life=half_life,
-                            n_rebalances=bt_result.n_rebalances,
-                            avg_turnover=bt_result.avg_turnover,
-                            win_rate=bt_result.win_rate,
-                            rank_score=bt_result.sharpe_ratio,  # 默认按 Sharpe 排序
+                            n_rebalances=bt_is.n_rebalances,
+                            avg_turnover=bt_is.avg_turnover,
+                            win_rate=bt_is.win_rate,
+                            oos_sharpe_ratio=oos_sharpe,
+                            oos_annual_return=oos_return,
+                            oos_max_drawdown=oos_mdd,
+                            is_sharpe_ratio=bt_is.sharpe_ratio,
+                            rank_score=oos_sharpe if oos_sharpe != 0 else bt_is.sharpe_ratio,
                         )
                         self.results.append(result)
 
                         if verbose and total <= 50:
-                            print(f"Sharpe={bt_result.sharpe_ratio:.2f}")
+                            is_str = f"IS={bt_is.sharpe_ratio:.2f}"
+                            oos_str = f" OOS={oos_sharpe:.2f}" if oos_sharpe != 0 else ""
+                            print(f"{is_str}{oos_str}")
 
                     except Exception as e:
                         if verbose:
                             print(f"失败: {e}")
                         continue
 
-        # 6) 排序
+        # 6) 排序：默认按 OOS Sharpe；无 OOS 时回退 IS Sharpe
+        default_sort = 'oos_sharpe_ratio' if split_date else 'sharpe_ratio'
+        if sort_by == 'sharpe_ratio' and split_date:
+            sort_by = default_sort
         if sort_by in GridSearchResult.__dataclass_fields__:
             self.results.sort(key=lambda r: getattr(r, sort_by), reverse=not ascending)
-            # 更新 rank_score 为排序字段值
             for r in self.results:
                 r.rank_score = getattr(r, sort_by)
         else:
-            # 默认按 sharpe_ratio 降序
-            self.results.sort(key=lambda r: r.sharpe_ratio, reverse=True)
+            self.results.sort(key=lambda r: getattr(r, default_sort), reverse=True)
             for r in self.results:
-                r.rank_score = r.sharpe_ratio
+                r.rank_score = getattr(r, default_sort)
 
         elapsed = time.time() - start_time
         if verbose:
+            sort_label = 'OOS Sharpe' if split_date else 'IS Sharpe'
             print(f"\n[完成] {len(self.results)} 个有效结果，耗时 {elapsed:.1f}s")
             if self.results:
                 best = self.results[0]
-                print(f"  最优: {best.factor_name} freq={best.frequency} "
-                      f"topn={best.top_n} Sharpe={best.sharpe_ratio:.2f}")
+                oos_info = f" OOS_Sharpe={best.oos_sharpe_ratio:.2f}" if split_date else ""
+                print(f"  最优({sort_label}): {best.factor_name} freq={best.frequency} "
+                      f"topn={best.top_n} Sharpe={best.sharpe_ratio:.2f}{oos_info}")
 
         return self.results
 
-    def best(self, sort_by: str = 'sharpe_ratio') -> Optional[GridSearchResult]:
+    def best(self, sort_by: str = 'oos_sharpe_ratio') -> Optional[GridSearchResult]:
         """获取最优结果
         
         Args:
