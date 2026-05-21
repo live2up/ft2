@@ -146,7 +146,7 @@ const GenericChart = {
                     const isDateStr = typeof first === 'string' && /^\d{4}-\d{2}-\d{2}/.test(first);
                     const xAxisType = isDateStr ? 'time' : 'category';
                     option.xAxis = { type: xAxisType, boundaryGap: isBarChart, data: extracted.xAxis };
-                    option.yAxis = { type: 'value', scale: true };
+                    option.yAxis = { type: 'value', scale: !isBarChart };  // [修复] 2026-05-21 柱状图必须 scale:false 才能让 min:0 生效，否则 auto-scale 会忽略 min 导致柱子不从 0 起步
                     option.grid = { left: 8, right: 40, bottom: showDataZoom.value ? 50 : 5, top: 28, containLabel: true };
                     option.legend = { data: rawSeries.map(s => ({ name: s.name, icon: 'rect' })), top: 5 };
                     option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
@@ -199,7 +199,7 @@ const GenericChart = {
                         });
                         
                         // Y轴百分比标注
-                        option.yAxis = { type: 'value', scale: true, axisLabel: { formatter: '{value}%' } };
+                        option.yAxis = { type: 'value', scale: !isBarChart, axisLabel: { formatter: '{value}%' } };
                     }
 
                     if (showDataZoom.value && (chartType === 'line' || chartType === 'area' || chartType === 'bar')) {
@@ -568,7 +568,7 @@ const GridChart = {
 
             // [适配] yAxis 补 type + scale
             if (option.yAxis && Array.isArray(option.yAxis)) {
-                option.yAxis = option.yAxis.map(y => ({ type: 'value', scale: true, ...y }));
+                option.yAxis = option.yAxis.map(y => ({ type: 'value', ...y }));  // [修复] 2026-05-21 移除 scale:true，默认 scale:false 让柱状图从 0 起步；折线图如需 auto-scale 可显式传 scale_: true
             }
 
             if (option.grid && Array.isArray(option.grid)) {

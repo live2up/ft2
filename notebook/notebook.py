@@ -397,12 +397,19 @@ class Notebook:
         """导出为JSON"""
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
     
-    def export_html(self, name: str = None, template_path: str = None):
+    # [新增] 2026-05-21 CDN 远程前缀常量，与本地模式对应
+    _CDN_PREFIX = 'https://cdn.jsdelivr.net/gh/livepu/ft2@master/template'
+
+    def export_html(self, name: str = None, template_path: str = None,
+                    local_assets: bool = False):
         """
         导出为HTML文件
         
         :param name: 输出文件名（不含扩展名），默认使用标题
         :param template_path: 自定义模板路径
+        :param local_assets: 是否使用本地资源文件
+            - False (默认): 使用远程 CDN 资源
+            - True: 使用本地 template 目录的资源（file:// 协议），方便离线测试
         :return: 输出文件路径
         """
         self._flush_chartg()
@@ -417,6 +424,14 @@ class Notebook:
             template_dir = Path(template_path).parent
             template_path = str(template_path)
         
+        # [新增] 2026-05-21 根据 local_assets 计算 asset_prefix
+        # 远程模式: CDN URL 前缀
+        # 本地模式: file:// + template 绝对路径，浏览器可直接读取本地文件
+        if local_assets:
+            asset_prefix = Path(template_dir).as_uri()
+        else:
+            asset_prefix = self._CDN_PREFIX
+        
         env = Environment(loader=FileSystemLoader(str(template_dir)))
         template = env.get_template(Path(template_path).name)
         
@@ -429,7 +444,11 @@ class Notebook:
         }
         data_json = json.dumps(data, ensure_ascii=False, default=str, indent=2)
         
-        html_content = template.render(title=self.nb_title, data_json=data_json)
+        html_content = template.render(
+            title=self.nb_title, 
+            data_json=data_json,
+            asset_prefix=asset_prefix
+        )
         
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
