@@ -35,19 +35,40 @@ from pyecharts.commons.utils import remove_key_with_none_value
 
 _STRUCTURAL_PRESERVE_KEYS = {'type'}
 
+# [重构] 2026-05-21 基于路径的数据保护白名单
+# 精确到层级，避免误伤配置 key
+_DATA_PATHS = frozenset({
+    ('series', 'data'),        # series[i].data → 核心数据
+    ('xAxis', 'data'),         # xAxis[i].data → X 轴标签
+    ('yAxis', 'data'),         # yAxis[i].data → Y 轴数据
+    ('legend', 'data'),        # legend[i].data → 图例名称
+    ('title', 'text'),         # title[i].text → 标题文本
+    ('series', 'name'),        # series[i].name → 系列名称
+})
 
-def deep_diff(current: dict, baseline: dict) -> dict:
-    """递归比较 current 与 baseline,只保留差异部分(剥离 v5 默认值)"""
+
+def deep_diff(current: dict, baseline: dict, path=()) -> dict:
+    """递归比较 current 与 baseline,只保留差异部分(剥离 v5 默认值)
+    
+    [重构] 2026-05-21 基于路径保护核心数据
+    """
     result = {}
     for key, value in current.items():
+        current_path = path + (key,)
+        
+        # 核心数据路径 → 直接保留，不做 diff
+        if current_path in _DATA_PATHS:
+            result[key] = value
+            continue
+        
         if key not in baseline:
             result[key] = value
         elif isinstance(value, dict) and isinstance(baseline[key], dict):
-            sub = deep_diff(value, baseline[key])
+            sub = deep_diff(value, baseline[key], current_path)
             if sub:
                 result[key] = sub
         elif isinstance(value, list) and isinstance(baseline[key], list):
-            diff_list = _diff_list(value, baseline[key])
+            diff_list = _diff_config_list(value, baseline[key], current_path)
             if diff_list:
                 result[key] = diff_list
         elif value != baseline[key]:
@@ -55,9 +76,18 @@ def deep_diff(current: dict, baseline: dict) -> dict:
     return result
 
 
-def _preserve_structural(result: dict, current: dict) -> dict:
-    """保留结构性必需字段:即使 diff 结果中缺失,也从 current 强制拷回"""
+def _preserve_structural(result: dict, current: dict, path=()) -> dict:
+    """保留结构性必需字段:即使 diff 结果中缺失,也从 current 强制拷回
+    
+    [重构] 2026-05-21 同步加入 path 参数，跳过数据路径
+    """
     for key, value in current.items():
+        current_path = path + (key,)
+        
+        # 数据路径已在 deep_diff 中保留，无需处理
+        if current_path in _DATA_PATHS:
+            continue
+        
         if key in _STRUCTURAL_PRESERVE_KEYS and key not in result:
             result[key] = value
         elif isinstance(value, list) and key in result and isinstance(result[key], list):
@@ -65,25 +95,23 @@ def _preserve_structural(result: dict, current: dict) -> dict:
             result_items = result[key]
             for ri, ci in zip(result_items, current_items):
                 if isinstance(ci, dict) and isinstance(ri, dict):
-                    _preserve_structural(ri, ci)
+                    _preserve_structural(ri, ci, current_path)
         elif isinstance(value, dict) and key in result and isinstance(result[key], dict):
-            _preserve_structural(result[key], value)
+            _preserve_structural(result[key], value, current_path)
     return result
 
 
-def _diff_list(current_list: list, baseline_list: list) -> list:
-    """逐项比较列表,按 series type 匹配对应类型的 baseline"""
-    # [修复] 2026-05-21 纯数据列表（非 dict 元素）直接保留，不做 diff
-    # series.data、xAxis.data 等核心数据是用户显式传入的，不应该被剥离
-    if current_list and not isinstance(current_list[0], dict):
-        return current_list
+def _diff_config_list(current_list: list, baseline_list: list, parent_path: tuple) -> list:
+    """逐项比较配置列表(元素为 dict),按 series type 匹配对应类型的 baseline
     
+    [重构] 2026-05-21 接收 parent_path，传给 deep_diff
+    """
     result = []
     for i, item in enumerate(current_list):
         if isinstance(item, dict):
             base_item = _pick_series_baseline(item, i, baseline_list)
             if isinstance(base_item, dict):
-                sub = deep_diff(item, base_item)
+                sub = deep_diff(item, base_item, parent_path)
                 if sub:
                     result.append(sub)
             else:
