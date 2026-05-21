@@ -73,6 +73,11 @@ def _preserve_structural(result: dict, current: dict) -> dict:
 
 def _diff_list(current_list: list, baseline_list: list) -> list:
     """逐项比较列表,按 series type 匹配对应类型的 baseline"""
+    # [修复] 2026-05-21 纯数据列表（非 dict 元素）直接保留，不做 diff
+    # series.data、xAxis.data 等核心数据是用户显式传入的，不应该被剥离
+    if current_list and not isinstance(current_list[0], dict):
+        return current_list
+    
     result = []
     for i, item in enumerate(current_list):
         if isinstance(item, dict):
