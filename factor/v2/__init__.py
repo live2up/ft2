@@ -43,6 +43,14 @@ from .allocator import (
 from .pipeline import (
     FactorPipeline,
     BacktestResult,
+    BacktestSchedule,
+)
+from .combiner import (
+    FactorCombiner,
+    EqualWeightCombiner,
+    FixedWeightCombiner,
+    ExpandingICCombiner,
+    cross_section_zscore,
 )
 from .cache_store import (
     FactorCacheStore,
@@ -101,6 +109,13 @@ __all__ = [
     # 管道
     'FactorPipeline',
     'BacktestResult',
+    'BacktestSchedule',
+    # 组合器
+    'FactorCombiner',
+    'EqualWeightCombiner',
+    'FixedWeightCombiner',
+    'ExpandingICCombiner',
+    'cross_section_zscore',
     # 缓存
     'FactorCacheStore',
     # 网格搜索

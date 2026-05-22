@@ -12,9 +12,9 @@
 ----------------------
   对每个调仓日 d_i:
     1. 取 d_i 日因子值 → Allocator 分配权重 w_i
-    2. 计算 d_i → d_{i+1} 持有期收益 = sum(w_i * period_returns)
+    2. 逐日计算 d_i→d_{i+1} 持仓收益
     3. 扣除换手成本 = sum(|w_i - w_{i-1}|) / 2 * cost_rate
-    4. 更新净值
+    4. 更新日频净值
   最终计算 Sharpe/MaxDD/Calmar 等指标
 
 使用方式：
@@ -34,6 +34,16 @@
 --------
 依赖 .scheduler（RebalanceScheduler）和 .allocator（WeightAllocator），
 依赖 numpy + pandas，不依赖 ft2 core/signals 模块。
+
+[重构] 2026-05-22 evaluate() 分阶段重构：
+  - _build_schedule(): 调度日生成与对齐 + 预计算权重
+  - _accumulate_nav(): 逐日净值累积
+  - _calc_daily_return(): 单日持仓收益（NaN 填 0，不跳过日期）
+  - _calc_metrics(): 指标计算
+  修复 3 个 P1 bug：
+  - P1-1: 最后一个调仓日后收益丢失 → 追加处理末尾持有期
+  - P1-2: 初始建仓成本被归一化消除 → 先记录 NAV 再扣成本
+  - P1-3: NaN 跳过整天导致 NAV 缺口 → NaN 填 0 保留日期
 """
 
 import numpy as np
@@ -47,39 +57,59 @@ from .allocator import WeightAllocator, TopNEqualWeight
 
 
 @dataclass
+class BacktestSchedule:
+    """回测调度计划
+
+    [新增] 2026-05-22 evaluate() 分阶段重构的中间数据结构。
+    将调度日生成、因子对齐、权重预计算等步骤的结果封装，
+    使 _accumulate_nav() 只需关心"给定权重和收益率，计算净值"。
+
+    Attributes:
+        returns: 对齐后的日收益率 DataFrame
+        factor_values: 对齐后的因子值 DataFrame
+        rebalance_dates: 有效调仓日列表（按时间升序）
+        weights_at_rebalance: 每个调仓日的权重字典 {date: np.ndarray}
+    """
+    returns: pd.DataFrame
+    factor_values: pd.DataFrame
+    rebalance_dates: List[pd.Timestamp]
+    weights_at_rebalance: Dict[pd.Timestamp, np.ndarray]
+
+
+@dataclass
 class BacktestResult:
     """因子回测结果
-    
+
     包含净值曲线和全套绩效指标，可直接用于 Notebook 报告输出。
     """
     # 净值
     nav_series: pd.Series = field(default_factory=pd.Series)
-    
+
     # 收益指标
     total_return: float = 0.0          # 总收益率
     annual_return: float = 0.0         # 年化收益率
     annual_volatility: float = 0.0     # 年化波动率
-    
+
     # 风险调整收益
     sharpe_ratio: float = 0.0          # 夏普比率（年化，无风险利率=0）
     sortino_ratio: float = 0.0         # 索提诺比率
     calmar_ratio: float = 0.0          # 卡玛比率
-    
+
     # 回撤
     max_drawdown: float = 0.0          # 最大回撤（小数，如 -0.15）
     avg_drawdown: float = 0.0          # 平均回撤
-    
+
     # 交易
     turnover_cost_ratio: float = 0.0   # 换手成本占总收益比例
     avg_turnover: float = 0.0          # 平均单边换手率
-    
+
     # 胜率
-    win_rate: float = 0.0              # 月度胜率
+    win_rate: float = 0.0              # 日度胜率
     profit_loss_ratio: float = 0.0     # 盈亏比
-    
+
     # 年度收益
     yearly_returns: Dict[int, float] = field(default_factory=dict)
-    
+
     # 元信息
     n_rebalances: int = 0              # 调仓次数
     start_date: str = ""               # 起始日期
@@ -98,7 +128,7 @@ class BacktestResult:
             '卡玛比率': f'{self.calmar_ratio:.2f}',
             '最大回撤': f'{self.max_drawdown:.2%}',
             '平均回撤': f'{self.avg_drawdown:.2%}',
-            '月度胜率': f'{self.win_rate:.1%}',
+            '日度胜率': f'{self.win_rate:.1%}',
             '盈亏比': f'{self.profit_loss_ratio:.2f}',
             '平均换手率': f'{self.avg_turnover:.2%}',
             '换手成本占比': f'{self.turnover_cost_ratio:.2%}',
@@ -109,24 +139,30 @@ class BacktestResult:
 
 class FactorPipeline:
     """因子→调仓→回测 完整桥接
-    
+
     将因子横截面值转化为实际持仓和回测绩效，是 V2 最核心的新增模块。
-    
+
     职责：
-    - 在调仓日取因子值 → 分配权重 → 计算持仓收益 → 累加净值
+    - 在调仓日取因子值 → 分配权重 → 逐日计算持仓收益 → 累加日频净值
     - 扣除交易成本（换手成本）
     - 计算全套回测指标
     - 支持多频率一键对比
+
+    [重构] 2026-05-22 evaluate() 分阶段重构，修复 P1-1/2/3：
+    - _build_schedule(): 调度日 + 因子对齐 + 预计算权重
+    - _accumulate_nav(): 逐日净值累积（含末尾期 + NaN 填 0 + 成本顺序修正）
+    - _calc_daily_return(): 单日持仓收益
+    - _calc_metrics(): 指标计算
     """
 
     def __init__(self,
                  returns: pd.DataFrame,
                  scheduler: RebalanceScheduler,
                  allocator: WeightAllocator,
-                 cost_rate: float = 0.001,
+                 cost_rate: float = 0.0,
                  rf_annual: float = 0.0):
         """初始化 Pipeline
-        
+
         Args:
             returns: 各标的逐日收益率 DataFrame
                      index=日期（pd.DatetimeIndex 或可转的字符串索引），
@@ -136,7 +172,7 @@ class FactorPipeline:
                      即如果调仓日在 T，持仓收益 = returns.loc[T+1:T_next].sum()
             scheduler: 调仓日生成器
             allocator: 权重分配器
-            cost_rate: 单边交易成本率（默认 0.001 = 10bp）
+            cost_rate: 单边交易成本率（默认 0.0 = 不扣成本）
             rf_annual: 年化无风险利率（默认 0）
         """
         # 确保 index 是 DatetimeIndex
@@ -150,119 +186,56 @@ class FactorPipeline:
         self.cost_rate = cost_rate
         self.rf_annual = rf_annual
 
+    # ================= 公开接口 =================
+
     def evaluate(self,
                  factor_values: pd.DataFrame) -> BacktestResult:
-        """评估因子回测绩效
-        
+        """评估因子回测绩效（日频净值）
+
         核心流程（无前瞻偏差）：
-        1. 用 Scheduler 生成调仓日列表
-        2. 每个调仓日 d_i:
-           a. 取 d_i 日因子值（仅用 d_i 之前数据）
-           b. Allocator 分配权重
-           c. 计算 d_i→d_{i+1} 持仓收益
-           d. 扣除换手成本
-        3. 累加净值并计算指标
-        
+        1. _build_schedule: 生成调仓日 → 对齐因子与收益 → 预计算权重
+        2. _accumulate_nav: 逐日计算净值（含末尾期 + NaN 处理 + 成本扣除）
+        3. _calc_metrics: 基于日频净值计算指标
+
+        [重构] 2026-05-22 统一为日频净值计算，替代旧版调仓日频率净值。
+        旧版问题：仅记录调仓日净值导致 Sharpe/DD 偏高（期间波动被忽略）。
+        新版逐日记录净值，指标更精确、回撤更真实。
+        同时修复 P1-1（末尾期丢失）、P1-2（建仓成本消除）、P1-3（NaN 跳过整天）。
+
         Args:
             factor_values: 因子值 DataFrame
                           index=日期（与 returns 对齐），columns=标的（与 returns 对齐）
                           注意：因子值应已排除未来数据（如 expanding 计算）
-            
+
         Returns:
-            BacktestResult: 完整回测结果
+            BacktestResult: 完整回测结果（nav_series 为日频序列）
         """
-        # 对齐因子值和收益率数据
-        returns = self.returns
-        if not isinstance(factor_values.index, pd.DatetimeIndex):
-            factor_values = factor_values.copy()
-            factor_values.index = pd.to_datetime(factor_values.index)
+        # 阶段 1: 调度与对齐
+        schedule = self._build_schedule(factor_values)
+        if schedule is None:
+            return self._empty_result('调度构建失败')
 
-        # 取交集日期
-        common_dates = returns.index.intersection(factor_values.index)
-        if len(common_dates) == 0:
-            return self._empty_result('无共同交易日')
+        # 阶段 2: 逐日净值累积
+        nav_series, turnover_list = self._accumulate_nav(schedule)
+        if len(nav_series) < 2:
+            return self._empty_result('日频净值数据点不足')
 
-        # 对齐 columns
-        common_symbols = returns.columns.intersection(factor_values.columns)
-        if len(common_symbols) == 0:
-            return self._empty_result('无共同标的')
-
-        returns = returns.loc[common_dates, common_symbols].copy()
-        factor_values = factor_values.loc[common_dates, common_symbols].copy()
-
-        # 生成调仓日列表
-        rebalance_dates = self.scheduler.generate(returns.index)
-        if len(rebalance_dates) < 2:
-            return self._empty_result('调仓日不足（需要 ≥2）')
-
-        # 过滤出存在实际数据的调仓日
-        valid_rb_dates = [d for d in rebalance_dates if d in returns.index]
-        if len(valid_rb_dates) < 2:
-            return self._empty_result('有效调仓日不足')
-
-        # 净值序列（从 1.0 开始）
-        nav_dates = []
-        nav_values = []
-        current_nav = 1.0
-        prev_weights = None
-        turnover_list = []
-
-        for i, rb_date in enumerate(valid_rb_dates[:-1]):
-            next_rb_date = valid_rb_dates[i + 1]
-
-            # 1) 取调仓日因子值
-            factors_on_date = factor_values.loc[rb_date].values  # shape (M,)
-
-            # 2) 分配权重
-            weights = self.allocator.allocate(factors_on_date)
-
-            # 3) 计算换手成本
-            if prev_weights is not None and self.cost_rate > 0:
-                turnover = np.sum(np.abs(weights - prev_weights)) / 2.0
-                cost = turnover * self.cost_rate
-                current_nav *= (1.0 - cost)
-                turnover_list.append(turnover)
-            elif prev_weights is None:
-                # 初始建仓也要算半换手（从空仓到满仓）
-                if self.cost_rate > 0:
-                    build_cost = 0.5 * self.cost_rate  # 单边建仓
-                    current_nav *= (1.0 - build_cost)
-
-            prev_weights = weights.copy()
-
-            # 4) 计算持仓期收益（rb_date → next_rb_date）
-            # [新增] 2026-05-20 09-20 使用调仓日次日到下一调仓日收盘的收益
-            # 避免在调仓日当天使用当天因子值交易后立即获取当天收益
-            period_ret = self._calc_period_return(
-                returns, rb_date, next_rb_date, weights
-            )
-
-            # 更新净值
-            current_nav *= (1.0 + period_ret)
-
-            # 记录净值
-            nav_dates.append(next_rb_date)
-            nav_values.append(current_nav)
-
-        # 构建净值序列
-        nav_series = pd.Series(nav_values, index=pd.DatetimeIndex(nav_dates))
-
-        # 5) 计算回测指标
-        result = self._calc_metrics(nav_series, turnover_list, valid_rb_dates)
+        # 阶段 3: 指标计算
+        result = self._calc_metrics(nav_series, turnover_list, schedule.rebalance_dates)
         return result
 
     def compare_frequencies(self,
                             factor_values: pd.DataFrame,
                             freqs: List[str] = None) -> Dict[str, BacktestResult]:
         """多频率对比：同一因子在不同频率下的回测绩效
-        
+
         复用同一份因子值，仅切换 Scheduler 重新计算持仓。
-        
+
         Args:
             factor_values: 因子值 DataFrame
             freqs: 频率列表，支持 'ME', 'W', '5D', '10D', '20D' 等
                    None 时默认 ['ME', 'W', '5D']
-            
+
         Returns:
             Dict[str, BacktestResult]: {'ME': result_me, 'W': result_w, ...}
         """
@@ -301,64 +274,184 @@ class FactorPipeline:
 
         return results
 
-    # ================= 内部方法 =================
+    # ================= 阶段 1: 调度构建 =================
 
-    def _calc_period_return(self, returns: pd.DataFrame,
-                            start_date: pd.Timestamp,
-                            end_date: pd.Timestamp,
-                            weights: np.ndarray) -> float:
-        """计算调仓期间的持仓收益率
-        
-        [新增] 2026-05-20 09-20 持仓收益计算
-        取 start_date 次日至 end_date（含）的日收益率，按权重加总。
-        调仓日在 start_date 执行，收益从下一个交易日开始计算。
-        
+    def _build_schedule(self, factor_values: pd.DataFrame) -> Optional[BacktestSchedule]:
+        """构建回测调度计划
+
+        [新增] 2026-05-22 evaluate() 分阶段重构。
+        将调度日生成、因子对齐、权重预计算等步骤集中于此，
+        使 _accumulate_nav() 只需关心"给定权重和收益率，计算净值"。
+
         Args:
-            returns: 收益率 DataFrame
-            start_date: 调仓日
-            end_date: 下一调仓日
-            weights: 权重向量
-            
+            factor_values: 因子值 DataFrame
+
         Returns:
-            float: 期间总收益率
+            BacktestSchedule 或 None（失败时）
         """
-        try:
-            # 取 start_date 之后到 end_date（含）的收益
-            mask = (returns.index > start_date) & (returns.index <= end_date)
+        returns = self.returns
+        if not isinstance(factor_values.index, pd.DatetimeIndex):
+            factor_values = factor_values.copy()
+            factor_values.index = pd.to_datetime(factor_values.index)
+
+        common_dates = returns.index.intersection(factor_values.index)
+        if len(common_dates) == 0:
+            warnings.warn("因子回测: 无共同交易日")
+            return None
+
+        common_symbols = returns.columns.intersection(factor_values.columns)
+        if len(common_symbols) == 0:
+            warnings.warn("因子回测: 无共同标的")
+            return None
+
+        returns = returns.loc[common_dates, common_symbols].copy()
+        factor_values = factor_values.loc[common_dates, common_symbols].copy()
+
+        rebalance_dates = self.scheduler.generate(returns.index)
+        if len(rebalance_dates) < 2:
+            warnings.warn("因子回测: 调仓日不足（需要 ≥2）")
+            return None
+
+        valid_rb_dates = [d for d in rebalance_dates if d in returns.index]
+        if len(valid_rb_dates) < 2:
+            warnings.warn("因子回测: 有效调仓日不足")
+            return None
+
+        # 预计算每个调仓日的权重
+        weights_at_rebalance = {}
+        for rb_date in valid_rb_dates:
+            factors_on_date = factor_values.loc[rb_date].values
+            weights = self.allocator.allocate(factors_on_date)
+            weights_at_rebalance[rb_date] = weights
+
+        return BacktestSchedule(
+            returns=returns,
+            factor_values=factor_values,
+            rebalance_dates=valid_rb_dates,
+            weights_at_rebalance=weights_at_rebalance,
+        )
+
+    # ================= 阶段 2: 逐日净值累积 =================
+
+    def _accumulate_nav(self, schedule: BacktestSchedule) -> Tuple[pd.Series, List[float]]:
+        """逐日累积净值
+
+        [新增] 2026-05-22 evaluate() 分阶段重构。
+        纯计算逻辑：给定调度计划和预计算权重，逐日累积净值。
+
+        修复 3 个 P1 bug：
+        - P1-1: 最后一个调仓日后收益丢失 → 追加处理末尾持有期
+        - P1-2: 初始建仓成本被归一化消除 → 先记录 NAV=1.0 再扣成本
+        - P1-3: NaN 跳过整天导致 NAV 缺口 → NaN 填 0 保留日期
+
+        Args:
+            schedule: 回测调度计划
+
+        Returns:
+            (nav_series, turnover_list): 日频净值序列和换手率列表
+        """
+        returns = schedule.returns
+        rb_dates = schedule.rebalance_dates
+
+        nav_dates = []
+        nav_values = []
+        current_nav = 1.0
+        prev_weights = None
+        turnover_list = []
+
+        # [修复] P1-2: 先记录初始净值 NAV=1.0，再扣建仓成本
+        # 旧版：先扣成本再记录 → 归一化后建仓成本消失
+        nav_dates.append(rb_dates[0])
+        nav_values.append(current_nav)
+
+        for i, rb_date in enumerate(rb_dates):
+            weights = schedule.weights_at_rebalance[rb_date]
+
+            # 成本扣除
+            if prev_weights is not None and self.cost_rate > 0:
+                turnover = np.sum(np.abs(weights - prev_weights)) / 2.0
+                current_nav *= (1.0 - turnover * self.cost_rate)
+                turnover_list.append(turnover)
+            elif prev_weights is None and self.cost_rate > 0:
+                build_cost = 0.5 * self.cost_rate
+                current_nav *= (1.0 - build_cost)
+            prev_weights = weights.copy()
+
+            # 确定持有期: 当前调仓日 → 下一调仓日 或 数据末尾
+            if i < len(rb_dates) - 1:
+                next_date = rb_dates[i + 1]
+                mask = (returns.index > rb_date) & (returns.index <= next_date)
+            else:
+                # [修复] P1-1: 最后一个调仓日，持有到数据末尾
+                # 旧版：valid_rb_dates[:-1] 不包含最后一个调仓日，末尾期收益丢失
+                mask = returns.index > rb_date
+
             period_returns = returns.loc[mask]
 
-            if len(period_returns) == 0:
-                return 0.0
+            for dt in period_returns.index:
+                daily_ret = self._calc_daily_return(weights, period_returns.loc[dt])
+                current_nav *= (1.0 + daily_ret)
+                nav_dates.append(dt)
+                nav_values.append(current_nav)
 
-            # [修复] 2026-05-21 持仓收益计算 NaN 处理
-            # 旧实现: period_returns.values @ weights 若 period_returns 含 NaN → 全 NaN
-            # 新实现: dropna() 过滤掉 NaN 行，再用权重累乘
-            period_returns_clean = period_returns.dropna(how='any')
-            if len(period_returns_clean) == 0:
-                return 0.0
+        if len(nav_dates) < 2:
+            return pd.Series(dtype=float), turnover_list
 
-            # 期间每期收益 × 权重 → 组合日收益 → 累乘
-            daily_portfolio_ret = period_returns_clean.values @ weights
-            # 使用对数累加避免浮点精度问题，再转回简单收益率
-            log_ret = np.log1p(daily_portfolio_ret).sum()
-            period_ret = np.expm1(log_ret)
+        nav_series = pd.Series(
+            nav_values,
+            index=pd.DatetimeIndex(nav_dates)
+        ).drop_duplicates().sort_index()
+        nav_series = nav_series / nav_series.iloc[0]
 
-            return float(period_ret)
+        return nav_series, turnover_list
 
-        except Exception as e:
-            warnings.warn(f"计算期间收益失败 [{start_date}→{end_date}]: {e}")
+    def _calc_daily_return(self, weights: np.ndarray,
+                           day_returns: pd.Series) -> float:
+        """计算单日持仓收益
+
+        [新增] 2026-05-22 evaluate() 分阶段重构。
+        从主循环中提取，消除代码重复，且独立可测。
+
+        [修复] P1-3: NaN 填 0 保留日期，替代旧版 continue 跳过整天。
+        旧版问题：持仓标的有 NaN 收益时 continue 跳过整天 → NAV 序列出现缺口
+        → pct_change() 跨缺口计算多日收益当作单日 → Sharpe 偏高
+        新版：NaN 仓位按 0 收益处理（保守：视为空仓），日期正常记录。
+
+        Args:
+            weights: 持仓权重数组，shape (N,)
+            day_returns: 当日收益率 Series，index=标的代码
+
+        Returns:
+            float: 当日组合收益
+        """
+        nonzero = weights > 0
+        if not nonzero.any():
             return 0.0
+
+        sel_ret = day_returns.values[nonzero].copy()
+        sel_w = weights[nonzero]
+
+        # NaN 填 0（保守：NaN 仓位视为空仓，不重归一化权重）
+        sel_ret = np.where(np.isnan(sel_ret), 0.0, sel_ret)
+
+        return float(np.dot(sel_w, sel_ret))
+
+    # ================= 阶段 3: 指标计算 =================
 
     def _calc_metrics(self, nav_series: pd.Series,
                       turnover_list: List[float],
                       rebalance_dates: List[pd.Timestamp]) -> BacktestResult:
-        """从净值序列计算全套回测指标
-        
+        """从日频净值序列计算回测指标
+
+        [重构] 2026-05-22 统一基于日频净值计算指标。
+        旧版基于调仓期间收益计算 Sharpe/DD，存在采样偏差（偏高）。
+        新版基于日收益率计算，更精确、更接近真实交易体验。
+
         Args:
-            nav_series: 净值序列（仅含调仓日时点）
+            nav_series: 日频净值序列
             turnover_list: 每次调仓的单边换手率列表
             rebalance_dates: 调仓日列表
-            
+
         Returns:
             BacktestResult: 回测结果
         """
@@ -367,74 +460,57 @@ class FactorPipeline:
 
         result = BacktestResult()
         result.nav_series = nav_series
-        result.n_rebalances = len(rebalance_dates) - 1  # 实际调仓次数
+        result.n_rebalances = len(rebalance_dates) - 1
         result.scheduler_name = repr(self.scheduler)
         result.allocator_name = repr(self.allocator)
 
         nav_values = nav_series.values
         nav_dates = nav_series.index
 
-        # 起止日期
         result.start_date = str(nav_dates[0].date())
         result.end_date = str(nav_dates[-1].date())
 
-        # 总收益率
         result.total_return = float(nav_values[-1] / nav_values[0] - 1)
 
-        # 调仓日之间的收益率（用于计算 Sharpe 等）
-        period_returns = np.diff(nav_values) / nav_values[:-1]
+        daily_ret = nav_series.pct_change().dropna().values
+        n_days = len(daily_ret)
 
-        # 年化收益率
-        n_periods = len(period_returns)
-        if n_periods > 0:
-            # 估算年化：按调仓频率折算
-            n_days = (nav_dates[-1] - nav_dates[0]).days
-            if n_days > 0:
-                years = n_days / 365.25
-                result.annual_return = float(
-                    (nav_values[-1] / nav_values[0]) ** (1.0 / max(years, 0.01)) - 1
-                )
-            else:
-                result.annual_return = 0.0
+        if n_days > 0:
+            total_days = (nav_dates[-1] - nav_dates[0]).days
+            years = max(total_days / 365.25, 0.01)
 
-            # 年化波动率
-            period_vol = np.std(period_returns, ddof=1) if n_periods > 1 else 0.0
-            # [修复] 2026-05-20 年化因子说明：非等间隔调仓（如月末）各期间隔不同，
-            # 用 period_vol * sqrt(N) 年化是近似值。等间隔场景（IntervalScheduler）精确。
-            annual_factor = max(n_periods / max(years, 0.01), 1)
-            result.annual_volatility = float(period_vol * np.sqrt(annual_factor))
+            result.annual_return = float(
+                (nav_values[-1] / nav_values[0]) ** (1.0 / years) - 1
+            )
 
-            # 夏普比率（年化）
-            rf_period = self.rf_annual / annual_factor
-            excess = period_returns - rf_period
+            daily_vol = np.std(daily_ret, ddof=1) if n_days > 1 else 0.0
+            result.annual_volatility = float(daily_vol * np.sqrt(252))
+
+            rf_daily = self.rf_annual / 252
+            excess_daily = daily_ret - rf_daily
             if result.annual_volatility > 0:
                 result.sharpe_ratio = float(
-                    (np.mean(excess) / max(period_vol, 1e-10)) * np.sqrt(annual_factor)
+                    np.mean(excess_daily) / max(daily_vol, 1e-10) * np.sqrt(252)
                 )
 
-            # 索提诺比率：只考虑下行波动
-            downside = period_returns[period_returns < 0]
+            downside = daily_ret[daily_ret < 0]
             if len(downside) > 1:
                 downside_vol = np.std(downside, ddof=1)
                 if downside_vol > 0:
                     result.sortino_ratio = float(
-                        (np.mean(period_returns) / downside_vol) * np.sqrt(annual_factor)
+                        np.mean(excess_daily) / downside_vol * np.sqrt(252)
                     )
 
-        # 最大回撤
         peak = np.maximum.accumulate(nav_values)
         drawdowns = (nav_values - peak) / peak
-        result.max_drawdown = float(drawdowns.min())  # 负值
+        result.max_drawdown = float(drawdowns.min())
         result.avg_drawdown = float(drawdowns.mean())
 
-        # 卡玛比率
         if abs(result.max_drawdown) > 1e-10:
             result.calmar_ratio = float(result.annual_return / abs(result.max_drawdown))
 
-        # 换手统计
         if turnover_list:
             result.avg_turnover = float(np.mean(turnover_list))
-            # 换手成本占总收益比例
             total_cost = sum(t * self.cost_rate for t in turnover_list)
             total_gross_return = result.total_return + total_cost
             if abs(total_gross_return) > 1e-10:
@@ -442,46 +518,26 @@ class FactorPipeline:
             else:
                 result.turnover_cost_ratio = 0.0
 
-        # 月度胜率
-        result.win_rate, result.profit_loss_ratio = self._calc_win_rate(period_returns)
+        if n_days > 0:
+            wins = daily_ret[daily_ret > 0]
+            losses = daily_ret[daily_ret < 0]
+            result.win_rate = float(len(wins) / n_days)
+            avg_win = np.mean(wins) if len(wins) > 0 else 0.0
+            avg_loss = abs(np.mean(losses)) if len(losses) > 0 else 0.0
+            result.profit_loss_ratio = float(avg_win / avg_loss) if avg_loss > 0 else 0.0
 
-        # 年度收益
         result.yearly_returns = self._calc_yearly_returns(nav_series)
 
         return result
 
-    def _calc_win_rate(self, period_returns: np.ndarray) -> Tuple[float, float]:
-        """计算月度胜率和盈亏比
-        
-        将调仓期收益聚合到月度，计算月度正收益比例。
-        
-        Args:
-            period_returns: 调仓期间收益率数组
-            
-        Returns:
-            Tuple[float, float]: (胜率, 盈亏比)
-        """
-        if len(period_returns) == 0:
-            return 0.0, 0.0
-
-        wins = period_returns[period_returns > 0]
-        losses = period_returns[period_returns < 0]
-        n_total = len(period_returns)
-
-        win_rate = len(wins) / n_total if n_total > 0 else 0.0
-
-        avg_win = np.mean(wins) if len(wins) > 0 else 0.0
-        avg_loss = abs(np.mean(losses)) if len(losses) > 0 else 0.0
-        profit_loss_ratio = avg_win / avg_loss if avg_loss > 0 else 0.0
-
-        return float(win_rate), float(profit_loss_ratio)
+    # ================= 辅助方法 =================
 
     def _calc_yearly_returns(self, nav_series: pd.Series) -> Dict[int, float]:
         """计算年度收益率
-        
+
         Args:
             nav_series: 净值序列
-            
+
         Returns:
             Dict[int, float]: {年份: 收益率}
         """
@@ -506,10 +562,10 @@ class FactorPipeline:
 
     def _empty_result(self, reason: str = '') -> BacktestResult:
         """返回空结果
-        
+
         Args:
             reason: 空结果原因
-            
+
         Returns:
             BacktestResult: 空结果
         """
