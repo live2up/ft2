@@ -614,13 +614,15 @@ body {
     min-height: 0;
 }
 
-/* 图表工具栏 - 浮在 chart 右上，利用 right 边距空间 */
+/* 图表工具栏 - 竖排显示在右上角 */
+/* [调整] 2026-05-22 工具栏改为竖排，按钮从上到下排列，固定在右上角 */
 .chart-toolbar {
     position: absolute;
-    top: 1px;
-    right: 4px;
+    top: 8px;
+    right: 8px;
     display: flex;
-    gap: 4px;
+    flex-direction: column;
+    gap: 6px;
     align-items: center;
     z-index: 10;
     opacity: 0.6;

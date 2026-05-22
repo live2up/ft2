@@ -151,18 +151,20 @@ const GenericChart = {
                     option.legend = { data: rawSeries.map(s => ({ name: s.name, icon: 'rect' })), top: 5 };
                     option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
 
-                    // === 区间收益：基于滚动区间将原始数据转为累计收益百分比 ===
+                    // === 区间收益：基于滚动区间将原始数据转为累计收益百分比（仅 line/area） ===
                     let displaySeries = rawSeries;  // 默认不转换
-                    if (intervalCompare.value) {
+                    if (intervalCompare.value && (chartType === 'line' || chartType === 'area')) {
                         const dataLen = rawSeries[0]?.data?.length || 0;
                         // [修复] 如果没有启用滚动轴，默认用 0-100%（从第一个数据点开始）
                         const startPercent = showDataZoom.value ? intervalStart.value : 0;
                         const startIdx = Math.floor(dataLen * startPercent / 100);
                         const baseIdx = startIdx > 0 ? startIdx - 1 : 0;  // 基准点：可见起点前一个数据点
                         
-                        // [修复] pyecharts 2D 数组：从第一组数据提取日期填充 xAxis
-                        const allDates = (rawSeries[0]?.data || []).map(v => Array.isArray(v) && v.length >= 2 ? v[0] : '');
-                        option.xAxis = { type: 'category', boundaryGap: false, data: allDates };
+                        // [修复] 区间收益模式：保留原始xAxis日期，仅在pyecharts 2D格式且原始xAxis为空时才从data提取
+                        const firstDataPoint = rawSeries[0]?.data?.[0];
+                        const is2DFormat = Array.isArray(firstDataPoint) && firstDataPoint.length >= 2;
+                        const xData = is2DFormat ? (rawSeries[0]?.data || []).map(v => v[0]) : extracted.xAxis;
+                        option.xAxis = { type: 'category', boundaryGap: false, data: xData };
                         
                         // [核心修复] 使用 Array.from() 创建新数组，避免 Proxy 对象引用问题
                         displaySeries = Array.from(rawSeries).map((s, seriesIdx) => {
@@ -198,8 +200,8 @@ const GenericChart = {
                             };
                         });
                         
-                        // Y轴百分比标注
-                        option.yAxis = { type: 'value', scale: !isBarChart, axisLabel: { formatter: '{value}%' } };
+                        // Y轴百分比标注，区间收益模式固定从0%起步
+                        option.yAxis = { type: 'value', scale: false, axisLabel: { formatter: '{value}%' } };
                     }
 
                     if (showDataZoom.value && (chartType === 'line' || chartType === 'area' || chartType === 'bar')) {
@@ -278,7 +280,7 @@ const GenericChart = {
             }
         });
 
-        return { chartRef, showDataZoom, isFullscreen, toggleFullscreen, intervalCompare };
+        return { chartRef, showDataZoom, isFullscreen, toggleFullscreen, intervalCompare, chartType: computed(() => { const charts = props.cell.content?.charts; return charts?.series?.[0]?.type || 'line'; }) };
     },
     template: `
         <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
@@ -288,9 +290,11 @@ const GenericChart = {
                     <div ref="chartRef" class="chart-container chart-container-main"
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
                     <div class="chart-toolbar">
-                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">⇄</button>
-                        <button class="tool-btn" :class="{ active: intervalCompare }" @click="intervalCompare = !intervalCompare" title="区间收益">%</button>
+                        <!-- 上方：视图控制 -->
                         <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
+                        <!-- 中间：数据操作 -->
+                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">⇄</button>
+                        <button v-if="chartType === 'line' || chartType === 'area'" class="tool-btn" :class="{ active: intervalCompare }" @click="intervalCompare = !intervalCompare" title="区间收益">%</button>
                     </div>
                 </div>
             </div>
@@ -333,6 +337,7 @@ const PieChart = {
                     <div ref="chartRef" class="chart-container chart-container-main"
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
                     <div class="chart-toolbar">
+                        <!-- 中间：数据操作 -->
                         <button class="tool-btn" :class="{ active: pieShowValue }" @click="pieShowValue = !pieShowValue" title="显示数值">V</button>
                         <button class="tool-btn" :class="{ active: pieShowPercent }" @click="pieShowPercent = !pieShowPercent" title="显示百分比">%</button>
                     </div>
@@ -386,6 +391,11 @@ const HeatmapChart = {
                     <div ref="chartRef" class="chart-container chart-container-main"
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
                     <div class="chart-toolbar">
+                        <!-- 上方：视图控制 -->
+                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
+                        <!-- 中间：数据操作 -->
+                        <button class="tool-btn" :class="{ active: heatmapShowData }" @click="heatmapShowData = !heatmapShowData" title="显示数据">T</button>
+                        <!-- 下方：热力图专用 -->
                         <select class="tool-select" v-model.number="heatmapMultiplier" title="数据缩放">
                             <option value="1000">x1000</option>
                             <option value="100">x100</option>
@@ -394,8 +404,6 @@ const HeatmapChart = {
                             <option value="0.1">1/10</option>
                             <option value="0.01">1/100</option>
                         </select>
-                        <button class="tool-btn" :class="{ active: heatmapShowData }" @click="heatmapShowData = !heatmapShowData" title="显示数据">T</button>
-                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
                     </div>
                 </div>
             </div>
@@ -496,10 +504,12 @@ const StackedChart = {
                     <div ref="chartRef" class="chart-container chart-container-main"
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
                     <div class="chart-toolbar">
+                        <!-- 上方：视图控制 -->
+                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
+                        <!-- 中间：数据操作 -->
                         <button class="tool-btn" :class="{ active: stackNormalize }" @click="stackNormalize = !stackNormalize" title="归一化">N</button>
                         <button class="tool-btn" :class="{ active: stackShowRaw }" @click="stackShowRaw = !stackShowRaw" title="显示数值">V</button>
                         <button class="tool-btn" :class="{ active: stackShowPercent }" @click="stackShowPercent = !stackShowPercent" title="显示百分比">%</button>
-                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
                     </div>
                 </div>
             </div>
@@ -634,8 +644,10 @@ const GridChart = {
                     <div ref="chartRef" class="chart-container chart-container-main"
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
                     <div class="chart-toolbar">
-                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">&#x21C4;</button>
+                        <!-- 上方：视图控制 -->
                         <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">&#x26F6;</button>
+                        <!-- 中间：数据操作 -->
+                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">&#x21C4;</button>
                     </div>
                 </div>
             </div>
