@@ -4,6 +4,53 @@
 继承 pyecharts 图表类,用法完全一致,仅 dump_options() 输出精简版。
 通过 baseline diff 剥离 v5 默认值,只保留用户显式传入的参数,让 ECharts v6 缺省值自动生效。
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+实现逻辑
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+super().dump_options()                    ← pyecharts v5 完整输出
+        │
+        ▼
+json.loads()                              ← 解析为 current dict
+        │
+        ├─ 含: 用户数据 + 用户配置 + pyecharts 默认配置
+        │
+        ▼
+_create_reactive_baseline(ChartClass)     ← 生成 baseline dict
+        │
+        ├─ ChartClass()                   ← 空白图表实例
+        ├─ _add_minimal_data()            ← 添加最小数据触发完整输出
+        ├─ _build_core_opts()             ← 设置基础 opts
+        ─ 含: 最小数据 + pyecharts 默认配置（无用户配置）
+        │
+        ▼
+deep_diff(current, baseline, path=())     ← 核心对比逻辑
+        │
+        ├─ path in _DATA_PATHS            ← 核心数据，直接保留，跳过 diff
+        │   保护: series.data, xAxis.data, series.name, title.text
+        │
+        ├─ key not in baseline            ← 用户新增配置，保留
+        │
+        ├─ value 是 dict                  ← 递归 deep_diff
+        │
+        ├─ value 是 list                  ← _diff_config_list 逐项 diff
+        │
+        └─ value != baseline[key]         ← 用户修改配置，保留
+        │
+        ▼
+_strip_reactive_opts()                    ← 补空标记（toolbox/dataZoom 等）
+        │
+        ▼
+_preserve_structural()                    ← 强制保留 type 等结构字段
+        │
+        ▼
+deep_merge(self._extra)                   ← 合并 v6 专属参数
+        │
+        ▼
+输出 JSON                                 ← 仅用户数据 + 用户配置
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 直接替代 pyecharts 的用法:
     # 旧: from pyecharts.charts import Line
     # 新: from min_pyecharts import MinLine

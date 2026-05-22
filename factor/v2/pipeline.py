@@ -330,8 +330,15 @@ class FactorPipeline:
             if len(period_returns) == 0:
                 return 0.0
 
+            # [修复] 2026-05-21 持仓收益计算 NaN 处理
+            # 旧实现: period_returns.values @ weights 若 period_returns 含 NaN → 全 NaN
+            # 新实现: dropna() 过滤掉 NaN 行，再用权重累乘
+            period_returns_clean = period_returns.dropna(how='any')
+            if len(period_returns_clean) == 0:
+                return 0.0
+
             # 期间每期收益 × 权重 → 组合日收益 → 累乘
-            daily_portfolio_ret = (period_returns.values @ weights)
+            daily_portfolio_ret = period_returns_clean.values @ weights
             # 使用对数累加避免浮点精度问题，再转回简单收益率
             log_ret = np.log1p(daily_portfolio_ret).sum()
             period_ret = np.expm1(log_ret)
