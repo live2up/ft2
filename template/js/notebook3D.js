@@ -147,9 +147,20 @@ const GenericChart = {
                     const xAxisType = isDateStr ? 'time' : 'category';
                     option.xAxis = { type: xAxisType, boundaryGap: isBarChart, data: extracted.xAxis };
                     option.yAxis = { type: 'value', scale: !isBarChart };  // [修复] 2026-05-21 柱状图必须 scale:false 才能让 min:0 生效，否则 auto-scale 会忽略 min 导致柱子不从 0 起步
-                    // [优化] 2026-05-22 设置legend宽度90%使其自动换行
-                    option.grid = { left: 8, right: 40, bottom: showDataZoom.value ? 50 : 5, top: 50, containLabel: true };
-                    option.legend = { data: rawSeries.map(s => ({ name: s.name, icon: 'rect' })), top: 5, width: '90%' };
+                    // [优化] 2026-05-22 legend自适应：策略<=10用plain换行，>10用scroll翻页
+                    const legendCount = rawSeries.length;
+                    const legendType = legendCount > 10 ? 'scroll' : 'plain';
+                    option.grid = {
+                        left: 8, right: 40,
+                        bottom: showDataZoom.value ? 50 : 5,
+                        top: legendCount > 10 ? 32 : 50,
+                        containLabel: true
+                    };
+                    option.legend = {
+                        data: rawSeries.map(s => ({ name: s.name, icon: 'rect' })),
+                        top: 5, type: legendType, width: '90%',
+                        pageIconSize: 10, pageTextStyle: { fontSize: 11 }
+                    };
                     option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
 
                     // === 区间收益：基于滚动区间将原始数据转为累计收益百分比（仅 line/area） ===
@@ -165,7 +176,9 @@ const GenericChart = {
                         const firstDataPoint = rawSeries[0]?.data?.[0];
                         const is2DFormat = Array.isArray(firstDataPoint) && firstDataPoint.length >= 2;
                         const xData = is2DFormat ? (rawSeries[0]?.data || []).map(v => v[0]) : extracted.xAxis;
-                        option.xAxis = { type: 'category', boundaryGap: false, data: xData };
+                        option.xAxis = {
+                            type: 'category', boundaryGap: false, data: xData
+                        };
                         
                         // [核心修复] 使用 Array.from() 创建新数组，避免 Proxy 对象引用问题
                         displaySeries = Array.from(rawSeries).map((s, seriesIdx) => {
@@ -202,7 +215,10 @@ const GenericChart = {
                         });
                         
                         // Y轴百分比标注，区间收益模式固定从0%起步
-                        option.yAxis = { type: 'value', scale: false, axisLabel: { formatter: '{value}%' } };
+                        option.yAxis = {
+                            type: 'value', scale: false,
+                            axisLabel: { formatter: '{value}%' }
+                        };
                     }
 
                     if (showDataZoom.value && (chartType === 'line' || chartType === 'area' || chartType === 'bar')) {
@@ -488,7 +504,45 @@ const StackedChart = {
                     };
                 }
                 const isBarChart = chartType === 'bar';
-                const option = { color: colors, xAxis: { type: 'category', boundaryGap: isBarChart, data: extracted.xAxis }, yAxis: yAxisConfig, grid: { left: 8, right: 40, bottom: 5, top: 40, containLabel: true }, legend: { data: series.map(s => ({ name: s.name, icon: 'rect' })), top: 5, orient: 'horizontal', type: 'scroll', pageIconSize: 10 }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: tooltipFormatter }, series: displaySeries.map((s, i) => { const baseOption = { name: s.name, type: chartType === 'area' ? 'line' : chartType, data: s.data, stack: s.stack, label: { show: showRaw || showPercentStack, position: 'inside', formatter: labelFormatter(i) } }; if (chartType === 'line' || chartType === 'area') { baseOption.smooth = true; baseOption.showSymbol = false; if (chartType === 'area') baseOption.areaStyle = { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: colors[i % colors.length] + '60' }, { offset: 1, color: colors[i % colors.length] + '10' }] } }; } if (isBarChart) baseOption.itemStyle = { color: colors[i % colors.length], borderRadius: [4, 4, 0, 0] }; return baseOption; }) };
+                const legendCount = series.length;
+                const legendType = legendCount > 10 ? 'scroll' : 'plain';
+                const option = {
+                    color: colors,
+                    xAxis: { type: 'category', boundaryGap: isBarChart, data: extracted.xAxis },
+                    yAxis: yAxisConfig,
+                    grid: { left: 8, right: 40, bottom: 5, top: legendCount > 10 ? 32 : 40, containLabel: true },
+                    legend: {
+                        data: series.map(s => ({ name: s.name, icon: 'rect' })),
+                        top: 5, type: legendType, width: '90%',
+                        pageIconSize: 10, pageTextStyle: { fontSize: 11 }
+                    },
+                    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, formatter: tooltipFormatter },
+                    series: displaySeries.map((s, i) => {
+                        const baseOption = {
+                            name: s.name,
+                            type: chartType === 'area' ? 'line' : chartType,
+                            data: s.data, stack: s.stack,
+                            label: { show: showRaw || showPercentStack, position: 'inside', formatter: labelFormatter(i) }
+                        };
+                        if (chartType === 'line' || chartType === 'area') {
+                            baseOption.smooth = true;
+                            baseOption.showSymbol = false;
+                            if (chartType === 'area') {
+                                baseOption.areaStyle = {
+                                    color: {
+                                        type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+                                        colorStops: [
+                                            { offset: 0, color: colors[i % colors.length] + '60' },
+                                            { offset: 1, color: colors[i % colors.length] + '10' }
+                                        ]
+                                    }
+                                };
+                            }
+                        }
+                        if (isBarChart) baseOption.itemStyle = { color: colors[i % colors.length], borderRadius: [4, 4, 0, 0] };
+                        return baseOption;
+                    })
+                };
                 return option;
             }
         });
@@ -562,8 +616,16 @@ const GridChart = {
                     };
                 });
             } else if (option.legend) {
+                const legendData = option.legend.data || [];
+                const legendCount = legendData.length;
                 option.legend.icon = 'rect';
-                option.legend.width = '90%';  // [优化] 2026-05-22 设置宽度90%使其自动换行
+                option.legend.width = '90%';
+                // [优化] 2026-05-22 策略>10用scroll翻页，否则plain换行
+                if (legendCount > 10) {
+                    option.legend.type = 'scroll';
+                    option.legend.pageIconSize = 10;
+                    option.legend.pageTextStyle = { fontSize: 11 };
+                }
             }
 
             // [适配] xAxis 补 type + axisLabel 防溢出
