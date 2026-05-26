@@ -1,5 +1,5 @@
 /**
- * FT Table Component v1.6.20260519-1
+ * FT Table Component v1.6.20260525-1
  * 版本号说明：主版本。次版本。日期（YYYYMMDD）-修订号
  *
  * 新功能 v1.6：
@@ -26,6 +26,14 @@
  *
  * 同步 v1.6.20260519-1：
  * - 从 itougu 项目同步，两组件内容一致，确认无差异，统一版本号
+ *
+ * 修复 v1.6.20260525-1：
+ * - displayCols 中 slot 名统一转小写（.toLowerCase()）
+ * - 原因：in-DOM 模板中浏览器会将 HTML 属性名自动转为小写，
+ *   导致含大写字母的字段名（如 rzPercent）生成的插槽名与
+ *   父组件通过 <template #cell-rzPercent> 注册的插槽名不匹配
+ *   （浏览器将 #cell-rzPercent 转为 #cell-rzpercent），
+ *   插槽查找失败回退到默认渲染。全小写字段名（如 hnqj）不受影响。
  * */
 
 const FtTable = {
@@ -133,10 +141,11 @@ const FtTable = {
 
       if (!isValidCols) {
         // cols 无效或为空：从数据自动推断所有字段
+        // [修复] 2026-05-25 slot 名统一转小写，解决 in-DOM 模板中浏览器自动小写化属性名导致插槽匹配失败的问题
         return allFields.map(key => ({
           field: key,
           title: key,
-          slot: 'cell-' + key
+          slot: ('cell-' + key).toLowerCase()
         }));
       }
 
@@ -151,10 +160,10 @@ const FtTable = {
         // 无通配符：只显示 cols 中的字段
         return props.cols.map(col => {
           if (typeof col === 'string') {
-            return { field: col, title: col, slot: 'cell-' + col };
+            return { field: col, title: col, slot: ('cell-' + col).toLowerCase() };
           }
           const slotName = col.slot || (col.field ? 'cell-' + col.field : null);
-          return { ...col, slot: slotName };
+          return { ...col, slot: slotName ? slotName.toLowerCase() : null };
         });
       }
 
@@ -169,10 +178,10 @@ const FtTable = {
         if (field) {
           specifiedFields.add(field);
           if (typeof col === 'string') {
-            specifiedCols.push({ field: col, title: col, slot: 'cell-' + col, _index: index });
+            specifiedCols.push({ field: col, title: col, slot: ('cell-' + col).toLowerCase(), _index: index });
           } else {
             const slotName = col.slot || (col.field ? 'cell-' + col.field : null);
-            specifiedCols.push({ ...col, title: col.title || field, slot: slotName, _index: index });
+            specifiedCols.push({ ...col, title: col.title || field, slot: slotName ? slotName.toLowerCase() : null, _index: index });
           }
         }
       });
@@ -193,7 +202,7 @@ const FtTable = {
         if (col === '*' || (typeof col === 'object' && col !== null && col.field === '*')) {
           // 插入所有未指定的字段
           unspecifiedFields.forEach(f => {
-            result.push({ field: f, title: f, slot: 'cell-' + f });
+            result.push({ field: f, title: f, slot: ('cell-' + f).toLowerCase() });
           });
         } else {
           // 查找对应的列配置
