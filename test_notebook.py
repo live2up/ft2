@@ -135,7 +135,56 @@ def test_comprehensive():
             "2024": y2024
         })
         nb.chart('heatmap', df_heatmap, title="月度收益热力图（DataFrame格式：第一列=X轴）")
-        
+
+        # [新增] 2026-05-27 散点图测试（两种格式）
+        # 类目散点图：xAxis 为标签，data 为 y 值
+        nb.chart('scatter', {
+            'xAxis': ['浦发银行', '平安银行', '万科A', '贵州茅台', '中国平安'],
+            'series': [
+                {"name": "收益率", "data": [5.2, -3.1, 8.7, 12.3, -1.5]},
+            ]
+        }, title="类目散点图（xAxis标签 + y值）")
+
+        # 数值散点图：xAxis 为空，data 为 [x, y] 二维数组
+        np.random.seed(42)
+        n = 30
+        _sx = np.random.uniform(0, 20, n)
+        _sy = _sx * 0.8 + np.random.normal(0, 2, n)
+        scatter_data = [[round(x, 2), round(y, 2)] for x, y in zip(_sx, _sy)]
+        nb.chart('scatter', {
+            'xAxis': [],
+            'series': [
+                {"name": "波动率-收益", "data": scatter_data},
+            ]
+        }, title="数值散点图（[x,y] 二维数组）")
+
+        # [新增] 2026-05-27 K线图测试（两种格式）
+        # 标准格式：xAxis + series（data 为 [[开,收,低,高], ...]）
+        kline_dates = ['2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', '2024-01-08']
+        kline_data = [
+            [100, 105, 98, 106],   # 开, 收, 低, 高
+            [105, 103, 101, 107],
+            [103, 108, 102, 109],
+            [108, 106, 104, 110],
+            [106, 112, 105, 113]
+        ]
+        nb.chart('kline', {
+            'xAxis': kline_dates,
+            'series': [
+                {"name": "日K", "data": kline_data}
+            ]
+        }, title="K线图（标准格式）")
+
+        # DataFrame 格式：自动识别 open/close/low/high 字段
+        df_kline = pd.DataFrame({
+            "日期": kline_dates,
+            "open": [100, 105, 103, 108, 106],
+            "close": [105, 103, 108, 106, 112],
+            "low": [98, 101, 102, 104, 105],
+            "high": [106, 107, 109, 110, 113]
+        })
+        nb.chart('kline', df_kline, title="K线图（DataFrame格式）")
+
         # 嵌套：风险评估
         with nb.section("风险评估", collapsed=True):
             nb.markdown("""
@@ -272,7 +321,7 @@ def on_bar(bar):
 </div>
     """)
     
-    nb.export_html()
+    nb.export_html(local_assets=True)
     
 
 

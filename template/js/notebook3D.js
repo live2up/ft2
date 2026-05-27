@@ -75,11 +75,12 @@ function useChart(props, chartOptions = {}) {
 
         // [修复] 2026-05-19 pyecharts Line/Bar add_yaxis 合并 xAxis+y 为 2D 格式
         // 检测: data[0] 是 [x, y] 两元素数组 → 转回 1D (x 已在 xAxis.data 中)
+        // [修复] 2026-05-27 scatter 散点图数据保持 [[x,y]] 格式，不做转换
         const series = (charts.series || []).map(s => {
             const d = s.data;
             if (!Array.isArray(d) || d.length === 0) return s;
             const first = d[0];
-            if (Array.isArray(first) && first.length === 2 && s.type !== 'candlestick') {
+            if (Array.isArray(first) && first.length === 2 && s.type !== 'candlestick' && s.type !== 'scatter') {
                 return { ...s, data: d.map(item => item[1]) };
             }
             return s;
@@ -261,18 +262,6 @@ const GenericChart = {
                         };
                     }
 
-                    if (showDataZoom.value && (chartType === 'line' || chartType === 'area' || chartType === 'bar')) {
-                        // [区间收益] 开启时保留当前滑块位置，不重置为 0-100
-                        const dzStart = intervalCompare.value ? intervalStart.value : 0;
-                        const dzEnd = intervalCompare.value ? intervalEnd.value : 100;
-                        option.dataZoom = [
-                            { type: 'inside', xAxisIndex: [0], start: dzStart, end: dzEnd },
-                            { type: 'slider', show: true, xAxisIndex: [0], start: dzStart, end: dzEnd, bottom: 10, height: 20 }
-                        ];
-                    } else if (chartType !== 'scatter') {
-                        option.dataZoom = [];  // 显式清空,避免setOption合并残留
-                    }
-
                     // 统一构建 series（displaySeries 可能是原始数据或转换后的数据）
                     option.series = displaySeries.map((s, i) => {
                         
@@ -288,8 +277,23 @@ const GenericChart = {
                     });
                     
                 } else if (chartType === 'scatter') {
-                    if (extracted.xAxis.length) option.xAxis = { type: 'category', data: extracted.xAxis };
-                    if (extracted.yAxis.length) option.yAxis = { type: 'category', data: extracted.yAxis };
+                    // [修复] 2026-05-27 散点图轴类型：有 xAxis.data 用 category（类目散点），否则用 value（数值散点）
+                    const hasXData = extracted.xAxis && extracted.xAxis.length > 0;
+                    option.xAxis = { type: hasXData ? 'category' : 'value', data: hasXData ? extracted.xAxis : [] };
+                    option.yAxis = { type: 'value' };
+                }
+
+                // [修复] 2026-05-27 dataZoom 对所有支持图表类型生效（line/bar/area/scatter）
+                if (showDataZoom.value && (chartType === 'line' || chartType === 'area' || chartType === 'bar' || chartType === 'scatter')) {
+                    // [区间收益] 开启时保留当前滑块位置，不重置为 0-100
+                    const dzStart = intervalCompare.value ? intervalStart.value : 0;
+                    const dzEnd = intervalCompare.value ? intervalEnd.value : 100;
+                    option.dataZoom = [
+                        { type: 'inside', xAxisIndex: [0], start: dzStart, end: dzEnd },
+                        { type: 'slider', show: true, xAxisIndex: [0], start: dzStart, end: dzEnd, bottom: 10, height: 20 }
+                    ];
+                } else {
+                    option.dataZoom = [];  // 显式清空,避免setOption合并残留
                 }
                 return { ...COMMON_CHART_OPTIONS, ...option };
             }
