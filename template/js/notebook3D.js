@@ -13,6 +13,38 @@ const { createApp, ref, computed, watch, onMounted, onUnmounted, nextTick } = Vu
 // [优化] 2026-05-18 全局ESC注册表(仅一个keydown监听器)
 window.__fsEsc = new Set();
 
+// [优化] 2026-05-27 全局 resize 防抖管理器（解决多图表卡顿问题）
+// 原理：所有图表共用一个 resize 监听，通过 requestAnimationFrame 批量执行
+// 延迟约 16ms（1帧），肉眼几乎无感知，不影响图表交互
+window.__resizeManager = (() => {
+    let instances = new Set();
+    let rafId = null;
+    let inited = false;
+
+    const scheduleResize = () => {
+        if (rafId) return;
+        rafId = requestAnimationFrame(() => {
+            instances.forEach(fn => fn());
+            rafId = null;
+        });
+    };
+
+    const init = () => {
+        if (inited) return;
+        inited = true;
+        window.addEventListener('resize', scheduleResize);
+        window.addEventListener('colorSchemeChanged', scheduleResize);
+    };
+
+    return {
+        register(fn) {
+            init();
+            instances.add(fn);
+            return () => instances.delete(fn);
+        }
+    };
+})();
+
 // [提取] 2026-05-18 默认色板常量，消除 useChart/GridChart 中的硬编码重复
 const DEFAULT_COLORS = ['#e74c3c', '#f39c12', '#af7ac5', '#5499c7', '#f4d03f', '#82e0aa'];
 
@@ -87,14 +119,17 @@ function useChart(props, chartOptions = {}) {
 
     const handleResize = () => chartInstance?.resize();
 
+    // [优化] 2026-05-27 使用全局 resize 管理器防抖，避免多图表同时 resize 卡顿
+    let unregisterResize = null;
+
     onMounted(() => {
         nextTick(() => initChart());
-        window.addEventListener('resize', handleResize);
+        unregisterResize = window.__resizeManager.register(handleResize);
         window.addEventListener('colorSchemeChanged', initChart);
     });
 
     onUnmounted(() => {
-        window.removeEventListener('resize', handleResize);
+        if (unregisterResize) unregisterResize();
         window.removeEventListener('colorSchemeChanged', initChart);
         chartInstance?.dispose();
     });
@@ -682,16 +717,19 @@ const GridChart = {
 
         const handleResize = () => chartInstance?.resize();
 
+        // [优化] 2026-05-27 使用全局 resize 管理器防抖，避免多图表同时 resize 卡顿
+        let unregisterResize = null;
+
         watch([showDataZoom], () => { if (chartInstance) chartInstance.setOption(buildGridOption(), true); });
 
         onMounted(() => {
             nextTick(() => initChart());
-            window.addEventListener('resize', handleResize);
+            unregisterResize = window.__resizeManager.register(handleResize);
             window.addEventListener('colorSchemeChanged', initChart);
         });
 
         onUnmounted(() => {
-            window.removeEventListener('resize', handleResize);
+            if (unregisterResize) unregisterResize();
             window.removeEventListener('colorSchemeChanged', initChart);
             if (chartInstance) {
                 chartInstance.dispose();
