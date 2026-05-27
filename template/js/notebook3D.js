@@ -281,10 +281,22 @@ const GenericChart = {
                     const hasXData = extracted.xAxis && extracted.xAxis.length > 0;
                     option.xAxis = { type: hasXData ? 'category' : 'value', data: hasXData ? extracted.xAxis : [] };
                     option.yAxis = { type: 'value' };
+                } else if (chartType === 'candlestick') {
+                    // [新增] 2026-05-27 K线图支持
+                    // K线图X轴用 category，因为 pyecharts 输出的 data 是 [[开,收,低,高]] 不含日期
+                    // 日期在 xAxis.data 中，用 category 类型显示
+                    option.xAxis = { type: 'category', data: extracted.xAxis, boundaryGap: true };
+                    option.yAxis = { type: 'value', scale: true };
+                    // K线图需要指定 series 类型为 candlestick
+                    option.series = extracted.series.map(s => ({
+                        name: s.name,
+                        type: 'candlestick',
+                        data: s.data
+                    }));
                 }
 
-                // [修复] 2026-05-27 dataZoom 对所有支持图表类型生效（line/bar/area/scatter）
-                if (showDataZoom.value && (chartType === 'line' || chartType === 'area' || chartType === 'bar' || chartType === 'scatter')) {
+                // [修复] 2026-05-27 dataZoom 对所有支持图表类型生效（line/bar/area/scatter/candlestick）
+                if (showDataZoom.value && (chartType === 'line' || chartType === 'area' || chartType === 'bar' || chartType === 'scatter' || chartType === 'candlestick')) {
                     // [区间收益] 开启时保留当前滑块位置，不重置为 0-100
                     const dzStart = intervalCompare.value ? intervalStart.value : 0;
                     const dzEnd = intervalCompare.value ? intervalEnd.value : 100;

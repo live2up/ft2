@@ -185,6 +185,46 @@ def test_comprehensive():
         })
         nb.chart('kline', df_kline, title="K线图（DataFrame格式）")
 
+        # [新增] 2026-05-27 Grid多图测试
+        # 场景1：K线 + 成交金额
+        grid_dates = ['2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', '2024-01-08']
+        grid_kline = [
+            [100, 105, 98, 106],
+            [105, 103, 101, 107],
+            [103, 108, 102, 109],
+            [108, 106, 104, 110],
+            [106, 112, 105, 113]
+        ]
+        grid_volume = [10000, 15000, 8000, 12000, 20000]
+
+        nb.chartg('kline', {
+            'xAxis': grid_dates,
+            'series': [{'name': '日K', 'data': grid_kline}]
+        }, height=300)
+        nb.chartg('bar', {
+            'xAxis': grid_dates,
+            'series': [{'name': '成交金额', 'data': grid_volume}]
+        }, height=150, title="K线 + 成交金额")
+
+        # 场景2：净值 + 模拟信号 + 仓位
+        nav_dates = ['2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', '2024-01-08']
+        nav_data = [1.0, 1.02, 1.01, 1.05, 1.08]
+        signal_data = [0, 1, 1, 0, 1]  # 0=空仓, 1=持仓
+        position_data = [0, 0.5, 0.8, 0, 0.6]  # 仓位比例
+
+        nb.chartg('line', {
+            'xAxis': nav_dates,
+            'series': [{'name': '净值', 'data': nav_data}]
+        }, height=200)
+        nb.chartg('bar', {
+            'xAxis': nav_dates,
+            'series': [{'name': '信号', 'data': signal_data}]
+        }, height=100, title="净值 + 信号")
+        nb.chartg('line', {
+            'xAxis': nav_dates,
+            'series': [{'name': '仓位', 'data': position_data}]
+        }, height=150, title="仓位")
+
         # 嵌套：风险评估
         with nb.section("风险评估", collapsed=True):
             nb.markdown("""

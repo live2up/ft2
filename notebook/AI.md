@@ -28,7 +28,7 @@ notebook/
 ├── min_pyecharts.py # 精简版 pyecharts（自研，402行）
 ├── notebook.py      # Notebook 主类（用户 API 入口）
 ├── README.md        # 用户文档
-└── ai_index.md      # 本文件
+└── AI.md            # 本文件
 
 template/
 ├── notebook.html    # Jinja2 HTML 模板（数据以 JSON-LD 注入 <head>）
@@ -487,4 +487,4 @@ nb.export_html()
 
 ---
 
-> 最后更新：2026-05-11
+> 最后更新：2026-05-27
