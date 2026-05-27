@@ -1135,6 +1135,29 @@ class FeatureSpace:
                     'category': 'regime',
                 }
 
+        # [新增] 市场广度特征接入 (market_breadth=True 时启用)
+        # 数据来源：需在 DataFrame 中预置 advance/decline/new_highs/new_lows 等列
+        # 默认关闭，因为需要外部数据源，不是所有场景都可用
+        if self.config.get('market_breadth'):
+            from .market_breadth import register_breadth_features
+            register_breadth_features()
+            breadth_feats = [
+                ('ADV_DEC_RATIO', _FEATURE_CALC_REGISTRY.get('ADV_DEC_RATIO'), {}),
+                ('NEW_HIGH_LOW', _FEATURE_CALC_REGISTRY.get('NEW_HIGH_LOW'), {}),
+                ('MCCLELLAN_OSC', _FEATURE_CALC_REGISTRY.get('MCCLELLAN_OSC'), {}),
+                ('ARMS_INDEX', _FEATURE_CALC_REGISTRY.get('ARMS_INDEX'), {}),
+            ]
+            for col_name, calc_fn, params in breadth_feats:
+                if calc_fn is None:
+                    continue
+                self._feature_names.append(col_name)
+                self._feature_configs[col_name] = {
+                    'name': col_name,
+                    'calc_fn': calc_fn,
+                    'params': params,
+                    'category': 'market_breadth',
+                }
+
         self._original_names = list(self._feature_names)
 
     def transform(self, data: Optional[pd.DataFrame] = None) -> pd.DataFrame:
@@ -1247,7 +1270,9 @@ class FeatureSpace:
                      'VOL_RATIO', 'VOL_CHG', 'TREND_STRENGTH',
                      'VOL_REGIME', 'MOM_CHG', 'UP_RATIO', 'MACD', 'VAR', 'LINEARREG',
                      'MFI', 'ULTOSC', 'OBV', 'AVGPRICE', 'WCLPRICE',
-                     'HT_SINE', 'HT_TRENDMODE', 'CORREL'}
+                     'HT_SINE', 'HT_TRENDMODE', 'CORREL',
+                     # [新增] 市场广度特征：本身已是比例/差值，不需要归一化
+                     'ADV_DEC_RATIO', 'NEW_HIGH_LOW', 'MCCLELLAN_OSC', 'ARMS_INDEX'}
 
         name_upper = feat_name.upper()
         for cf in close_feats:

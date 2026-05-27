@@ -176,29 +176,45 @@ def calc_arms_index(advance: np.ndarray, decline: np.ndarray,
 # 将市场广度特征注册到FeatureSpace
 # ============================================================
 
+def _breadth_ad_ratio(data: pd.DataFrame, **params) -> Tuple[np.ndarray, np.ndarray]:
+    """市场广度-涨跌比: 从DataFrame提取advance/decline列计算"""
+    smooth = params.get('smooth', 5)
+    if 'advance' in data.columns and 'decline' in data.columns:
+        return calc_advance_decline_ratio(data['advance'].values, data['decline'].values, smooth)
+    return np.full(len(data), np.nan), np.full(len(data), np.nan)
+
+
+def _breadth_new_high_low(data: pd.DataFrame, **params) -> Tuple[np.ndarray, np.ndarray]:
+    """市场广度-新高新低差: 从DataFrame提取new_highs/new_lows列计算"""
+    window = params.get('window', 20)
+    # [修复] total 应为全市场股票总数，用 len(data) 会取到交易日数（错误）
+    total = params.get('total', 5000)  # 默认 5000，按实际全市场股票数传入
+    if 'new_highs' in data.columns and 'new_lows' in data.columns:
+        return calc_new_high_low(data['new_highs'].values, data['new_lows'].values,
+                                  total, window)
+    return np.full(len(data), np.nan), np.full(len(data), np.nan)
+
+
+def _breadth_mcclellan(data: pd.DataFrame, **params) -> Tuple[np.ndarray, np.ndarray]:
+    """市场广度-麦克莱伦振荡器: 从DataFrame提取advance/decline列计算"""
+    if 'advance' in data.columns and 'decline' in data.columns:
+        return calc_mcclellan_oscillator(data['advance'].values, data['decline'].values)
+    return np.full(len(data), np.nan), np.full(len(data), np.nan)
+
+
+def _breadth_arms(data: pd.DataFrame, **params) -> Tuple[np.ndarray, np.ndarray]:
+    """市场广度-Arms指数(TRIN): 从DataFrame提取advance/decline/adv_vol/decl_vol列计算"""
+    if all(c in data.columns for c in ['advance', 'decline', 'adv_volume', 'decl_volume']):
+        trin = calc_arms_index(data['advance'].values, data['decline'].values,
+                                data['adv_volume'].values, data['decl_volume'].values)
+        return trin, _rolling(trin, 5)
+    return np.full(len(data), np.nan), np.full(len(data), np.nan)
+
+
 def register_breadth_features():
     """注册市场广度特征计算函数到FeatureSpace"""
     from .features import _FEATURE_CALC_REGISTRY
-
-    def _ad_ratio_wrapper(data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
-        """从DataFrame中提取advance/decline数据"""
-        if 'advance' in data.columns and 'decline' in data.columns:
-            return calc_advance_decline_ratio(data['advance'].values, data['decline'].values)
-        return np.full(len(data), np.nan), np.full(len(data), np.nan)
-
-    def _new_high_low_wrapper(data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
-        """从DataFrame中提取新高新低数据"""
-        if 'new_highs' in data.columns and 'new_lows' in data.columns:
-            return calc_new_high_low(data['new_highs'].values, data['new_lows'].values,
-                                      len(data))
-        return np.full(len(data), np.nan), np.full(len(data), np.nan)
-
-    def _mcclellan_wrapper(data: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
-        """从DataFrame中提取涨跌数据"""
-        if 'advance' in data.columns and 'decline' in data.columns:
-            return calc_mcclellan_oscillator(data['advance'].values, data['decline'].values)
-        return np.full(len(data), np.nan), np.full(len(data), np.nan)
-
-    _FEATURE_CALC_REGISTRY['ADV_DEC_RATIO'] = _ad_ratio_wrapper
-    _FEATURE_CALC_REGISTRY['NEW_HIGH_LOW'] = _new_high_low_wrapper
-    _FEATURE_CALC_REGISTRY['MCCLELLAN_OSC'] = _mcclellan_wrapper
+    _FEATURE_CALC_REGISTRY['ADV_DEC_RATIO'] = _breadth_ad_ratio
+    _FEATURE_CALC_REGISTRY['NEW_HIGH_LOW'] = _breadth_new_high_low
+    _FEATURE_CALC_REGISTRY['MCCLELLAN_OSC'] = _breadth_mcclellan
+    _FEATURE_CALC_REGISTRY['ARMS_INDEX'] = _breadth_arms

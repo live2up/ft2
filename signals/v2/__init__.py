@@ -76,26 +76,29 @@ signals v2 是基于 AIdev 探索结论的底层重构模块。
                       │
                       ▼
  ┌─────────────────────────────────────────────────────────────────────┐
- │  监控 & 扩展层                                                        │
- │                                                                      │
- │  decay_monitor.py   — 因子衰减监控 (IC 趋势 → 预警)                  │
- │  market_breadth.py  — 市场广度特征 (涨跌比/新高新低/麦克莱伦)         │
- └─────────────────────────────────────────────────────────────────────┘
+│  监控 & 扩展层                                                        │
+│                                                                      │
+│  decay_monitor.py   — 因子衰减监控 (IC 趋势 → 预警)                  │
+│  ic_analyzer.py     — IC 分析器 (Pearson/Rank IC / 显著性 / 衰减)     │
+│  market_breadth.py  — 市场广度特征 (涨跌比/新高新低/麦克莱伦)         │
+│  timeframe.py       — 多周期特征 (周线/月线 FeatureSpace 扩展)        │
+└─────────────────────────────────────────────────────────────────────┘
 
 
 ============================================================================
                          参数规范对照（模块归属）
 ============================================================================
 
- ┌─────────────────────┬──────────────────┬─────────────────────────┐
- │       配置项          │      语法类型    │      所在模块            │
- ├─────────────────────┼──────────────────┼─────────────────────────┤
- │ features            │ 函数调用式        │ features.py (Config)    │
- │ differences         │ 列名引用式 [A,B,op]│ features.py (Config)   │
- │ regime              │ 布尔开关          │ features.py (Config)    │
- │ Expression          │ 数学公式 AST      │ expression.py           │
- │ INDICATORS          │ 混用(业务映射)    │ run_baseline.py (应用层)│
- └─────────────────────┴──────────────────┴─────────────────────────┘
+┌─────────────────────┬──────────────────┬─────────────────────────┐
+│       配置项          │      语法类型    │      所在模块            │
+├─────────────────────┼──────────────────┼─────────────────────────┤
+│ features            │ 函数调用式        │ features.py (Config)    │
+│ differences         │ 列名引用式 [A,B,op]│ features.py (Config)   │
+│ regime              │ 布尔开关          │ features.py (Config)    │
+│ market_breadth      │ 布尔开关          │ features.py (Config)    │
+│ Expression          │ 数学公式 AST      │ expression.py           │
+│ INDICATORS          │ 混用(业务映射)    │ run_baseline.py (应用层)│
+└─────────────────────┴──────────────────┴─────────────────────────┘
 
 ============================================================================
 """
@@ -204,6 +207,26 @@ from .pysr_adapter import (
     DEFAULT_PYSR_CONFIG,
 )
 
+from .ic_analyzer import (
+    ICAnalyzer,
+)
+
+from .timeframe import (
+    resample_ohlcv,
+    align_to_daily,
+    compute_multitimeframe_features,
+    resample_and_compute,
+)
+
+from .market_breadth import (
+    calc_advance_decline_ratio,
+    calc_sector_diffusion,
+    calc_new_high_low,
+    calc_mcclellan_oscillator,
+    calc_arms_index,
+    register_breadth_features,
+)
+
 __all__ = [
     # Features
     'FeatureSpace', 'register_feature', 'DEFAULT_CONFIG',
@@ -236,4 +259,13 @@ __all__ = [
     'PySRAdapter', 'SRFormulaResult', 'DEFAULT_PYSR_CONFIG',
     # Scoring
     'ScoredSignal', 'CompositeScorer', 'three_zone_backtest', 'BacktestResult',
+    # IC Analyzer
+    'ICAnalyzer',
+    # Timeframe
+    'resample_ohlcv', 'align_to_daily',
+    'compute_multitimeframe_features', 'resample_and_compute',
+    # Market Breadth
+    'calc_advance_decline_ratio', 'calc_sector_diffusion',
+    'calc_new_high_low', 'calc_mcclellan_oscillator', 'calc_arms_index',
+    'register_breadth_features',
 ]
