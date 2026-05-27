@@ -12,6 +12,8 @@ V2 增量重构，地基先行、网格优先：
 - bo_search: 贝叶斯优化（网格之后的可选增强）
 - gp_primitives: GP 符号回归原语集（Phase C）
 - gp_evaluator: GP 多频率适应度评估器
+- expression: 因子表达式引擎（字符串→AST→面板因子值）
+- gp_miner: 因子GP矿机（符号回归自动发现因子）
 
 设计原则：
 1. factor/v2/ 为完全自包含的独立包，无任何对 factor/（V1）的 import 依赖
@@ -86,6 +88,17 @@ from .validator import (
     ValidationResult,
     validation_metric,
 )
+from .expression import (
+    FactorExpression,
+    ASTNode,
+    NodeType,
+    parse_expression,
+)
+from .gp_miner import (
+    FactorGPMiner,
+    Individual,
+    DEFAULT_GP_CONFIG,
+)
 
 __all__ = [
     # 基类（V2 自包含）
@@ -144,4 +157,13 @@ __all__ = [
     'ValidationMetric',
     'ValidationResult',
     'validation_metric',
+    # 因子表达式引擎
+    'FactorExpression',
+    'ASTNode',
+    'NodeType',
+    'parse_expression',
+    # 因子 GP 矿机
+    'FactorGPMiner',
+    'Individual',
+    'DEFAULT_GP_CONFIG',
 ]
