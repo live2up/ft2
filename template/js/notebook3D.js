@@ -48,6 +48,11 @@ window.__resizeManager = (() => {
 // [提取] 2026-05-18 默认色板常量，消除 useChart/GridChart 中的硬编码重复
 const DEFAULT_COLORS = ['#e74c3c', '#f39c12', '#af7ac5', '#5499c7', '#f4d03f', '#82e0aa'];
 
+// [优化] 2026-05-27 提取公共 ECharts 配置，提升性能且便于统一维护
+const COMMON_CHART_OPTIONS = {
+    animation: false
+};
+
 // =============================================================================
 // 第一部分：Chart Composable - 图表组件共用逻辑
 // =============================================================================
@@ -286,7 +291,7 @@ const GenericChart = {
                     if (extracted.xAxis.length) option.xAxis = { type: 'category', data: extracted.xAxis };
                     if (extracted.yAxis.length) option.yAxis = { type: 'category', data: extracted.yAxis };
                 }
-                return option;
+                return { ...COMMON_CHART_OPTIONS, ...option };
             }
         });
 
@@ -370,6 +375,7 @@ const PieChart = {
                 else if (pieShowValue.value) labelFormatter = '{b}\n{c}';
                 else if (pieShowPercent.value) labelFormatter = '{b}\n({d}%)';
                 return {
+                    ...COMMON_CHART_OPTIONS,
                     color: colors,
                     legend: { data: data.map((item, i) => ({ name: item.name, itemStyle: { color: colors[i % colors.length] } })), top: 10, left: 'center', orient: 'horizontal' },
                     series: [{ type: 'pie', data: data, radius: ['40%', '70%'], center: ['45%', '55%'], label: { show: true, formatter: labelFormatter }, labelLine: { show: true, length: 15, length2: 10 }, emphasis: { label: { show: true, fontSize: 14, fontWeight: 'bold' } } }]
@@ -422,6 +428,7 @@ const HeatmapChart = {
                 const visualMin = Math.floor(minValue / step) * step;
                 const visualMax = Math.ceil(maxValue / step) * step;
                 return {
+                    ...COMMON_CHART_OPTIONS,
                     grid: { left: '10%', right: '18%', top: '10%', bottom: '12%' },
                     xAxis: { type: 'category', data: extracted.xAxis, splitArea: { show: true } },
                     yAxis: { type: 'category', data: extracted.yAxis, splitArea: { show: true } },
@@ -578,7 +585,7 @@ const StackedChart = {
                         return baseOption;
                     })
                 };
-                return option;
+                return { ...COMMON_CHART_OPTIONS, ...option };
             }
         });
 
@@ -705,7 +712,7 @@ const GridChart = {
             } else {
                 option.dataZoom = [];
             }
-            return option;
+            return { ...COMMON_CHART_OPTIONS, ...option };
         };
 
         const initChart = () => {
