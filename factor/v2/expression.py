@@ -224,6 +224,20 @@ def evaluate_node(node: ASTNode, data: Dict[str, np.ndarray]) -> np.ndarray:
             prim_fn = PRIMITIVE_FUNCTIONS[fn_name]
             vals = [evaluate_node(c, data) for c in node.children]
 
+            # [修复] 2026-05-28 将常量数组还原为标量
+            # 原因：CONSTANT 求值返回 np.full((T,N), val)，但 primitive 函数
+            #       参数（period/exponent）需要 Python 标量
+            def _to_scalar_if_const(v, idx):
+                if idx > 0 and isinstance(v, np.ndarray):
+                    try:
+                        flat = float(v.flat[0])
+                        if np.allclose(v, flat):
+                            return flat if flat == int(flat) else flat
+                    except Exception:
+                        pass
+                return v
+            vals = [_to_scalar_if_const(v, i) for i, v in enumerate(vals)]
+
             # 注入超参数（如 period, exponent）
             if node.params:
                 return prim_fn(*vals, **node.params)

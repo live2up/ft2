@@ -67,7 +67,7 @@ from typing import Dict, List, Optional, Tuple, Set, Any
 from dataclasses import dataclass, field
 
 from .expression import (
-    FactorExpression, ASTNode, NodeType,
+    FactorExpression, ASTNode, NodeType, evaluate_node,
     VARIABLE_MAP, UNARY_FUNCTIONS, BINARY_FUNCTIONS, PRIMITIVE_FUNCTIONS,
 )
 
@@ -313,16 +313,23 @@ class FactorGPMiner:
         Returns:
             float: 适应度值，-999 表示无效个体
         """
+        import traceback
         try:
             # 求值因子面板
             factor_values = evaluate_node(ind.tree, self.data)
-        except Exception:
+        except Exception as e:
+            if ind.is_seed:
+                logger.warning(f"[GP Eval] 种子求值异常: {e}\n{traceback.format_exc()}")
             return -999.0
 
         # 无效检测：全 NaN 或全相同
         if np.all(np.isnan(factor_values)):
+            if ind.is_seed:
+                logger.warning(f"[GP Eval] 种子全NaN: {ind.expression_str[:60]}")
             return -999.0
         if np.nanstd(factor_values) < 1e-10:
+            if ind.is_seed:
+                logger.warning(f"[GP Eval] 种子零方差: std={np.nanstd(factor_values):.2e}")
             return -999.0
 
         # 展平因子值
@@ -342,6 +349,8 @@ class FactorGPMiner:
                 daily_ics.append(corr)
 
         if len(daily_ics) < 30:
+            if ind.is_seed:
+                logger.warning(f"[GP Eval] 种子IC不足: n_ics={len(daily_ics)}, expr={ind.expression_str[:60]}")
             return -999.0
 
         ind.ic_mean = float(np.mean(daily_ics))

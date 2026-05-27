@@ -51,6 +51,8 @@ def ts_rank(x: np.ndarray, period: int = 10) -> np.ndarray:
         np.ndarray: 排名数组，与前 period-1 个位置为 NaN
     """
     x = np.asarray(x, dtype=float)
+    # [修复] 2026-05-28 类型安全：确保 scalar
+    period = int(period)
     if x.ndim == 1:
         return _ts_rank_1d(x, period)
     else:
@@ -92,6 +94,7 @@ def ts_zscore(x: np.ndarray, period: int = 20) -> np.ndarray:
         np.ndarray: Z-score 数组，与前 period-1 个位置为 NaN
     """
     x = np.asarray(x, dtype=float)
+    period = int(period)
     if x.ndim == 1:
         return _ts_zscore_1d(x, period)
     else:
@@ -132,6 +135,8 @@ def delay(x: np.ndarray, period: int = 1) -> np.ndarray:
         np.ndarray: 延迟后的数组，前 period 个位置为 NaN
     """
     x = np.asarray(x, dtype=float)
+    # [修复] 2026-05-28 类型安全：period 可能来自表达式 AST 评估，需确保标量
+    period = int(period)
     if period < 1:
         raise ValueError(f"period 必须 ≥ 1，当前: {period}")
     result = np.full_like(x, np.nan)
@@ -156,6 +161,7 @@ def correlation(x: np.ndarray, y: np.ndarray,
     """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
+    period = int(period)
     if x.shape != y.shape:
         raise ValueError(f"x.shape={x.shape} 与 y.shape={y.shape} 不匹配")
 
@@ -200,6 +206,7 @@ def decay_linear(x: np.ndarray, period: int = 10) -> np.ndarray:
         np.ndarray: 加权平均数组
     """
     x = np.asarray(x, dtype=float)
+    period = int(period)
     weights = np.arange(1, period + 1, dtype=float)
     weights = weights / weights.sum()
 
@@ -272,12 +279,13 @@ def signed_power(x: np.ndarray, exponent: float = 2.0) -> np.ndarray:
     
     参数说明：
         x: 输入数组
-        exponent: 指数（≥ 0）
+        exponent: 指数（>= 0）
     
     返回：
         np.ndarray: 有符号幂结果
     """
     x = np.asarray(x, dtype=float)
+    exponent = float(exponent)
     return np.sign(x) * np.power(np.abs(x), exponent)
 
 
