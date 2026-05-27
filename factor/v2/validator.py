@@ -279,6 +279,95 @@ class FactorValidator:
 
         return result
 
+    # [新增] 2026-05-27 Bootstrap Sharpe 置信区间
+    @staticmethod
+    def bootstrap_sharpe(nav_series: pd.Series,
+                         n_bootstrap: int = 1000,
+                         ci: float = 0.90,
+                         freq: str = 'monthly') -> Dict[str, float]:
+        """Bootstrap 重采样计算 Sharpe 置信区间
+
+        对净值序列的收益率做有放回重采样，计算每次的 Sharpe，
+        输出指定置信水平的区间。
+
+        原理：不假设收益率服从正态分布，通过重采样经验分布
+        直接估计 Sharpe 的不确定性。
+
+        Args:
+            nav_series: 日频净值序列
+            n_bootstrap: 重采样次数，默认 1000
+            ci: 置信水平，默认 0.90（输出 5%~95% 分位）
+            freq: 重采样频率，'monthly'（月频，推荐）或 'daily'（日频）
+                 月频更稳健（减少序列自相关影响），日频更精细
+
+        Returns:
+            Dict[str, float]: {
+                'sharpe': 原始 Sharpe,
+                'mean': Bootstrap 均值,
+                'std': Bootstrap 标准差,
+                'ci_lower': 置信下限,
+                'ci_upper': 置信上限,
+                'n_bootstrap': 实际重采样次数,
+            }
+        """
+        daily_ret = nav_series.pct_change().dropna()
+        if len(daily_ret) < 20:
+            return {'sharpe': 0, 'mean': 0, 'std': 0,
+                    'ci_lower': 0, 'ci_upper': 0, 'n_bootstrap': 0}
+
+        # 原始 Sharpe
+        orig_sharpe = float(
+            daily_ret.mean() / daily_ret.std() * np.sqrt(252)
+            if daily_ret.std() > 1e-10 else 0
+        )
+
+        # 按频率重采样
+        if freq == 'monthly':
+            # 月频：按月份分组，每组内累加收益
+            monthly_ret = daily_ret.resample('ME').apply(
+                lambda x: np.prod(1 + x.values) - 1
+            ).dropna()
+            if len(monthly_ret) < 12:
+                return {'sharpe': orig_sharpe, 'mean': orig_sharpe, 'std': 0,
+                        'ci_lower': orig_sharpe, 'ci_upper': orig_sharpe,
+                        'n_bootstrap': 0}
+            sample_data = monthly_ret.values
+            annual_factor = 12.0
+        else:
+            sample_data = daily_ret.values
+            annual_factor = 252.0
+
+        # Bootstrap 重采样
+        n = len(sample_data)
+        boot_sharpes = []
+        rng = np.random.default_rng()
+
+        for _ in range(n_bootstrap):
+            indices = rng.integers(0, n, size=n)
+            boot_ret = sample_data[indices]
+            boot_mean = np.mean(boot_ret)
+            boot_std = np.std(boot_ret, ddof=1)
+            if boot_std > 1e-10:
+                boot_sharpe = boot_mean / boot_std * np.sqrt(annual_factor)
+                boot_sharpes.append(boot_sharpe)
+
+        if len(boot_sharpes) < 100:
+            return {'sharpe': orig_sharpe, 'mean': orig_sharpe, 'std': 0,
+                    'ci_lower': orig_sharpe, 'ci_upper': orig_sharpe,
+                    'n_bootstrap': len(boot_sharpes)}
+
+        boot_sharpes = np.array(boot_sharpes)
+        alpha = (1.0 - ci) / 2.0
+
+        return {
+            'sharpe': orig_sharpe,
+            'mean': float(np.mean(boot_sharpes)),
+            'std': float(np.std(boot_sharpes, ddof=1)),
+            'ci_lower': float(np.percentile(boot_sharpes, alpha * 100)),
+            'ci_upper': float(np.percentile(boot_sharpes, (1 - alpha) * 100)),
+            'n_bootstrap': len(boot_sharpes),
+        }
+
     @validation_metric(name='信息比率(IR)', desc='IC均值与标准差的比值', order=11)
     def information_ratio(self, lookforward: Optional[int] = None) -> float:
         """
@@ -457,3 +546,80 @@ class FactorValidator:
             return np.nan
 
         return hit_counts / total_counts
+
+    # [新增] 2026-05-27 分年度 IC 统计
+    @validation_metric(name='分年度IC', desc='每年 IC 均值、ICIR、正占比', order=12)
+    def yearly_ic(self, lookforward: Optional[int] = None,
+                  method: str = 'spearman') -> Dict[int, Dict[str, float]]:
+        """计算每年 IC 统计
+
+        对每年内的日频 IC 序列独立计算均值、ICIR、正占比。
+
+        Args:
+            lookforward: 未来期数
+            method: 相关系数计算方法
+
+        Returns:
+            Dict[int, Dict[str, float]]: {年份: {mean, ir, positive_ratio, n_days}}
+        """
+        if not self._validate_data():
+            return {}
+
+        lookforward = lookforward or self.ic_lookforward
+
+        # 对齐因子和收益
+        if lookforward == 1:
+            factor_aligned = self.factor_values.iloc[:-1]
+            returns_aligned = self.future_returns.iloc[1:]
+        else:
+            fw_cum = (1.0 + self.future_returns).iloc[::-1].rolling(
+                window=lookforward, min_periods=lookforward
+            ).apply(np.prod, raw=True).iloc[::-1] - 1.0
+            tail = lookforward - 1
+            factor_aligned = self.factor_values.iloc[:-tail] if tail > 0 else self.factor_values.iloc[:-1]
+            returns_aligned = fw_cum.iloc[:-tail] if tail > 0 else fw_cum.iloc[1:]
+
+        common_dates = factor_aligned.index.intersection(returns_aligned.index)
+        if len(common_dates) == 0:
+            return {}
+
+        factor_aligned = factor_aligned.loc[common_dates]
+        returns_aligned = returns_aligned.loc[common_dates]
+
+        # 按年份分组计算 IC
+        yearly_ics: Dict[int, list] = {}
+        for date_idx in common_dates:
+            factor_slice = factor_aligned.loc[date_idx]
+            returns_slice = returns_aligned.loc[date_idx]
+            valid_mask = factor_slice.notna() & returns_slice.notna()
+            if valid_mask.sum() < 10:
+                continue
+            factor_valid = factor_slice[valid_mask]
+            returns_valid = returns_slice[valid_mask]
+            if method == 'spearman':
+                ic, _ = stats.spearmanr(factor_valid, returns_valid)
+            elif method == 'pearson':
+                ic, _ = stats.pearsonr(factor_valid, returns_valid)
+            else:
+                raise ValueError(f"不支持的相关系数计算方法: {method}")
+            if not np.isnan(ic):
+                year = date_idx.year
+                if year not in yearly_ics:
+                    yearly_ics[year] = []
+                yearly_ics[year].append(ic)
+
+        result = {}
+        for year in sorted(yearly_ics.keys()):
+            ics = np.array(yearly_ics[year])
+            if len(ics) < 5:
+                continue
+            mean_ic = float(np.mean(ics))
+            std_ic = float(np.std(ics))
+            result[int(year)] = {
+                'mean': mean_ic,
+                'ir': float(mean_ic / std_ic) if std_ic > 1e-10 else 0.0,
+                'positive_ratio': float(np.mean(ics > 0)),
+                'n_days': len(ics),
+            }
+
+        return result

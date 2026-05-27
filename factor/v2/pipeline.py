@@ -110,6 +110,11 @@ class BacktestResult:
     # 年度收益
     yearly_returns: Dict[int, float] = field(default_factory=dict)
 
+    # [新增] 2026-05-27 分年度绩效指标
+    yearly_sharpe: Dict[int, float] = field(default_factory=dict)    # 每年 Sharpe
+    yearly_dd: Dict[int, float] = field(default_factory=dict)        # 每年最大回撤
+    yearly_vol: Dict[int, float] = field(default_factory=dict)       # 每年波动率
+
     # 元信息
     n_rebalances: int = 0              # 调仓次数
     start_date: str = ""               # 起始日期
@@ -135,6 +140,32 @@ class BacktestResult:
             '调仓次数': self.n_rebalances,
             '回测区间': f'{self.start_date} → {self.end_date}',
         }
+
+    # [新增] 2026-05-27 分年度绩效报告
+    def yearly_report(self) -> pd.DataFrame:
+        """生成分年度绩效报告
+
+        返回 DataFrame，每行一个年份，包含：
+          - 收益率、Sharpe、最大回撤、波动率
+
+        可用于 Notebook 表格输出或快速查看因子年度稳定性。
+        """
+        years = sorted(set(list(self.yearly_returns.keys())
+                          + list(self.yearly_sharpe.keys())
+                          + list(self.yearly_dd.keys())))
+        if not years:
+            return pd.DataFrame()
+
+        records = []
+        for year in years:
+            records.append({
+                '年份': str(year),
+                '收益率': f'{self.yearly_returns.get(year, 0):.2%}',
+                'Sharpe': f'{self.yearly_sharpe.get(year, 0):.4f}',
+                '最大回撤': f'{self.yearly_dd.get(year, 0):.2%}',
+                '波动率': f'{self.yearly_vol.get(year, 0):.2%}',
+            })
+        return pd.DataFrame(records)
 
 
 class FactorPipeline:
@@ -528,6 +559,11 @@ class FactorPipeline:
 
         result.yearly_returns = self._calc_yearly_returns(nav_series)
 
+        # [新增] 2026-05-27 分年度 Sharpe/回撤/波动率
+        result.yearly_sharpe = self._calc_yearly_sharpe(nav_series)
+        result.yearly_dd = self._calc_yearly_dd(nav_series)
+        result.yearly_vol = self._calc_yearly_vol(nav_series)
+
         return result
 
     # ================= 辅助方法 =================
@@ -558,6 +594,53 @@ class FactorPipeline:
                 ret = nav_values[year_end] / nav_values[year_start] - 1
                 yearly[year] = float(ret)
 
+        return yearly
+
+    # [新增] 2026-05-27 分年度 Sharpe
+    def _calc_yearly_sharpe(self, nav_series: pd.Series) -> Dict[int, float]:
+        """计算每年 Sharpe 比率
+
+        对每年内的日收益率独立计算年化 Sharpe。
+        """
+        yearly = {}
+        daily_ret = nav_series.pct_change().dropna()
+        for year in sorted(daily_ret.index.year.unique()):
+            year_ret = daily_ret[daily_ret.index.year == year].values
+            if len(year_ret) < 10:
+                continue
+            vol = np.std(year_ret, ddof=1)
+            if vol > 1e-10:
+                yearly[int(year)] = float(np.mean(year_ret) / vol * np.sqrt(252))
+            else:
+                yearly[int(year)] = 0.0
+        return yearly
+
+    # [新增] 2026-05-27 分年度最大回撤
+    def _calc_yearly_dd(self, nav_series: pd.Series) -> Dict[int, float]:
+        """计算每年最大回撤"""
+        yearly = {}
+        nav_values = nav_series.values
+        nav_dates = nav_series.index
+        for year in range(nav_dates[0].year, nav_dates[-1].year + 1):
+            mask = nav_dates.year == year
+            if mask.sum() < 5:
+                continue
+            year_nav = nav_values[mask]
+            peak = np.maximum.accumulate(year_nav)
+            dd = (year_nav - peak) / peak
+            yearly[int(year)] = float(dd.min())
+        return yearly
+
+    # [新增] 2026-05-27 分年度波动率
+    def _calc_yearly_vol(self, nav_series: pd.Series) -> Dict[int, float]:
+        """计算每年年化波动率"""
+        yearly = {}
+        daily_ret = nav_series.pct_change().dropna()
+        for year in sorted(daily_ret.index.year.unique()):
+            year_ret = daily_ret[daily_ret.index.year == year].values
+            if len(year_ret) < 5:
+                continue
+            yearly[int(year)] = float(np.std(year_ret, ddof=1) * np.sqrt(252))
         return yearly
 
     def _empty_result(self, reason: str = '') -> BacktestResult:
