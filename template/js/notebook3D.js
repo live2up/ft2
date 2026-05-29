@@ -170,6 +170,7 @@ const GenericChart = {
     props: { cell: { type: Object, required: true } },
     setup(props) {
         const showDataZoom = ref(false);
+        const showBarLabel = ref(true);         // Bar/柱状图：显示数值标签
         const intervalCompare = ref(false);  // 区间收益模式
         const intervalStart = ref(0);         // dataZoom start%（缓存当前滑块位置）
         const intervalEnd = ref(100);         // dataZoom end%
@@ -273,6 +274,7 @@ const GenericChart = {
                             if (chartType === 'area') baseOption.areaStyle = { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: colors[i % colors.length] + '60' }, { offset: 1, color: colors[i % colors.length] + '10' }] } };
                         }
                         if (isBarChart) baseOption.itemStyle = { color: rawSeries.length === 1 && !s.stack ? function(params) { return params.value >= 0 ? colors[0] : colors[1]; } : colors[i % colors.length], borderRadius: [4, 4, 0, 0] };
+                        if (chartType === 'bar') baseOption.label = { show: showBarLabel.value, position: 'top' };
                         return baseOption;
                     });
                     
@@ -311,7 +313,7 @@ const GenericChart = {
             }
         });
 
-        watch([showDataZoom], updateChart);
+        watch([showDataZoom, showBarLabel], updateChart);
 
         // === 区间收益逻辑 ===
         const handleDataZoom = () => {
@@ -353,7 +355,7 @@ const GenericChart = {
             }
         });
 
-        return { chartRef, showDataZoom, isFullscreen, toggleFullscreen, intervalCompare, chartType: computed(() => { const charts = props.cell.content?.charts; return charts?.series?.[0]?.type || 'line'; }) };
+        return { chartRef, showDataZoom, showBarLabel, isFullscreen, toggleFullscreen, intervalCompare, chartType: computed(() => { const charts = props.cell.content?.charts; return charts?.series?.[0]?.type || 'line'; }) };
     },
     template: `
         <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
@@ -366,8 +368,10 @@ const GenericChart = {
                         <!-- 上方：视图控制 -->
                         <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
                         <!-- 中间：数据操作 -->
-                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">⇄</button>
+                        <button v-if="chartType === 'bar'" class="tool-btn" :class="{ active: showBarLabel }" @click="showBarLabel = !showBarLabel" title="显示数值">V</button>
                         <button v-if="chartType === 'line' || chartType === 'area'" class="tool-btn" :class="{ active: intervalCompare }" @click="intervalCompare = !intervalCompare" title="区间收益">%</button>
+                        <!-- 下方：滚动轴（靠近底部滑块） -->
+                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">⇄</button>
                     </div>
                 </div>
             </div>
@@ -845,6 +849,7 @@ const GridChart = {
                         <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">&#x26F6;</button>
                         <!-- 中间：数据操作 -->
                         <button v-if="hasIntervalCompare" class="tool-btn" :class="{ active: intervalCompare }" @click="intervalCompare = !intervalCompare" title="区间收益（仅第一图）">%</button>
+                        <!-- 下方：滚动轴（靠近底部滑块） -->
                         <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">&#x21C4;</button>
                     </div>
                 </div>
