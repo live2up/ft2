@@ -638,6 +638,19 @@ const GridChart = {
         const chartRef = ref(null);
         let chartInstance = null;
         const showDataZoom = ref(false);
+        const intervalCompare = ref(false);     // 区间收益：仅转换第一个子图（xAxisIndex=0）
+        const intervalStart = ref(0);
+        const intervalEnd = ref(100);
+        let intervalListener = null;
+        // 判断第一个子图类型，仅 line/area 支持区间收益
+        const firstGridType = computed(() => {
+            const series = props.cell.content?.charts?.series || [];
+            const first = series.find(s => (s.xAxisIndex ?? s.gridIndex ?? 0) === 0);
+            return first?.type || 'line';
+        });
+        const hasIntervalCompare = computed(() =>
+            ['line', 'area'].includes(firstGridType.value)
+        );
         const { isFullscreen, toggleFullscreen } = useFullscreen();
 
         const getColors = () => {
@@ -710,6 +723,40 @@ const GridChart = {
                 option.series.forEach(s => { if (s.type === 'line') { s.smooth = true; s.showSymbol = false; } });
             }
 
+            // [新增] Grid 区间收益：仅转换第一个子图的 line/area series
+            if (intervalCompare.value && hasIntervalCompare.value) {
+                const firstGridSeries = (option.series || []).filter(s =>
+                    (s.xAxisIndex ?? s.gridIndex ?? 0) === 0
+                );
+                if (firstGridSeries.length > 0) {
+                    const dataLen = firstGridSeries[0]?.data?.length || 0;
+                    const startPercent = showDataZoom.value ? intervalStart.value : 0;
+                    const startIdx = Math.floor(dataLen * startPercent / 100);
+                    const baseIdx = startIdx > 0 ? startIdx - 1 : 0;
+
+                    if (option.yAxis && Array.isArray(option.yAxis) && option.yAxis[0]) {
+                        option.yAxis[0] = { ...option.yAxis[0], axisLabel: { formatter: '{value}%' } };
+                    }
+
+                    option.series = (option.series || []).map(s => {
+                        const idx = s.xAxisIndex ?? s.gridIndex ?? 0;
+                        if (idx !== 0) return s;
+                        const numericData = (s.data || []).map(v => {
+                            if (Array.isArray(v) && v.length >= 2) return parseFloat(v[1]);
+                            if (typeof v === 'object' && v !== null) return parseFloat(v.value || 0);
+                            return parseFloat(v);
+                        }).filter(v => !isNaN(v));
+                        const baseValue = numericData[baseIdx];
+                        const returnsData = numericData.map((v, i) => {
+                            if (i < baseIdx) return null;
+                            if (!baseValue || baseValue === 0) return 0;
+                            return parseFloat(((v - baseValue) / baseValue * 100).toFixed(4));
+                        });
+                        return { ...s, data: returnsData };
+                    });
+                }
+            }
+
             if (showDataZoom.value) {
                 const gridLen = (option.grid || []).length;
                 const allIdx = Array.from({length: gridLen}, (_, i) => i);
@@ -743,7 +790,7 @@ const GridChart = {
         // [优化] 2026-05-27 使用全局 resize 管理器防抖，避免多图表同时 resize 卡顿
         let unregisterResize = null;
 
-        watch([showDataZoom], () => { if (chartInstance) chartInstance.setOption(buildGridOption(), true); });
+        watch([showDataZoom, intervalCompare], () => { if (chartInstance) chartInstance.setOption(buildGridOption(), true); });
 
         onMounted(() => {
             nextTick(() => initChart());
@@ -754,12 +801,37 @@ const GridChart = {
         onUnmounted(() => {
             if (unregisterResize) unregisterResize();
             window.removeEventListener('colorSchemeChanged', initChart);
+            const inst = chartRef.value ? echarts.getInstanceByDom(chartRef.value) : null;
+            if (inst && intervalListener) inst.off('dataZoom', intervalListener);
             if (chartInstance) {
                 chartInstance.dispose();
             }
         });
 
-        return { chartRef, showDataZoom, isFullscreen, toggleFullscreen };
+        // [新增] Grid 区间收益：监听 dataZoom 滑块位置作为收益率基准点
+        watch(intervalCompare, (val) => {
+            if (val) {
+                nextTick(() => {
+                    const inst = chartRef.value ? echarts.getInstanceByDom(chartRef.value) : null;
+                    if (!inst) return;
+                    intervalListener = (params) => {
+                        if (params.batch) {
+                            const dz = params.batch.find(d => d.dataZoomIndex === 0);
+                            if (dz) { intervalStart.value = dz.start; intervalEnd.value = dz.end; }
+                        } else if (params.dataZoomIndex === 0) {
+                            intervalStart.value = params.start;
+                            intervalEnd.value = params.end;
+                        }
+                    };
+                    inst.on('dataZoom', intervalListener);
+                });
+            } else {
+                const inst = chartRef.value ? echarts.getInstanceByDom(chartRef.value) : null;
+                if (inst && intervalListener) { inst.off('dataZoom', intervalListener); intervalListener = null; }
+            }
+        });
+
+        return { chartRef, showDataZoom, intervalCompare, hasIntervalCompare, isFullscreen, toggleFullscreen };
     },
     template: `
         <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
@@ -772,6 +844,7 @@ const GridChart = {
                         <!-- 上方：视图控制 -->
                         <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">&#x26F6;</button>
                         <!-- 中间：数据操作 -->
+                        <button v-if="hasIntervalCompare" class="tool-btn" :class="{ active: intervalCompare }" @click="intervalCompare = !intervalCompare" title="区间收益（仅第一图）">%</button>
                         <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">&#x21C4;</button>
                     </div>
                 </div>
