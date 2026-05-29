@@ -1128,9 +1128,10 @@ body {
         z-index: 1002;
     }
     
+    /* [调整] 2026-05-28 菜单展开宽度与桌面端一致(200px)，减少宽度跳变 */
     .toc-float-menu.expanded {
-        bottom: 80px;
-        width: 280px;
+        bottom: 20px;
+        width: 200px;
         max-height: 60vh;
     }
     

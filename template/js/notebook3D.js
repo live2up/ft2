@@ -1030,7 +1030,18 @@ const TocMenu = {
         const clearSelection = () => { selectedIndices.value = new Set(); };
         const scrollToSection = (index) => { if (index === -1) window.scrollTo({ top: 0, behavior: 'smooth' }); else { const el = document.getElementById('section-' + index); if (el) el.scrollIntoView({ behavior: 'smooth' }); } };
         const toggleMenu = () => { menuExpanded.value = !menuExpanded.value; setTimeout(() => { window.dispatchEvent(new Event('resize')); }, 350); };
-        const checkScreenWidth = () => { isNarrow.value = window.innerWidth <= 1200; if (!isNarrow.value) menuExpanded.value = true; };
+        // [调整] 2026-05-29 窄屏自动收起，宽屏自动展开（覆盖用户手动收起状态）
+        const checkScreenWidth = () => { 
+            const nowNarrow = window.innerWidth <= 1200; 
+            if (nowNarrow && !isNarrow.value) { 
+                // 从宽变窄 → 自动收起
+                menuExpanded.value = false; 
+            } else if (!nowNarrow && isNarrow.value) { 
+                // 从窄变宽 → 自动展开
+                menuExpanded.value = true; 
+            }
+            isNarrow.value = nowNarrow; 
+        };
         const showToast = (message, type = 'info', duration = 3000) => { if (typeof window !== 'undefined' && window.showToast) window.showToast(message, type, duration); };
 
         const stitchImages = async (imageBlobs) => {
@@ -1097,7 +1108,8 @@ const TocMenu = {
     template: `
         <nav class="toc-float-menu" :class="{ expanded: menuExpanded }" v-if="tocItems.length > 0">
             <div class="menu-wide">
-                <div class="menu-header"><span>📑 目录</span><button v-if="isNarrow" class="collapse-btn" @click="toggleMenu" title="收起">✕</button></div>
+                <!-- [调整] 2026-05-29 宽屏也显示收起按钮，用户可手动收起/展开 -->
+                <div class="menu-header"><span>📑 目录</span><button class="collapse-btn" @click="toggleMenu" title="收起">✕</button></div>
                 <ul class="menu-list">
                     <li v-for="(item, index) in tocItems" :key="index" class="menu-item" :class="{ selected: isSelected(item.index) }" @click="scrollToSection(item.index)">
                         <input type="checkbox" :checked="isSelected(item.index)" @click.stop="toggleSelection(item.index)">
