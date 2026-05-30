@@ -99,10 +99,9 @@ const CHART_AXIS_RULES = {
     },
     legend: {
         build(series) {
-            const count = series.length;
             return {
                 data: series.map(s => ({ name: s.name, icon: 'rect' })),
-                top: 5, type: count > 10 ? 'scroll' : 'plain',
+                top: 5, type: 'scroll',   // scroll 自适应：条目少=plain效果，超出宽度=自动翻页
                 width: '90%', pageIconSize: 10,
                 pageTextStyle: { fontSize: 11 }
             };
@@ -114,11 +113,11 @@ const CHART_AXIS_RULES = {
         }
     },
     grid: {
-        build(showDataZoom, legendCount) {
+        build(showDataZoom) {
             return {
                 left: 8, right: 40,
                 bottom: showDataZoom ? 50 : 5,
-                top: legendCount > 10 ? 32 : 50,
+                top: 50,  // 固定 50px，scroll legend 高度固定不受条目数影响
                 containLabel: true
             };
         }
@@ -295,7 +294,7 @@ const GenericChart = {
                     // [重构] 2026-05-30 使用共享规则：xAxis/yAxis/grid/legend/tooltip
                     option.xAxis = { type: 'category', boundaryGap: CHART_AXIS_RULES.xAxis.boundaryGap(chartType), data: extracted.xAxis };
                     option.yAxis = { type: 'value', scale: CHART_AXIS_RULES.yAxis.scale(chartType) };
-                    option.grid = CHART_AXIS_RULES.grid.build(showDataZoom.value, rawSeries.length);
+                    option.grid = CHART_AXIS_RULES.grid.build(showDataZoom.value);
                     option.legend = CHART_AXIS_RULES.legend.build(rawSeries);
                     option.tooltip = CHART_AXIS_RULES.tooltip.build();
 
@@ -377,12 +376,12 @@ const GenericChart = {
                     const hasXData = extracted.xAxis && extracted.xAxis.length > 0;
                     option.xAxis = { type: hasXData ? 'category' : 'value', data: hasXData ? extracted.xAxis : [] };
                     option.yAxis = { type: 'value' };
-                    option.grid = CHART_AXIS_RULES.grid.build(showDataZoom.value, 0);
+                    option.grid = CHART_AXIS_RULES.grid.build(showDataZoom.value);
                 } else if (chartType === 'candlestick') {
                     // [重构] 2026-05-30 K线图：使用共享规则配置坐标
                     option.xAxis = { type: 'category', boundaryGap: CHART_AXIS_RULES.xAxis.boundaryGap('candlestick'), data: extracted.xAxis };
                     option.yAxis = { type: 'value', scale: CHART_AXIS_RULES.yAxis.scale('candlestick') };
-                    option.grid = CHART_AXIS_RULES.grid.build(showDataZoom.value, 0);
+                    option.grid = CHART_AXIS_RULES.grid.build(showDataZoom.value);
                     option.series = extracted.series.map(s => ({ name: s.name, type: 'candlestick', data: s.data }));
                 }
 
