@@ -564,6 +564,75 @@ nb.export_html()
 - 行数 ≤ 20 → `page: False`，一眼看完
 - freeze + heatmap 组合是最出彩的表格用法
 
+### Section 层次结构（推荐）
+
+`with nb.section()` 是组织报告层次的核心机制，遵循以下推荐结构：
+
+```python
+# ═══════ 推荐报告结构 ═══════
+with nb.section("核心指标"):    # 一级 section
+    nb.metrics({...})          # 顶层概览，无需 title
+
+with nb.section("收益分析"):    # 一级 section
+    nb.chart('line', {...}, title='净值曲线')     # title 作为小标题
+    nb.chart('bar', {...}, title='月度收益')
+
+with nb.section("风险分析"):    # 一级 section
+    nb.metrics({...}, title='风险指标')
+    nb.chart('area', {...}, title='回撤序列')
+
+    with nb.section("VaR 分析"):   # 二级 section（嵌套）
+        nb.metrics({...})
+        nb.chart('line', {...})
+
+with nb.section("交易明细", collapsed=True):  # 默认折叠
+    nb.table(trades)
+```
+
+**推荐原则：**
+
+| 原则 | 说明 |
+|------|------|
+| **顶层放概览** | 报告标题后直接 `nb.metrics()` 放核心 KPI，让读者一眼掌握全局 |
+| **一级 section 按主题划分** | 核心指标 / 收益分析 / 风险分析 / 交易分析，每个 `<h2>` 大标题 |
+| **二级 section 用于细分** | 风险分析下可嵌套 VaR / 最大回撤 / 波动率 等子主题 |
+| **深度 ≤ 2** | 最多嵌套到二级 section，更深会影响可读性 |
+| **section 内 cell 加 title** | 在 section 内部，图表/表格的 `title` 作为 `<h3>` 小标题展示 |
+| **section 外 cell 也加 title** | 不在 section 内时，cell 的 `title` 会自动创建单元素 section 包裹 |
+| **长列表 section 折叠** | 交易明细、原始数据等用 `collapsed=True`，保持报告简洁 |
+| **4-6 个一级 section** | 太少内容拥挤，太多层级琐碎，4-6 个主题是最佳平衡 |
+
+**典型报告层次参考：**
+
+```
+策略回测报告
+├── 核心指标 (metrics, 无 section)         ← 顶层 KPI 卡片
+├── 收益分析 (一级 section)
+│   ├── 净值曲线 (chart, title='净值曲线')
+│   └── 月度收益 (chart, title='月度收益')
+├── 风险分析 (一级 section)
+│   ├── 风险指标 (metrics, title='风险指标')
+│   ├── 回撤序列 (chart, title='回撤序列')
+│   └── VaR 分析 (二级 section)
+│       └── VaR/CVaR (metrics)
+├── 交易分析 (一级 section)
+│   ├── 交易统计 (metrics, title='交易统计')
+│   └── 盈亏分布 (chart, title='盈亏分布')
+└── 交易明细 (一级 section, collapsed=True)  ← 默认折叠
+    └── 全部成交记录 (table)
+```
+
+**不使用 section 的反模式：**
+
+```python
+# ❌ 不推荐：完全不用 section，所有 cell 平铺
+nb.metrics({...})
+nb.chart('line', {...}, title='净值')
+nb.chart('bar', {...}, title='收益')
+nb.table(data)
+# 缺点：无层次感，阅读体验差，前端无法提供折叠/导航
+```
+
 ### 图表高度选择
 
 | 场景 | 推荐 height | 说明 |
