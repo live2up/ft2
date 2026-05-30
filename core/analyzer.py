@@ -38,8 +38,6 @@ import os
 from datetime import datetime, date
 from typing import Dict, List, Tuple, Any, Optional, Union
 from dataclasses import dataclass
-import json
-from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
 import inspect
 from functools import wraps
@@ -118,9 +116,9 @@ order范围    | 类别              | 指标
 
 新增指标规范:
 ------------
-1. 方法名以 calc_ 开头
-2. 计算结果存入 self._metrics，格式: {'name': '中文名', 'value': 值, 'order': 排序号}
-3. to_html() 自动调用所有 calc_ 方法并按 order 排序
+1. 用 @metric 装饰器声明元数据（name/group/fmt/desc/order）
+2. 方法返回纯数字，格式化由输出层处理
+3. to_notebook() / to_excel() 通过 self.metrics() 自动收集
 """
 
 class AccountAnalyzer:
@@ -1139,138 +1137,7 @@ class AccountAnalyzer:
         print(f'Excel 已生成至: {output_path}')
         return str(output_path)
 
-    def to_html(self, report_name: str = "回测报告", output_dir: str = "."):
-        """
-        导出 HTML 回测报告
-        
-        生成包含所有指标、每日资产曲线、交易记录的 HTML 报告
-        使用新架构的 @metric 装饰器方法计算指标
-        
-        Args:
-            report_name: 报告名称，用于生成文件名
-                        格式：{report_name}_{YYYYMMDD_HHMM}.html
-            output_dir: 输出目录（相对路径，基于调用者所在目录）
-                       默认为 "." 表示调用者当前目录
-            
-        Output:
-            生成 HTML 文件，包含：
-            - 基础信息：开始日期、结束日期、初始资金、最终资产
-            - 收益指标：累计收益率、年化收益率
-            - 风险指标：波动率、最大回撤、VaR、CVaR、Ulcer Index
-            - 风险调整收益：夏普比率、索提诺比率、UPI
-            - 交易分析：胜率、平均盈亏比、平均持仓时间、凯利仓位
-            - 每日资产曲线数据
-            - 全部交易记录
-            - 盈利最大和亏损最大的前 20 笔交易
-            
-        Example:
-            >>> analyzer.to_html("策略回测")
-            >>> analyzer.to_html("年度报告", output_dir="reports/2024")
-        """
-        collected_metrics = self.metrics()
-        
-        initial_cash = self.account.snapshots[0].cash if self.account and self.account.snapshots else 0
-        final_assets = self.account.snapshots[-1].nav if self.account and self.account.snapshots else 0
-
-        dates = sorted(self._daily_assets.keys())
-        start_date = dates[1] if len(dates) > 1 else None
-        end_date = dates[-1] if dates else None
-
-        metrics = [
-            {"name": "开始日期", "value": start_date.strftime('%Y-%m-%d') if start_date else 'N/A', "order": 1, "desc": "回测起始日期，前一交易日收盘作为基准"},
-            {"name": "结束日期", "value": end_date.strftime('%Y-%m-%d') if end_date else 'N/A', "order": 2, "desc": "回测结束日期"},
-            {"name": "初始资金", "value": initial_cash, "order": 3, "desc": "回测开始时投入的资金"},
-            {"name": "最终资产", "value": final_assets, "order": 4, "desc": "回测结束时的总资产"},
-        ]
-        
-        for metric_name, metric_data in collected_metrics.items():
-            value = metric_data['value']
-            if isinstance(value, tuple):
-                value = value[0]
-            
-            metrics.append({
-                "name": metric_data['name'], 
-                "value": value,
-                "order": metric_data.get('order', 99),
-                "desc": metric_data.get('desc', '')
-            })
-        
-        metrics.sort(key=lambda x: x['order'])
-
-        data = {
-            'title': report_name,
-            'createdAt': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'metrics': metrics,
-            'dailyAssets': [
-                {'date': d.strftime('%Y-%m-%d'), 'assets': v if not (isinstance(v, float) and (v != v or abs(v) == float('inf'))) else 0} 
-                for d, v in sorted(self._daily_assets.items())
-            ],
-            'trades': [self._to_dict(t) for t in self.account.trade_records],
-            'topProfits': [self._to_dict(t, exclude='original_trade') for t in self.get_largest_profit_trades(20)],
-            'topLosses': [self._to_dict(t, exclude='original_trade') for t in self.get_largest_loss_trades(20)],
-        }
-
-        current_file_path = Path(__file__).resolve()
-        template_dir = current_file_path.parent.parent / "template"
-
-        env = Environment(loader=FileSystemLoader(template_dir))
-        template = env.get_template("analyzer.html")
-
-        def json_serializer(obj):
-            """处理 NaN/Inf 等无法序列化的值"""
-            import math
-            if isinstance(obj, float):
-                if math.isnan(obj):
-                    return 0
-                if math.isinf(obj):
-                    return 0
-            return str(obj)
-
-        html_content = template.render(data=json.dumps(data, ensure_ascii=False, default=json_serializer))
-
-        current_datetime = datetime.now().strftime("%Y%m%d_%H%M")
-        output_path = Path(self.base_dir) / output_dir / f"{report_name}_{current_datetime}.html"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        print(f"报告已生成至: {output_path}")
-
-    # ------------------------------------------------------------------------
-    # 私有方法
-    # ------------------------------------------------------------------------
-
-    @staticmethod
-    def _to_dict(obj, exclude: str = None) -> dict:
-        """
-        将对象转换为可 JSON 序列化的字典
-        
-        支持普通对象、字典、以及嵌套对象的转换
-        用于序列化交易记录等对象以便 JSON 导出
-        
-        Args:
-            obj: 要转换的对象或字典
-            exclude: 要排除的字段名（可选）
-                    用于过滤不需要序列化的字段，如 'original_trade'
-            
-        Returns:
-            dict: 转换后的字典，可直接用于 JSON 序列化
-            
-        Example:
-            >>> obj = TradeRecord(...)
-            >>> d = analyzer._to_dict(obj)
-            >>> d_no_original = analyzer._to_dict(obj, exclude='original_trade')
-        """
-        if hasattr(obj, '__dict__'):
-            d = obj.__dict__
-        elif isinstance(obj, dict):
-            d = obj
-        else:
-            return obj
-        
-        if exclude:
-            return {k: v for k, v in d.items() if k != exclude}
-        return dict(d)
+    # [移除] 2026-05-30 to_html() 已由 to_notebook() 替代
 
     @staticmethod
     def _aggregate_daily_assets(snapshots: List) -> Dict:
