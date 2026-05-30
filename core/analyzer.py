@@ -43,6 +43,10 @@ from jinja2 import Environment, FileSystemLoader
 from pathlib import Path
 import inspect
 from functools import wraps
+# [修复] 2026-05-30 _calculate_profit 需要用 OrderSide 枚举做比较
+from .account import OrderSide
+
+
 
 
 # ============================================================================
@@ -824,7 +828,7 @@ class AccountAnalyzer:
 
         遵循 notebook 推荐的 section 层次结构：
         - 顶层 KPI 卡片（无 section 包裹，一眼掌握全局）
-        - 收益分析 / 风险分析 / 交易分析 / 交易明细 四大章节
+        - 基础信息 / 指标汇总 / 收益分析(图表) / 交易明细 四大章节
 
         Args:
             title: 报告标题（同时作为默认输出文件名）
@@ -836,11 +840,15 @@ class AccountAnalyzer:
             analyzer.to_notebook("动量策略").export_html()
         """
         # [重构] 2026-05-30 按 notebook 推荐层次结构重组：
-        #   核心指标不包裹 section → 收益分析(净值+回撤) → 风险分析 → 交易分析 → 交易明细
+        #   顶层KPI → 基础信息(日期/资金) → 指标汇总(收益+风险+交易) →
+        #   收益分析(净值+回撤图表) → 交易明细(表格,折叠)
         from notebook import Notebook
         import numpy as np
 
         nb = Notebook(title)
+        # [修复] 2026-05-30 Notebook 在 analyzer.py 内部创建，
+        #   base_dir 会指向 core/ 而非调用者目录，需手动纠正
+        nb.base_dir = self.base_dir
         assets = self._daily_assets
         dates = sorted(assets.keys()) if assets else []
 
@@ -864,22 +872,12 @@ class AccountAnalyzer:
 
         has_records = self.account and self.account.trade_records
 
-        # ═══════════════════════════════════════════
-        # ① 顶层：核心指标卡片（无 title → 不包裹 section，平铺展示）
-        # ═══════════════════════════════════════════
-        m = {}
-        _add(m, '累计收益率', self.return_rate())
-        _add(m, '年化收益率', self.annualized_return())
-        _add(m, '夏普比率', self.sharpe_ratio(), '.2f')
+        # 预计算（供 section 内使用）
         dd = self.max_drawdown()
-        _add(m, '最大回撤', dd[0] if dd else None)
-        _add(m, '年化波动率', self.volatility())
-        _add(m, '胜率', self.win_rate())
+        initial_cash = self.account.snapshots[0].cash if self.account and self.account.snapshots else 0
+        final_nav = self.account.snapshots[-1].nav if self.account and self.account.snapshots else 0
 
-        if m:
-            nb.metrics(m, columns=4)
-
-        # 预计算回撤数据（收益分析和风险分析共用）
+        # 净值 + 回撤数据（图表共用）
         nav_values = []
         dd_pct = []
         if dates and len(dates) >= 2:
@@ -887,30 +885,70 @@ class AccountAnalyzer:
             vals = np.array(nav_values)
             cumulative = vals / vals[0]
             running_max = np.maximum.accumulate(cumulative)
-            dd_pct = ((running_max - cumulative) / running_max * 100).tolist()
+            dd_pct = (-(running_max - cumulative) / running_max * 100).tolist()
 
         # ═══════════════════════════════════════════
-        # ② Section：收益分析 — 净值曲线 + 回撤序列
+        # ① Section：回测指标（一级，嵌套二级子分组）
+        # ═══════════════════════════════════════════
+        with nb.section("回测指标"):
+            # 基础信息（二级）
+            with nb.section("基础指标"):
+                info_m = {}
+                if dates and len(dates) >= 2:
+                    info_m['开始日期'] = dates[1].strftime('%Y-%m-%d')
+                    info_m['结束日期'] = dates[-1].strftime('%Y-%m-%d')
+                if initial_cash > 0:
+                    info_m['初始资金'] = f"{initial_cash:,.0f}"
+                if final_nav > 0:
+                    info_m['最终资产'] = f"{final_nav:,.0f}"
+                nb.metrics(info_m, columns=4)
+
+            # 收益指标（二级）
+            with nb.section("收益指标"):
+                return_m = {}
+                _add(return_m, '累计收益率', self.return_rate())
+                _add(return_m, '年化收益率', self.annualized_return())
+                _add(return_m, '夏普比率', self.sharpe_ratio(), '.2f')
+                _add(return_m, '胜率', self.win_rate())
+                nb.metrics(return_m, columns=4)
+
+            # 风险指标（二级）
+            with nb.section("风险指标"):
+                risk_m = {}
+                _add(risk_m, '年化波动率', self.volatility())
+                _add(risk_m, '最大回撤', dd[0] if dd else None)
+                _add(risk_m, '索提诺比率', self.sortino_ratio(), '.2f')
+                _add(risk_m, 'VaR(95%)', self.var(0.95))
+                _add(risk_m, 'CVaR(95%)', self.cvar(0.95))
+                _add(risk_m, 'Ulcer Index', self.ulcer_index(), '.2f')
+                _add(risk_m, 'UPI', self.upi(), '.2f')
+                nb.metrics(risk_m, columns=4)
+
+            # 交易指标（二级，有成交记录时）
+            if has_records:
+                with nb.section("交易指标"):
+                    trade_m = {}
+                    _add(trade_m, '胜率', self.win_rate())
+                    _add(trade_m, '平均盈亏比', self.avg_profit_loss_ratio(), '.2f')
+                    _add(trade_m, '平均持仓(天)', self.avg_holding_period(), '.1f')
+                    kc = self.kelly_criterion()
+                    if kc is not None:
+                        _add(trade_m, '凯利仓位', kc)
+                        kf = self.kelly_fraction(0.5)
+                        if kf is not None:
+                            _add(trade_m, '半凯利仓位', kf)
+                    avg_p = self.avg_profit(mode='amount')
+                    avg_l = self.avg_loss(mode='amount')
+                    if avg_p is not None:
+                        trade_m['平均盈利'] = f"{avg_p:,.0f}"
+                    if avg_l is not None:
+                        trade_m['平均亏损'] = f"{avg_l:,.0f}"
+                    nb.metrics(trade_m, columns=4)
+
+        # ═══════════════════════════════════════════
+        # ② Section：收益分析 — 净值 + 回撤图表
         # ═══════════════════════════════════════════
         with nb.section("收益分析"):
-            # 收益指标卡片
-            return_m = {}
-            _add(return_m, '累计收益率', self.return_rate())
-            _add(return_m, '年化收益率', self.annualized_return())
-
-            # 基础信息
-            initial_cash = self.account.snapshots[0].cash if self.account and self.account.snapshots else 0
-            final_nav = self.account.snapshots[-1].nav if self.account and self.account.snapshots else 0
-            if initial_cash > 0:
-                return_m['初始资金'] = f"{initial_cash:,.0f}"
-            if final_nav > 0:
-                return_m['最终资产'] = f"{final_nav:,.0f}"
-            if dates and len(dates) >= 2:
-                return_m['开始日期'] = dates[1].strftime('%Y-%m-%d')
-                return_m['结束日期'] = dates[-1].strftime('%Y-%m-%d')
-
-            nb.metrics(return_m, title="收益指标", columns=3)
-
             # 净值曲线
             if nav_values:
                 nb.chart('line', {
@@ -921,55 +959,15 @@ class AccountAnalyzer:
                     yaxis_opts={'min_': nav_values[0] * 0.85},
                     datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
 
-            # 回撤序列
+            # 回撤序列（负值表示下跌幅度）
             if dd_pct:
-                max_dd_val = float(max(dd_pct))
-                y_min = -max(max_dd_val * 1.2, 5)
+                max_dd_val = float(min(dd_pct))
+                y_min = min(max_dd_val * 1.2, -5)
                 nb.chart('area', {
                     'xAxis': [d.strftime('%Y-%m-%d') for d in dates],
                     'series': [{'name': '回撤%', 'data': dd_pct}],
                 }, title='回撤序列', height='250px',
-                    yaxis_opts={'min_': y_min, 'max_': 5})
-
-        # ═══════════════════════════════════════════
-        # ③ Section：风险分析
-        # ═══════════════════════════════════════════
-        with nb.section("风险分析"):
-            risk_m = {}
-            _add(risk_m, '年化波动率', self.volatility())
-            _add(risk_m, '最大回撤', dd[0] if dd else None)
-            _add(risk_m, 'VaR(95%)', self.var(0.95))
-            _add(risk_m, 'CVaR(95%)', self.cvar(0.95))
-            _add(risk_m, '索提诺比率', self.sortino_ratio(), '.2f')
-            _add(risk_m, 'Ulcer Index', self.ulcer_index(), '.2f')
-            _add(risk_m, 'UPI', self.upi(), '.2f')
-            nb.metrics(risk_m, title="风险指标", columns=3)
-
-        # ═══════════════════════════════════════════
-        # ④ Section：交易分析（有成交记录时才展示）
-        # ═══════════════════════════════════════════
-        if has_records:
-            with nb.section("交易分析"):
-                trade_m = {}
-                _add(trade_m, '胜率', self.win_rate())
-                _add(trade_m, '平均盈亏比', self.avg_profit_loss_ratio(), '.2f')
-                _add(trade_m, '平均持仓(天)', self.avg_holding_period(), '.1f')
-
-                kc = self.kelly_criterion()
-                if kc is not None:
-                    _add(trade_m, '凯利仓位', kc)
-                    kf = self.kelly_fraction(0.5)
-                    if kf is not None:
-                        _add(trade_m, '半凯利仓位', kf)
-
-                avg_p = self.avg_profit(mode='amount')
-                avg_l = self.avg_loss(mode='amount')
-                if avg_p is not None:
-                    trade_m['平均盈利'] = f"{avg_p:,.0f}"
-                if avg_l is not None:
-                    trade_m['平均亏损'] = f"{avg_l:,.0f}"
-
-                nb.metrics(trade_m, title="交易统计", columns=3)
+                    yaxis_opts={'min_': y_min, 'max_': 0})
 
         # ═══════════════════════════════════════════
         # ⑤ Section：交易明细（有成交记录时默认折叠）
@@ -1374,14 +1372,16 @@ class AccountAnalyzer:
             created_at = trade.created_at
             fee = trade.fee
 
-            if side == 'buy':
+            # [修复] 2026-05-30 TradeRecord.side 是 int (OrderSide.Buy=1)，
+            #   原用字符串 'buy'/'sell' 比较导致永久为 False，交易盈亏始终为空
+            if side == OrderSide.Buy:
                 positions[symbol]['volume'] += abs_volume
                 positions[symbol]['cost'] += abs_volume * price + fee
                 if positions[symbol]['open_time'] is None:
                     positions[symbol]['open_time'] = created_at
                     positions[symbol]['open_price'] = price
                     positions[symbol]['open_fee'] += fee
-            elif side == 'sell':
+            elif side == OrderSide.Sell:
                 if positions[symbol]['volume'] == 0:
                     continue
 

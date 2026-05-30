@@ -51,8 +51,10 @@ class Engine:
                 self.timeline[eob] = [bar]
 
     def run(self, strategy, start_time, end_time):
+        # [修复] 2026-05-30 hasattr(类, 'on_bar') 对类也返回 True，
+        #   导致类不会被实例化。改用 isinstance(strategy, type) 判断。
         # 支持策略实例或策略类
-        if callable(strategy) and not hasattr(strategy, 'on_bar'):
+        if isinstance(strategy, type):
             strategy = strategy()
         
         _add_bar = context._add_bar2bar_data_cache
