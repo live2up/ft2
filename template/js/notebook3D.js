@@ -53,6 +53,9 @@ const COMMON_CHART_OPTIONS = {
     animation: false
 };
 
+// [重构] 2026-05-30 Grid legend 高度（px），与后端 notebook.py legend_h 同步
+const GRID_LEGEND_HEIGHT = 28;
+
 // [重构] 2026-05-30 共享图表配置规则：常规 chart 和 Grid chart 统一标准
 // 输入即输出原则：不做 time 类型转换，category 直接显示原始字符串
 const CHART_AXIS_RULES = {
@@ -150,8 +153,11 @@ function applyGridAxisRules(option) {
         option.series = CHART_AXIS_RULES.series.applyGrid(option.series);
     }
     // grid: [修复] 2026-05-30 统一 left=80px + containLabel=false，Y轴固定对齐
+    // 后端已在 cum_top 中预留 legend 空间，前端不偏移
     if (option.grid && Array.isArray(option.grid)) {
-        option.grid = option.grid.map(g => ({ ...g, left: 80, right: 40, containLabel: false, top: g.top, height: g.height }));
+        option.grid = option.grid.map(g => ({
+            ...g, left: 80, right: 40, containLabel: false, top: g.top, height: g.height
+        }));
     }
 }
 
@@ -761,9 +767,8 @@ const GridChart = {
                 const grids = option.grid || [];
                 option.legend = option.legend.map((leg, i) => {
                     const g = grids[i] || {};
-                    // [重构] 2026-05-30 px定位：legend 在 grid 上方 4px 处
-                    const topVal = g.top ? parseFloat(g.top) : 0;
-                    const topPx = Math.max(0, topVal - 4);
+                    // [重构] 2026-05-30 legend 在 grid 上方，高度由前端 GRID_LEGEND_HEIGHT 统一管理
+                    const topPx = Math.max(0, (g.top ? parseFloat(g.top) : GRID_LEGEND_HEIGHT) - GRID_LEGEND_HEIGHT);
                     return {
                         data: (leg.data || []).map(d => ({
                             name: typeof d === 'string' ? d : (d.name || d),

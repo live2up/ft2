@@ -676,19 +676,21 @@ class CellBuilder:
 # 第六部分：网格布局构建器
 # =============================================================================
 
-def _build_grid(charts_config, total_height=600, gap=12, legend_space=24):
+def _build_grid(charts_config, total_height=600, gap=12, legend_h=20):
     """
     构建网格布局（多个图表垂直排列）
 
     使用 pyecharts Grid 组织布局, 再经 min_pyecharts 精简输出。
-    [重构] 2026-05-30 改为绝对像素定位：子图按指定高度排列，gap/legend_space 固定px
+    [重构] 2026-05-30 绝对像素定位：后端负责全部布局
+      cum_top += legend_h  →  给 legend 留空间（与 pyecharts 一致）
+      cum_top += h         →  chart 绘图区
+      cum_top += gap       →  子图间距
 
     Args:
-        charts_config: 图表配置列表
-            [{'type': 'line', 'data': {...}, 'height': 300, 'kwargs': {...}}, ...]
-        total_height: 总高度（用于 cell.content.height，布局中用不到）
+        charts_config: [{type, data, height, kwargs}, ...]
+        total_height: 总高度（px）
         gap: 子图之间的间距（px）
-        legend_space: 顶部 legend 区域高度（px）
+        legend_h: 每个子图 legend 预留高度（px），与前端 GRID_LEGEND_HEIGHT 同步
 
     Returns:
         ECharts option 字典（已精简）
@@ -701,7 +703,7 @@ def _build_grid(charts_config, total_height=600, gap=12, legend_space=24):
     _init_chart_registry()
 
     grid = Grid()
-    cum_top = legend_space  # 从 legend 区域之后开始
+    cum_top = 0
     for i, cfg in enumerate(charts_config):
         chart_type = cfg['type']
         data = cfg['data']
@@ -713,7 +715,6 @@ def _build_grid(charts_config, total_height=600, gap=12, legend_space=24):
             raise ValueError(f"不支持的图表类型: {chart_type}")
 
         chart = spec['builder'](data, series_opts)
-
         chart.set_global_opts(tooltip_opts=opts.TooltipOpts(trigger='axis'))
 
         global_opts_keys = [
@@ -725,17 +726,14 @@ def _build_grid(charts_config, total_height=600, gap=12, legend_space=24):
         if global_opts:
             chart.set_global_opts(**{k: _create_opts(k, v) for k, v in global_opts.items()})
 
+        cum_top += legend_h                         # legend 空间
         h = cfg['height']
-        grid.add(
-            chart,
-            grid_opts=opts.GridOpts(
-                pos_top=f"{cum_top}px",
-                height=f"{h}px",
-                is_contain_label=True,
-            )
-        )
-        cum_top += h + gap
+        grid.add(chart, grid_opts=opts.GridOpts(
+            pos_top=f"{cum_top}px", height=f"{h}px",
+            is_contain_label=True,
+        ))
+        cum_top += h + gap                          # chart + 间距
 
     option_dict = json.loads(grid.dump_options())
-    option_dict = minimize_grid_option(option_dict, charts_config, gap=gap, legend_space=legend_space)
+    option_dict = minimize_grid_option(option_dict, charts_config, gap=gap, legend_h=legend_h)
     return option_dict
