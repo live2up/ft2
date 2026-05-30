@@ -83,43 +83,10 @@ def metric(name: str = None, group: str = '', desc: str = '',
     return decorator
 
 
+
 # ============================================================================
 # 账户分析类
 # ============================================================================
-
-"""
-账户分析器模块
-
-输出规范:
----------
-JSON输出结构:
-{
-    "title": "回测报告",
-    "createdAt": "2024-01-01 12:00:00",
-    "metrics": [{"name": "指标名", "value": 值, "order": 排序号}, ...],
-    "dailyAssets": [{"date": "2024-01-01", "assets": 100000}, ...],
-    "trades": [...],
-    "topProfits": [...],
-    "topLosses": [...]
-}
-
-指标分类排序规范:
-----------------
-order范围    | 类别              | 指标
-------------|------------------|------------------
-1-9         | 基础信息          | 回测区间、初始资金、最终资产
-10-19       | 收益指标          | 累计收益率、年化收益率
-20-29       | 风险指标          | 年化波动率、最大回撤、VaR、CVaR、Ulcer Index
-30-39       | 风险调整收益指标   | 夏普比率、索提诺比率、UPI
-40-49       | 交易分析指标       | 胜率、平均盈亏比、平均持仓时间
-50-59       | 仓位建议          | 凯利公式最优仓位、半凯利仓位
-
-新增指标规范:
-------------
-1. 用 @metric 装饰器声明元数据（name/group/fmt/desc/order）
-2. 方法返回纯数字，格式化由输出层处理
-3. to_notebook() / to_excel() 通过 self.metrics() 自动收集
-"""
 
 class AccountAnalyzer:
     """账户分析器，负责计算各类风险收益指标和生成分析报告"""
@@ -156,7 +123,6 @@ class AccountAnalyzer:
             >>> analyzer = AccountAnalyzer(daily_assets=daily_dict)
         """
         self.account = account
-        self._metrics = {}
         self.risk_free_rate = 0.02
         self.sliced_data = None
         
@@ -209,35 +175,6 @@ class AccountAnalyzer:
             >>> print(f"总盈利：{total_profit}")
         """
         return self._trade_profits.copy()
-
-    # ------------------------------------------------------------------------
-    # 统一指标获取方法
-    # ------------------------------------------------------------------------
-
-    def get_metrics(self) -> Dict[str, Dict]:
-        """
-        获取所有已计算的指标
-        
-        返回所有以 calc_ 开头的方法计算并存储的指标结果
-        
-        Returns:
-            Dict[str, Dict]: 指标字典，格式为：
-                {
-                    'calc_return_rate': {
-                        'name': '累计收益率',
-                        'value': 0.15,
-                        'order': 10,
-                        'desc': '统计期间内的总收益率'
-                    },
-                    ...
-                }
-            
-        Example:
-            >>> analyzer.calc_return_rate()
-            >>> metrics = analyzer.get_metrics()
-            >>> print(metrics['calc_return_rate']['value'])
-        """
-        return self._metrics.copy()
 
     # ------------------------------------------------------------------------
     # 链式调用方法（支持 @metric 装饰器）
@@ -1000,7 +937,7 @@ class AccountAnalyzer:
         """导出 Excel 文件，与 notebook 报告结构对应
 
         Sheet 结构:
-            回测指标 — 所有 @metric 指标汇总
+            回测指标 — 按 group（基础/收益/风险/交易）分组展示
             每日资产 — 日期 + 现金 + 持仓市值 + 总净值
             交易记录 — 全部成交明细（日期/标的/方向/价格/数量/金额/手续费/备注）
 
@@ -1012,9 +949,51 @@ class AccountAnalyzer:
         import openpyxl
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-        # ---------- Sheet 1: 回测指标 ----------
-        metrics_data = self.metrics()
-        ordered = sorted(metrics_data.values(), key=lambda x: x.get('order', 99))
+        # ---------- Sheet 1: 回测指标（按 group 分组） ----------
+        all_m = self.metrics()
+
+        # 基础信息（非 @metric）
+        base_rows = []
+        initial_cash = self.account.snapshots[0].cash if self.account and self.account.snapshots else 0
+        final_nav = self.account.snapshots[-1].nav if self.account and self.account.snapshots else 0
+        dates = sorted(self._daily_assets.keys())
+        if len(dates) >= 2:
+            base_rows.append({'指标名称': '开始日期', '数值': dates[1].strftime('%Y-%m-%d')})
+            base_rows.append({'指标名称': '结束日期', '数值': dates[-1].strftime('%Y-%m-%d')})
+        if initial_cash > 0:
+            base_rows.append({'指标名称': '初始资金', '数值': f"{initial_cash:,.0f}"})
+        if final_nav > 0:
+            base_rows.append({'指标名称': '最终资产', '数值': f"{final_nav:,.0f}"})
+
+        # 按 group 分组（同 to_notebook 逻辑）
+        has_records = self.account and self.account.trade_records
+        groups = {}
+        for m in all_m.values():
+            g = m.get('group', '')
+            if not g:
+                continue
+            val = m['value']
+            if isinstance(val, tuple):
+                val = val[0]
+            if val is not None and not (isinstance(val, float) and val == float('inf')):
+                fmt = m.get('fmt', '.2f')
+                if isinstance(val, (int, float)):
+                    if fmt.endswith('%'):
+                        d = int(fmt[1:-1])
+                        val_str = f"{val*100:.{d}f}%"
+                    elif fmt.endswith('f'):
+                        d = int(fmt[1:-1])
+                        val_str = f"{val:.{d}f}"
+                    else:
+                        val_str = val
+                else:
+                    val_str = val
+                groups.setdefault(g, []).append({
+                    '指标名称': m['name'], '数值': val_str, '说明': m.get('desc', ''),
+                    'order': m.get('order', 99)
+                })
+        for items in groups.values():
+            items.sort(key=lambda x: x['order'])
 
         # ---------- Sheet 2: 每日资产 ----------
         assets = self._daily_assets
@@ -1070,53 +1049,45 @@ class AccountAnalyzer:
             top=Side(style='thin'), bottom=Side(style='thin')
         )
 
-        def write_sheet(ws, title, headers, rows):
-            """写入一个 sheet，带标题和表头"""
+        def write_sheet(ws, title, headers, rows, start_row=1):
+            """写入一个 sheet 分组，带标题和表头，从 start_row 开始"""
             # 标题行
-            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
-            ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=14)
+            end_col = len(headers)
+            ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=end_col)
+            ws.cell(row=start_row, column=1, value=title).font = Font(bold=True, size=13)
             # 表头
             for ci, h in enumerate(headers, 1):
-                cell = ws.cell(row=2, column=ci, value=h)
+                cell = ws.cell(row=start_row + 1, column=ci, value=h)
                 cell.font = header_font_white
                 cell.fill = header_fill
                 cell.alignment = Alignment(horizontal='center')
                 cell.border = thin_border
             # 数据行
-            for ri, row in enumerate(rows, 3):
+            for ri, row in enumerate(rows, start_row + 2):
                 for ci, h in enumerate(headers, 1):
                     val = row.get(h, '')
                     cell = ws.cell(row=ri, column=ci, value=val)
                     cell.border = thin_border
-                    # 数值列右对齐
                     if isinstance(val, (int, float)):
                         cell.alignment = Alignment(horizontal='right')
             # 列宽自适应
             for ci, h in enumerate(headers, 1):
                 max_len = max(len(str(h)), max((len(str(r.get(h, ''))) for r in rows), default=0)) + 2
                 ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = min(max_len, 30)
+            return start_row + 2 + len(rows) + 1  # 返回下一组的起始行（留空行）
 
-        # Sheet 1: 回测指标
+        # Sheet 1: 回测指标（按 group 分组，留空行分隔）
         ws1 = wb.active
         ws1.title = '回测指标'
         m_headers = ['指标名称', '数值', '说明']
-        m_rows = []
-        for m in ordered:
-            val = m['value']
-            if isinstance(val, tuple):
-                val = val[0]
-            # 使用 @metric 声明的 fmt 格式输出
-            val_str = val
-            if isinstance(val, (int, float)):
-                fmt = m.get('fmt', '.1%')
-                if fmt.endswith('%'):
-                    d = int(fmt[1:-1])
-                    val_str = f"{val*100:.{d}f}%"
-                elif fmt.endswith('f'):
-                    d = int(fmt[1:-1])
-                    val_str = f"{val:.{d}f}"
-            m_rows.append({'指标名称': m['name'], '数值': val_str, '说明': m.get('desc', '')})
-        write_sheet(ws1, f'{report_name} — 回测指标', m_headers, m_rows)
+        row = 1
+        for group_title, rows in [('基础信息', base_rows), ('收益指标', groups.get('收益', [])),
+                                  ('风险指标', groups.get('风险', [])), ('交易指标', groups.get('交易', []))]:
+            if not rows:
+                continue
+            if group_title == '交易指标' and not has_records:
+                continue
+            row = write_sheet(ws1, group_title, m_headers, rows, start_row=row)
 
         # Sheet 2: 每日资产
         ws2 = wb.create_sheet('每日资产')
@@ -1136,8 +1107,6 @@ class AccountAnalyzer:
         wb.save(output_path)
         print(f'Excel 已生成至: {output_path}')
         return str(output_path)
-
-    # [移除] 2026-05-30 to_html() 已由 to_notebook() 替代
 
     @staticmethod
     def _aggregate_daily_assets(snapshots: List) -> Dict:
@@ -1168,180 +1137,6 @@ class AccountAnalyzer:
             snapshot_date: snaps[-1].nav
             for snapshot_date, snaps in daily_snapshots.items()
         }
-
-    def _slice_data_by_range(self, time_range: Optional[Dict] = None, include_benchmark: bool = False) -> Dict[date, float]:
-        """
-        根据时间区间截取数据
-        
-        核心功能：
-        1. 支持三种方式指定区间：直接设置 start/end、使用预设 period、使用全部数据
-        2. 处理基准日逻辑：
-           - 不传 time_range 时：使用固定的第一个交易日为基准日（date[0]），从 date[1] 开始计算
-           - 传入 time_range 时：使用区间起点的前一个交易日为基准日（类似 JS 版本）
-        3. 可选择是否包含基准日数据（用于计算收益率）
-        
-        Args:
-            time_range: 时间区间配置（Dict），可选：
-                       - None: 使用全部数据
-                       - {'period': '3m'}: 使用预设周期
-                       - {'start': date, 'end': date}: 指定日期区间
-            include_benchmark: 是否包含基准日数据
-                              - True: 返回包含基准日的完整数据（用于计算）
-                              - False: 只返回计算区间的数据（用于展示）
-            
-        Returns:
-            Dict[date, float]: 截取后的资产数据 {日期：资产净值}
-            
-        基准日逻辑说明（向 JS 版本看齐）：
-            场景 1：不传 time_range（使用全部数据）
-                - 基准日：date[0]（第一个交易日）
-                - 计算起点：date[1]（第二个交易日）
-                - 用途：生成固定报告，从成立来统计
-            
-            场景 2：传入 time_range（自定义区间）
-                - 基准日：区间起点的前一个交易日
-                - 计算起点：区间的实际起点
-                - 用途：动态区间统计，确保第一天就有实际收益率
-                - 示例：用户选择 2024-01-03 至 2024-03-31
-                  基准日：2024-01-02（起点的前一日）
-                  计算：2024-01-03 的收益率 = (01-03 净值 - 01-02 净值) / 01-02 净值
-            
-            为什么这样设计？
-                - 如果区间从 date[0] 开始，无法找到前一个交易日，所以使用 date[0] 作为基准
-                - 如果区间从 date[N] 开始（N>0），使用 date[N-1] 作为基准，确保 date[N] 有实际收益率
-                - 这与 JS 版本的逻辑完全一致，支持动态区间切换
-            
-        Example:
-            >>> # 只返回计算区间（用于展示）
-            >>> data = analyzer._slice_data_by_range({'period': '3m'}, include_benchmark=False)
-            >>>
-            >>> # 返回包含基准日的数据（用于计算收益率）
-            >>> data_with_base = analyzer._slice_data_by_range({'period': '3m'}, include_benchmark=True)
-            >>> start_value = data_with_base[benchmark_date]  # 基准日的值
-        """
-        if not self._daily_assets:
-            return {}
-        
-        dates = sorted(self._daily_assets.keys())
-        if len(dates) < 2:
-            return self._daily_assets.copy()
-        
-        # 全部数据的基准日和第一个交易日
-        all_benchmark_date = dates[0]
-        all_first_trading_date = dates[1]
-        
-        # 确定区间的起止日期和基准日
-        if time_range is None:
-            # 不传参数：使用全部数据，从 date[1] 开始
-            benchmark_date = all_benchmark_date
-            start_date = all_first_trading_date
-            end_date = dates[-1]
-        elif time_range.period:
-            # 使用预设周期
-            periods = {
-                '1m': relativedelta(months=1),
-                '3m': relativedelta(months=3),
-                '6m': relativedelta(months=6),
-                '1y': relativedelta(years=1),
-                '2y': relativedelta(years=2),
-                '3y': relativedelta(years=3),
-                '5y': relativedelta(years=5),
-                'all': None
-            }
-            
-            if time_range.period == 'all':
-                benchmark_date = all_benchmark_date
-                start_date = all_first_trading_date
-                end_date = dates[-1]
-            else:
-                delta = periods.get(time_range.period)
-                if delta is None:
-                    benchmark_date = all_benchmark_date
-                    start_date = all_first_trading_date
-                    end_date = dates[-1]
-                else:
-                    # 从结束日往前推 delta，找到最接近的交易日
-                    calculated_start = dates[-1] - delta
-                    # 找到 <= calculated_start 的最大日期
-                    valid_dates = [d for d in dates if d <= calculated_start]
-                    raw_start_date = max(valid_dates) if valid_dates else all_first_trading_date
-                    
-                    # 确定基准日：起点的前一个交易日
-                    if raw_start_date == all_first_trading_date:
-                        benchmark_date = all_benchmark_date
-                        start_date = all_first_trading_date
-                    else:
-                        # 找到 raw_start_date 的前一个交易日
-                        prev_dates = [d for d in dates if d < raw_start_date]
-                        benchmark_date = max(prev_dates) if prev_dates else all_benchmark_date
-                        start_date = raw_start_date
-                    
-                    end_date = dates[-1]
-        else:
-            # 使用自定义 start/end
-            raw_start_date = time_range.start if time_range.start else all_first_trading_date
-            
-            # 确保不早于 all_first_trading_date
-            if raw_start_date < all_first_trading_date:
-                benchmark_date = all_benchmark_date
-                start_date = all_first_trading_date
-            else:
-                # 找到 raw_start_date 的前一个交易日作为基准日
-                prev_dates = [d for d in dates if d < raw_start_date]
-                if prev_dates:
-                    benchmark_date = max(prev_dates)
-                    start_date = raw_start_date
-                else:
-                    benchmark_date = all_benchmark_date
-                    start_date = all_first_trading_date
-            
-            end_date = time_range.end if time_range.end else dates[-1]
-        
-        # 截取数据
-        if include_benchmark:
-            # 包含基准日：从 benchmark_date 到 end_date
-            sliced_data = {
-                d: v for d, v in self._daily_assets.items()
-                if benchmark_date <= d <= end_date
-            }
-        else:
-            # 不包含基准日：从 start_date 到 end_date
-            sliced_data = {
-                d: v for d, v in self._daily_assets.items()
-                if start_date <= d <= end_date
-            }
-        
-        return sliced_data
-
-    def _calculate_daily_returns(self, daily_assets: Dict) -> List:
-        """
-        计算日收益率序列
-        
-        根据每日资产数据计算相邻交易日之间的收益率
-        用于计算波动率、VaR、CVaR 等风险指标
-        
-        计算公式：(今日资产 - 昨日资产) / 昨日资产
-        
-        Args:
-            daily_assets: 每日资产字典 {date: nav}
-            
-        Returns:
-            List[float]: 日收益率列表（小数形式）
-                        长度为 N-1（N 为数据点数量）
-            
-        Example:
-            >>> assets = {date(2024,1,1): 100000, date(2024,1,2): 101000}
-            >>> returns = analyzer._calculate_daily_returns(assets)
-            >>> # 结果：[0.01] 表示 1% 的日收益率
-        """
-        dates = sorted(daily_assets.keys())
-        returns = []
-        for i in range(1, len(dates)):
-            prev = daily_assets[dates[i - 1]]
-            curr = daily_assets[dates[i]]
-            returns.append((curr - prev) / prev)
-        return returns
-
 
 
     def _calculate_profit(self, trade_records: List) -> List:
