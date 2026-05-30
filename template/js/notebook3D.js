@@ -53,6 +53,104 @@ const COMMON_CHART_OPTIONS = {
     animation: false
 };
 
+// [重构] 2026-05-30 共享图表配置规则：常规 chart 和 Grid chart 统一标准
+// 输入即输出原则：不做 time 类型转换，category 直接显示原始字符串
+const CHART_AXIS_RULES = {
+    xAxis: {
+        // 根据图表类型决定 boundaryGap（柱状图/K线图需要留白，折线/散点不需要）
+        boundaryGap: (chartType) => chartType === 'bar' || chartType === 'candlestick'
+    },
+    yAxis: {
+        // 柱状图从0起步（scale:false），其他类型自适应范围（scale:true）
+        scale: (chartType) => chartType !== 'bar'
+    },
+    series: {
+        // 根据类型给 series 添加默认样式
+        apply(series, chartType, colors, showBarLabel) {
+            return series.map((s, i) => {
+                const base = { ...s };
+                if (chartType === 'line' || chartType === 'area') {
+                    base.smooth = true;
+                    base.showSymbol = false;
+                    if (chartType === 'area') {
+                        const c = (colors[i % colors.length] || '#e74c3c');
+                        base.areaStyle = { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+                            colorStops: [{ offset: 0, color: c + '60' }, { offset: 1, color: c + '10' }] } };
+                    }
+                }
+                if (chartType === 'bar') {
+                    base.itemStyle = { color: colors[i % colors.length], borderRadius: [4, 4, 0, 0] };
+                    if (showBarLabel) base.label = { show: true, position: 'top' };
+                }
+                return base;
+            });
+        },
+        // Grid 专用：轻量样式（不设 bar itemStyle/label，由 pyecharts 管理）
+        applyGrid(series) {
+            return series.map(s => {
+                const base = { ...s };
+                if (s.type === 'line') { base.smooth = true; base.showSymbol = false; }
+                return base;
+            });
+        }
+    },
+    legend: {
+        build(series) {
+            const count = series.length;
+            return {
+                data: series.map(s => ({ name: s.name, icon: 'rect' })),
+                top: 5, type: count > 10 ? 'scroll' : 'plain',
+                width: '90%', pageIconSize: 10,
+                pageTextStyle: { fontSize: 11 }
+            };
+        }
+    },
+    tooltip: {
+        build() {
+            return { trigger: 'axis', axisPointer: { type: 'shadow' } };
+        }
+    },
+    grid: {
+        build(showDataZoom, legendCount) {
+            return {
+                left: 8, right: 40,
+                bottom: showDataZoom ? 50 : 5,
+                top: legendCount > 10 ? 32 : 50,
+                containLabel: true
+            };
+        }
+    }
+};
+
+// [重构] 2026-05-30 Grid 多子图适配：对 pyecharts 输出的 Grid option 应用共享规则
+function applyGridAxisRules(option) {
+    // xAxis: 补 type=category + axisLabel margin
+    if (option.xAxis && Array.isArray(option.xAxis)) {
+        option.xAxis = option.xAxis.map(x => {
+            if (!x.type && x.data) x.type = 'category';
+            x.axisLabel = { margin: 8, ...(x.axisLabel || {}) };
+            return x;
+        });
+    }
+    // yAxis: 根据每个子图 series 类型决定 scale
+    if (option.yAxis && Array.isArray(option.yAxis)) {
+        option.yAxis = option.yAxis.map((y, idx) => {
+            const ySeries = (option.series || []).filter(s => (s.yAxisIndex ?? 0) === idx);
+            const yType = ySeries[0]?.type || 'line';
+            const isBar = ySeries.length > 0 && ySeries.every(s => s.type === 'bar');
+            return { type: 'value', scale: !isBar, ...y };
+        });
+    }
+    // series: line → smooth + 隐藏点
+    if (option.series && Array.isArray(option.series)) {
+        option.series = CHART_AXIS_RULES.series.applyGrid(option.series);
+    }
+    // grid: 统一 left/right
+    if (option.grid && Array.isArray(option.grid)) {
+        option.grid = option.grid.map(g => ({ ...g, left: 8, right: 40, top: g.top, height: g.height }));
+    }
+}
+
 // =============================================================================
 // 第一部分：Chart Composable - 图表组件共用逻辑
 // =============================================================================
@@ -184,26 +282,12 @@ const GenericChart = {
                 const option = { color: colors, series: rawSeries };
                 if (['line', 'bar', 'area'].includes(chartType)) {
                     const isBarChart = chartType === 'bar';
-                    const first = extracted.xAxis[0];
-                    const isDateStr = typeof first === 'string' && /^\d{4}-\d{2}-\d{2}/.test(first);
-                    const xAxisType = isDateStr ? 'time' : 'category';
-                    option.xAxis = { type: xAxisType, boundaryGap: isBarChart, data: extracted.xAxis };
-                    option.yAxis = { type: 'value', scale: !isBarChart };  // [修复] 2026-05-21 柱状图必须 scale:false 才能让 min:0 生效，否则 auto-scale 会忽略 min 导致柱子不从 0 起步
-                    // [优化] 2026-05-22 legend自适应：策略<=10用plain换行，>10用scroll翻页
-                    const legendCount = rawSeries.length;
-                    const legendType = legendCount > 10 ? 'scroll' : 'plain';
-                    option.grid = {
-                        left: 8, right: 40,
-                        bottom: showDataZoom.value ? 50 : 5,
-                        top: legendCount > 10 ? 32 : 50,
-                        containLabel: true
-                    };
-                    option.legend = {
-                        data: rawSeries.map(s => ({ name: s.name, icon: 'rect' })),
-                        top: 5, type: legendType, width: '90%',
-                        pageIconSize: 10, pageTextStyle: { fontSize: 11 }
-                    };
-                    option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
+                    // [重构] 2026-05-30 使用共享规则：xAxis/yAxis/grid/legend/tooltip
+                    option.xAxis = { type: 'category', boundaryGap: CHART_AXIS_RULES.xAxis.boundaryGap(chartType), data: extracted.xAxis };
+                    option.yAxis = { type: 'value', scale: CHART_AXIS_RULES.yAxis.scale(chartType) };
+                    option.grid = CHART_AXIS_RULES.grid.build(showDataZoom.value, rawSeries.length);
+                    option.legend = CHART_AXIS_RULES.legend.build(rawSeries);
+                    option.tooltip = CHART_AXIS_RULES.tooltip.build();
 
                     // === 区间收益：基于滚动区间将原始数据转为累计收益百分比（仅 line/area） ===
                     let displaySeries = rawSeries;  // 默认不转换
@@ -279,22 +363,17 @@ const GenericChart = {
                     });
                     
                 } else if (chartType === 'scatter') {
-                    // [修复] 2026-05-27 散点图轴类型：有 xAxis.data 用 category（类目散点），否则用 value（数值散点）
+                    // [重构] 2026-05-30 散点图：有 xAxis.data → category，无 → value
                     const hasXData = extracted.xAxis && extracted.xAxis.length > 0;
                     option.xAxis = { type: hasXData ? 'category' : 'value', data: hasXData ? extracted.xAxis : [] };
                     option.yAxis = { type: 'value' };
+                    option.grid = CHART_AXIS_RULES.grid.build(showDataZoom.value, 0);
                 } else if (chartType === 'candlestick') {
-                    // [新增] 2026-05-27 K线图支持
-                    // K线图X轴用 category，因为 pyecharts 输出的 data 是 [[开,收,低,高]] 不含日期
-                    // 日期在 xAxis.data 中，用 category 类型显示
-                    option.xAxis = { type: 'category', data: extracted.xAxis, boundaryGap: true };
-                    option.yAxis = { type: 'value', scale: true };
-                    // K线图需要指定 series 类型为 candlestick
-                    option.series = extracted.series.map(s => ({
-                        name: s.name,
-                        type: 'candlestick',
-                        data: s.data
-                    }));
+                    // [重构] 2026-05-30 K线图：使用共享规则配置坐标
+                    option.xAxis = { type: 'category', boundaryGap: CHART_AXIS_RULES.xAxis.boundaryGap('candlestick'), data: extracted.xAxis };
+                    option.yAxis = { type: 'value', scale: CHART_AXIS_RULES.yAxis.scale('candlestick') };
+                    option.grid = CHART_AXIS_RULES.grid.build(showDataZoom.value, 0);
+                    option.series = extracted.series.map(s => ({ name: s.name, type: 'candlestick', data: s.data }));
                 }
 
                 // [修复] 2026-05-27 dataZoom 对所有支持图表类型生效（line/bar/area/scatter/candlestick）
@@ -671,10 +750,9 @@ const GridChart = {
             const colors = getColors();
             const option = JSON.parse(JSON.stringify(charts));
             option.color = colors;
-            option.tooltip = { trigger: 'axis', axisPointer: { type: 'shadow' } };
+            option.tooltip = CHART_AXIS_RULES.tooltip.build();
 
-            // [适配] pyecharts Grid 输出适配: legend 数组 → 每个对应其 grid 位置
-            // legend[i] 对应 grid[i], 放在各自 grid 顶部
+            // [重构] 2026-05-30 legend 适配：pyecharts Grid 的 legend 数组 → 每个对应其 grid 位置
             if (option.legend && Array.isArray(option.legend)) {
                 const grids = option.grid || [];
                 option.legend = option.legend.map((leg, i) => {
@@ -692,40 +770,17 @@ const GridChart = {
                 });
             } else if (option.legend) {
                 const legendData = option.legend.data || [];
-                const legendCount = legendData.length;
                 option.legend.icon = 'rect';
                 option.legend.width = '90%';
-                // [优化] 2026-05-22 策略>10用scroll翻页，否则plain换行
-                if (legendCount > 10) {
+                if (legendData.length > 10) {
                     option.legend.type = 'scroll';
                     option.legend.pageIconSize = 10;
                     option.legend.pageTextStyle = { fontSize: 11 };
                 }
             }
 
-            // [适配] xAxis 补 type + axisLabel 防溢出
-            if (option.xAxis && Array.isArray(option.xAxis)) {
-                option.xAxis = option.xAxis.map(x => {
-                    if (!x.type && x.data) {
-                        const first = String(x.data[0] || '');
-                        x.type = /^\d{4}-\d{2}-\d{2}/.test(first) ? 'time' : 'category';
-                    }
-                    x.axisLabel = { margin: 8, ...(x.axisLabel || {}) };
-                    return x;
-                });
-            }
-
-            // [适配] yAxis 补 type + scale
-            if (option.yAxis && Array.isArray(option.yAxis)) {
-                option.yAxis = option.yAxis.map(y => ({ type: 'value', ...y }));  // [修复] 2026-05-21 移除 scale:true，默认 scale:false 让柱状图从 0 起步；折线图如需 auto-scale 可显式传 scale_: true
-            }
-
-            if (option.grid && Array.isArray(option.grid)) {
-                option.grid = option.grid.map(g => ({ ...g, left: 8, right: 40, top: g.top, height: g.height }));
-            }
-            if (option.series && Array.isArray(option.series)) {
-                option.series.forEach(s => { if (s.type === 'line') { s.smooth = true; s.showSymbol = false; } });
-            }
+            // [重构] 2026-05-30 使用共享规则适配 xAxis/yAxis/series/grid
+            applyGridAxisRules(option);
 
             // [新增] Grid 区间收益：仅转换第一个子图的 line/area series
             if (intervalCompare.value && hasIntervalCompare.value) {
@@ -737,6 +792,11 @@ const GridChart = {
                     const startPercent = showDataZoom.value ? intervalStart.value : 0;
                     const startIdx = Math.floor(dataLen * startPercent / 100);
                     const baseIdx = startIdx > 0 ? startIdx - 1 : 0;
+
+                    // [修复] 强制第一个 xAxis 为 category，避免 time 类型导致时间戳错乱
+                    if (option.xAxis && Array.isArray(option.xAxis) && option.xAxis[0]) {
+                        option.xAxis[0] = { ...option.xAxis[0], type: 'category', boundaryGap: false };
+                    }
 
                     if (option.yAxis && Array.isArray(option.yAxis) && option.yAxis[0]) {
                         option.yAxis[0] = { ...option.yAxis[0], axisLabel: { formatter: '{value}%' } };
@@ -764,13 +824,15 @@ const GridChart = {
             if (showDataZoom.value) {
                 const gridLen = (option.grid || []).length;
                 const allIdx = Array.from({length: gridLen}, (_, i) => i);
+                const dzStart = intervalCompare.value ? intervalStart.value : 0;
+                const dzEnd = intervalCompare.value ? intervalEnd.value : 100;
                 const dc = [];
                 // 一个 inside 联动所有 grid
-                if (allIdx.length) dc.push({ type: 'inside', xAxisIndex: allIdx, start: 0, end: 100 });
+                if (allIdx.length) dc.push({ type: 'inside', xAxisIndex: allIdx, start: dzStart, end: dzEnd });
                 // 只在最后 grid 底部显示滑块，联动所有 grid
                 if (allIdx.length) {
                     dc.push({ type: 'slider', show: true, xAxisIndex: allIdx,
-                              start: 0, end: 100, bottom: 6, height: 16 });
+                              start: dzStart, end: dzEnd, bottom: 6, height: 16 });
                     const lastGrid = option.grid[gridLen - 1];
                     lastGrid.bottom = 22;
                     delete lastGrid.height;
