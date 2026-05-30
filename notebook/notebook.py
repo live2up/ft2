@@ -88,8 +88,12 @@ class Notebook:
             return
         _init_chart_registry()
         heights = [c['height'] for c in self._chartg_buffer]
-        total_height = sum(heights)
-        option_dict = _build_grid(self._chartg_buffer, total_height)
+        # [重构] 2026-05-30 Grid 布局改为绝对像素：子图间距12px + legend区域24px
+        n = len(heights)
+        gap = 12          # 子图之间的间距（px）
+        legend_space = 24  # 顶部 legend 区域高度（px）
+        total_height = sum(heights) + gap * (n - 1) + legend_space
+        option_dict = _build_grid(self._chartg_buffer, total_height, gap=gap, legend_space=legend_space)
         cell = Cell(
             CellType.CHART,
             {"charts": option_dict, "width": "100%", "height": f"{total_height}px"}

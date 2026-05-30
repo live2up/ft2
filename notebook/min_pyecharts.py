@@ -488,27 +488,25 @@ def minimize_option(option_dict: dict) -> dict:
 _GRID_BASELINE_CACHE: dict = {}
 
 
-def _build_grid_baseline(charts_config: list) -> dict:
+def _build_grid_baseline(charts_config: list, gap: int = 12, legend_space: int = 24) -> dict:
     """
     为 Grid 布局构建同结构 baseline
-    
-    核心思路: baseline 必须和实际输出同构(同数量子图、同类型、同位置),
-    只是数据为最小值。这样 deep_diff 才能正确剥离所有 v5 默认值。
+
+    [重构] 2026-05-30 改为绝对像素定位，与 _build_grid 保持一致
     
     Args:
         charts_config: [{'type': str, 'height': int, 'kwargs': dict}, ...]
+        gap: 子图间距（px）
+        legend_space: legend 区域高度（px）
     """
     from pyecharts.charts import Grid
 
-    cache_key = tuple((c['type'], c['height']) for c in charts_config)
+    cache_key = (gap, legend_space) + tuple((c['type'], c['height']) for c in charts_config)
     if cache_key in _GRID_BASELINE_CACHE:
         return _GRID_BASELINE_CACHE[cache_key]
 
-    heights = [c['height'] for c in charts_config]
-    total = sum(heights)
-
     baseline_grid = Grid()
-    top = 5
+    cum_top = legend_space
     for i, cfg in enumerate(charts_config):
         ChartClass = CHART_MAP.get(cfg['type'])
         if not ChartClass:
@@ -518,22 +516,22 @@ def _build_grid_baseline(charts_config: list) -> dict:
         core_opts = _build_core_opts(c)
         c.set_global_opts(**core_opts)
 
-        height_percent = heights[i] / total * 100
+        h = cfg['height']
         baseline_grid.add(
             c,
             grid_opts=opts.GridOpts(
-                pos_top=f"{top}%",
-                height=f"{height_percent - 5}%",
+                pos_top=f"{cum_top}px",
+                height=f"{h}px",
             )
         )
-        top += height_percent
+        cum_top += h + gap
 
     baseline_dict = json.loads(baseline_grid.dump_options())
     _GRID_BASELINE_CACHE[cache_key] = baseline_dict
     return baseline_dict
 
 
-def minimize_grid_option(option_dict: dict, charts_config: list = None) -> dict:
+def minimize_grid_option(option_dict: dict, charts_config: list = None, gap: int = 12, legend_space: int = 24) -> dict:
     """
     对 Grid 布局的 option dict 做精简
     
@@ -545,14 +543,16 @@ def minimize_grid_option(option_dict: dict, charts_config: list = None) -> dict:
         charts_config: 子图配置列表,用于构建同结构 baseline
             [{'type': str, 'height': int, 'kwargs': dict}, ...]
             如果为 None, 从 option_dict 中自动推断
-    
+        gap: 子图间距（px），需与 _build_grid 保持一致
+        legend_space: legend 区域高度（px）
+
     [新增] 2026-05-19 替代 _build_grid 的手工合并方式,
     让 pyecharts Grid 输出后走 deep_diff 精简, 维护边界更清晰
     """
     if charts_config is None:
         charts_config = _infer_charts_config(option_dict)
 
-    baseline = _build_grid_baseline(charts_config)
+    baseline = _build_grid_baseline(charts_config, gap=gap, legend_space=legend_space)
     result = deep_diff(option_dict, baseline)
     result = _strip_reactive_opts(result, option_dict)
     result = _preserve_structural(result, option_dict)

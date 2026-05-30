@@ -124,19 +124,23 @@ const CHART_AXIS_RULES = {
 
 // [重构] 2026-05-30 Grid 多子图适配：对 pyecharts 输出的 Grid option 应用共享规则
 function applyGridAxisRules(option) {
-    // xAxis: 补 type=category + axisLabel margin
+    // xAxis: 补 type=category + axisLabel margin，根据对应 series 类型决定 boundaryGap
     if (option.xAxis && Array.isArray(option.xAxis)) {
-        option.xAxis = option.xAxis.map(x => {
+        option.xAxis = option.xAxis.map((x, idx) => {
             if (!x.type && x.data) x.type = 'category';
+            // [修复] 2026-05-30 折线/面积图从起点开始（boundaryGap:false），柱状图/K线留白（true）
+            const xSeries = (option.series || []).filter(s => (s.xAxisIndex ?? 0) === idx);
+            const firstType = xSeries[0]?.type || 'line';
+            const isBarOrKline = xSeries.length > 0 && xSeries.every(s => s.type === 'bar' || s.type === 'candlestick');
+            x.boundaryGap = isBarOrKline;  // bar/K线 true，line/area 等 false
             x.axisLabel = { margin: 8, ...(x.axisLabel || {}) };
             return x;
         });
     }
-    // yAxis: 根据每个子图 series 类型决定 scale
+    // yAxis: 根据每个子图 series 类型决定 scale，统一宽度实现对齐
     if (option.yAxis && Array.isArray(option.yAxis)) {
         option.yAxis = option.yAxis.map((y, idx) => {
             const ySeries = (option.series || []).filter(s => (s.yAxisIndex ?? 0) === idx);
-            const yType = ySeries[0]?.type || 'line';
             const isBar = ySeries.length > 0 && ySeries.every(s => s.type === 'bar');
             return { type: 'value', scale: !isBar, ...y };
         });
@@ -145,9 +149,9 @@ function applyGridAxisRules(option) {
     if (option.series && Array.isArray(option.series)) {
         option.series = CHART_AXIS_RULES.series.applyGrid(option.series);
     }
-    // grid: 统一 left/right
+    // grid: [修复] 2026-05-30 统一 left=80px + containLabel=false，Y轴固定对齐
     if (option.grid && Array.isArray(option.grid)) {
-        option.grid = option.grid.map(g => ({ ...g, left: 8, right: 40, top: g.top, height: g.height }));
+        option.grid = option.grid.map(g => ({ ...g, left: 80, right: 40, containLabel: false, top: g.top, height: g.height }));
     }
 }
 
@@ -757,13 +761,15 @@ const GridChart = {
                 const grids = option.grid || [];
                 option.legend = option.legend.map((leg, i) => {
                     const g = grids[i] || {};
-                    const topPct = g.top ? parseFloat(g.top) - 3 : 5;
+                    // [重构] 2026-05-30 px定位：legend 在 grid 上方 4px 处
+                    const topVal = g.top ? parseFloat(g.top) : 0;
+                    const topPx = Math.max(0, topVal - 4);
                     return {
                         data: (leg.data || []).map(d => ({
                             name: typeof d === 'string' ? d : (d.name || d),
                             icon: 'rect'
                         })),
-                        top: Math.max(0, topPct) + '%',
+                        top: topPx + 'px',
                         left: 'center',
                         textStyle: { fontSize: 11 }
                     };

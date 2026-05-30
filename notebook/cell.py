@@ -676,25 +676,22 @@ class CellBuilder:
 # 第六部分：网格布局构建器
 # =============================================================================
 
-def _build_grid(charts_config, total_height=600):
+def _build_grid(charts_config, total_height=600, gap=12, legend_space=24):
     """
     构建网格布局（多个图表垂直排列）
 
     使用 pyecharts Grid 组织布局, 再经 min_pyecharts 精简输出。
+    [重构] 2026-05-30 改为绝对像素定位：子图按指定高度排列，gap/legend_space 固定px
 
     Args:
         charts_config: 图表配置列表
-            [
-                {'type': 'line', 'data': {...}, 'height': 300, 'kwargs': {...}},
-                ...
-            ]
-        total_height: 总高度
+            [{'type': 'line', 'data': {...}, 'height': 300, 'kwargs': {...}}, ...]
+        total_height: 总高度（用于 cell.content.height，布局中用不到）
+        gap: 子图之间的间距（px）
+        legend_space: 顶部 legend 区域高度（px）
 
     Returns:
         ECharts option 字典（已精简）
-
-    [优化] 2026-05-19 改用 pyecharts Grid 替代手工合并,
-    让 min_pyecharts 的 minimize_grid_option 负责精简, 维护边界更清晰
     """
     import json
     from pyecharts.charts import Grid
@@ -703,12 +700,9 @@ def _build_grid(charts_config, total_height=600):
 
     _init_chart_registry()
 
-    heights = [c['height'] for c in charts_config]
-    total = sum(heights)
-
     grid = Grid()
-    top = 5
-    for cfg in charts_config:
+    cum_top = legend_space  # 从 legend 区域之后开始
+    for i, cfg in enumerate(charts_config):
         chart_type = cfg['type']
         data = cfg['data']
         kwargs = cfg.get('kwargs', {})
@@ -731,17 +725,17 @@ def _build_grid(charts_config, total_height=600):
         if global_opts:
             chart.set_global_opts(**{k: _create_opts(k, v) for k, v in global_opts.items()})
 
-        height_percent = cfg['height'] / total * 100
+        h = cfg['height']
         grid.add(
             chart,
             grid_opts=opts.GridOpts(
-                pos_top=f"{top}%",
-                height=f"{height_percent - 5}%",
+                pos_top=f"{cum_top}px",
+                height=f"{h}px",
                 is_contain_label=True,
             )
         )
-        top += height_percent
+        cum_top += h + gap
 
     option_dict = json.loads(grid.dump_options())
-    option_dict = minimize_grid_option(option_dict, charts_config)
+    option_dict = minimize_grid_option(option_dict, charts_config, gap=gap, legend_space=legend_space)
     return option_dict
