@@ -83,6 +83,8 @@ class TradeRecord:
     order_id: str = ''
     filled_volume: float = 0.0        # 已成交数量
     amount: float = 0.0              # 成交金额
+    # [新增] 2026-05-30 信号备注，可追溯每笔交易触发原因（如 "温度计75度买入"）
+    note: str = ''
 
 
 # ============================================================================
@@ -185,6 +187,7 @@ class AccountManager:
         position_effect: int = PositionEffect.Open,
         order_type: int = OrderType.Limit,
         price: float = None,
+        note: str = '',
     ) -> str:
         """
         按账户净值比例委托
@@ -234,7 +237,7 @@ class AccountManager:
         if volume == 0:
             raise ValueError("Calculated order volume is zero")
 
-        return self.order_volume(symbol, volume, side, position_effect, order_type, price)
+        return self.order_volume(symbol, volume, side, position_effect, order_type, price, note)
 
     def order_volume(
         self,
@@ -244,6 +247,7 @@ class AccountManager:
         position_effect: int = PositionEffect.Open,
         order_type: int = OrderType.Limit,
         price: float = None,
+        note: str = '',
     ) -> str:
         """
         按指定数量委托
@@ -275,7 +279,7 @@ class AccountManager:
         order_id = f"order_{len(self.trade_records)+1}"
 
         executed_volume = self._process_order(
-            symbol, volume, side, position_effect, order_type, price, order_id
+            symbol, volume, side, position_effect, order_type, price, order_id, note
         )
 
         if executed_volume != 0:
@@ -291,6 +295,7 @@ class AccountManager:
         order_type: int,
         price: float,
         order_id: str,
+        note: str = '',
     ) -> int:
         """
         处理订单执行
@@ -342,6 +347,7 @@ class AccountManager:
             order_id=order_id,
             filled_volume=volume,
             amount=price * volume,
+            note=note,
         ))
         return volume
 

@@ -53,20 +53,22 @@ from .account import OrderSide
 # 指标装饰器
 # ============================================================================
 
-def metric(name: str = None, desc: str = '', type: str = 'float', order: int = 99):
+def metric(name: str = None, group: str = '', desc: str = '', 
+           fmt: str = '.2f', order: int = 99):
     """
     指标装饰器，用于标记分析方法
     
     Args:
-        name: 指标中文名称，默认使用函数名
-        desc: 指标描述
-        type: 数据类型，默认 'float'，可选 'int', 'dict', 'list' 等
+        name: 指标名称，默认使用函数名
+        group: 指标分组，如 '收益'、'风险'、'交易'，用于自动分组展示
+        desc: 指标描述（可选），输入到 notebook metric-desc 标签
+        fmt: 输出格式，默认 '.1%'（百分比）。可选 '.2f'、'.1f'
+            仅影响 to_notebook / to_excel 的输出，不改变方法返回值
         order: 排序号，用于报告中的顺序
     
     Usage:
-        @metric(name='累计收益率', desc='统计期间内的总收益率', type='float', order=10)
-        def return_rate(self):
-            ...
+        @metric(name='夏普比率', group='风险', fmt='.2f', order=30)
+        @metric(name='年化波动率', group='风险', order=20)
     """
     def decorator(func):
         @wraps(func)
@@ -75,8 +77,9 @@ def metric(name: str = None, desc: str = '', type: str = 'float', order: int = 9
         
         wrapper._is_metric = True
         wrapper._metric_name = name or func.__name__
+        wrapper._metric_group = group
         wrapper._metric_desc = desc
-        wrapper._metric_type = type
+        wrapper._metric_fmt = fmt
         wrapper._metric_order = order
         return wrapper
     return decorator
@@ -395,7 +398,7 @@ class AccountAnalyzer:
         
         return self.sliced_data
 
-    @metric(name='累计收益率', desc='统计期间内的总收益率', type='float', order=10)
+    @metric(name='累计收益率', group='收益', fmt='.1%', desc='统计期间内的总收益率', order=10)
     def return_rate(self) -> Optional[float]:
         """计算累计收益率（链式调用版本）"""
         if not self._daily_assets:
@@ -419,7 +422,7 @@ class AccountAnalyzer:
         
         return (end_value - benchmark_value) / benchmark_value
 
-    @metric(name='年化收益率', desc='将收益率换算为年化基准', type='float', order=11)
+    @metric(name='年化收益率', group='收益', fmt='.1%', desc='将收益率换算为年化基准', order=11)
     def annualized_return(self) -> Optional[float]:
         """计算年化收益率"""
         interval_return = self.return_rate()
@@ -442,7 +445,7 @@ class AccountAnalyzer:
         
         return ((1 + interval_return) ** (365 / days)) - 1
 
-    @metric(name='年化波动率', desc='衡量资产价格的波动程度', type='float', order=20)
+    @metric(name='年化波动率', group='风险', fmt='.1%', desc='衡量资产价格的波动程度', order=20)
     def volatility(self) -> Optional[float]:
         """计算年化波动率"""
         sliced_data_info = self._ensure_sliced_data()
@@ -455,7 +458,7 @@ class AccountAnalyzer:
         
         return np.std(returns) * np.sqrt(252)
 
-    @metric(name='夏普比率', desc='每承担一单位风险获得的超额收益', type='float', order=30)
+    @metric(name='夏普比率', group='风险', fmt='.2f', desc='每承担一单位风险获得的超额收益', order=30)
     def sharpe_ratio(self) -> Optional[float]:
         """计算夏普比率"""
         annualized = self.annualized_return()
@@ -466,7 +469,7 @@ class AccountAnalyzer:
         
         return (annualized - self.risk_free_rate) / vol
 
-    @metric(name='最大回撤', desc='历史最大亏损幅度', type='float', order=21)
+    @metric(name='最大回撤', group='风险', fmt='.1%', desc='历史最大亏损幅度', order=21)
     def max_drawdown(self) -> Optional[Tuple[float, date, date]]:
         """计算最大回撤"""
         sliced_data_info = self._ensure_sliced_data()
@@ -493,7 +496,7 @@ class AccountAnalyzer:
         
         return max_dd, dates[peak_idx], dates[max_dd_idx]
 
-    @metric(name='VaR(95%)', desc='95% 置信度下的最大可能损失', type='float', order=22)
+    @metric(name='VaR(95%) / 风险价值', group='风险', fmt='.1%', desc='95% 置信度下的最大可能损失', order=22)
     def var(self, confidence: float = 0.95) -> Optional[float]:
         """计算风险价值"""
         sliced_data_info = self._ensure_sliced_data()
@@ -506,7 +509,7 @@ class AccountAnalyzer:
         
         return -np.percentile(returns, (1 - confidence) * 100)
 
-    @metric(name='CVaR(95%)', desc='超过 VaR 阈值的平均损失', type='float', order=23)
+    @metric(name='CVaR(95%) / 条件风险价值', group='风险', fmt='.1%', desc='超过 VaR 阈值的平均损失', order=23)
     def cvar(self, confidence: float = 0.95) -> Optional[float]:
         """计算条件风险价值"""
         sliced_data_info = self._ensure_sliced_data()
@@ -524,7 +527,7 @@ class AccountAnalyzer:
         sorted_returns = np.sort(returns)
         return -np.mean(sorted_returns[:index])
 
-    @metric(name='Ulcer Index', desc='衡量回撤深度和持续时间的综合指标', type='float', order=24)
+    @metric(name='Ulcer Index / 溃疡指数', group='风险', fmt='.2f', desc='衡量回撤深度和持续时间的综合指标', order=24)
     def ulcer_index(self) -> Optional[float]:
         """计算溃疡指数"""
         sliced_data_info = self._ensure_sliced_data()
@@ -542,7 +545,7 @@ class AccountAnalyzer:
         
         return np.sqrt(np.mean(drawdown_pct ** 2))
 
-    @metric(name='索提诺比率', desc='只考虑下行风险的夏普比率改进版', type='float', order=31)
+    @metric(name='索提诺比率', group='风险', fmt='.2f', desc='只考虑下行风险的夏普比率改进版', order=31)
     def sortino_ratio(self, risk_free_rate: float = 0.02) -> Optional[float]:
         """计算索提诺比率"""
         annualized_return = self.annualized_return()
@@ -570,7 +573,7 @@ class AccountAnalyzer:
         
         return (annualized_return - risk_free_rate) / annualized_downside_deviation
 
-    @metric(name='UPI', desc='用溃疡指数调整的风险收益比', type='float', order=32)
+    @metric(name='UPI / 溃疡绩效指数', group='风险', fmt='.2f', desc='用溃疡指数调整的风险收益比', order=32)
     def upi(self, risk_free_rate: float = 0.02) -> Optional[float]:
         """计算 Ulcer Performance Index"""
         annualized_return = self.annualized_return()
@@ -581,7 +584,7 @@ class AccountAnalyzer:
         
         return (annualized_return - risk_free_rate) / (ulcer_idx / 100)
 
-    @metric(name='胜率', desc='盈利交易次数占总交易次数的比例', type='float', order=40)
+    @metric(name='胜率', group='交易', fmt='.1%', desc='盈利交易次数占总交易次数的比例', order=40)
     def win_rate(self) -> Optional[float]:
         """计算胜率"""
         if not self._trade_profits:
@@ -648,7 +651,7 @@ class AccountAnalyzer:
         
         return sum(losses) / len(losses)
 
-    @metric(name='平均盈亏比', desc='平均盈利与平均亏损的比值', type='float', order=41)
+    @metric(name='平均盈亏比', group='交易', fmt='.2f', desc='平均盈利与平均亏损的比值', order=41)
     def avg_profit_loss_ratio(self) -> Optional[float]:
         """计算平均盈亏比"""
         avg_profit = self.avg_profit()
@@ -659,7 +662,7 @@ class AccountAnalyzer:
         
         return abs(avg_profit / avg_loss)
 
-    @metric(name='平均持仓时间', desc='所有交易的平均持仓天数', type='float', order=42)
+    @metric(name='平均持仓时间', group='交易', fmt='.1f', desc='所有交易的平均持仓天数', order=42)
     def avg_holding_period(self) -> Optional[float]:
         """计算平均持仓时间"""
         if not self._trade_profits:
@@ -668,7 +671,7 @@ class AccountAnalyzer:
         total_days = sum((t['close_time'] - t['open_time']).days for t in self._trade_profits)
         return total_days / len(self._trade_profits)
 
-    @metric(name='凯利公式最优仓位', desc='根据胜率和盈亏比计算的最优仓位比例', type='float', order=50)
+    @metric(name='凯利公式最优仓位', group='交易', fmt='.1%', desc='根据胜率和盈亏比计算的最优仓位比例', order=50)
     def kelly_criterion(self) -> Optional[float]:
         """计算凯利公式最优仓位"""
         if not self._trade_profits:
@@ -687,7 +690,7 @@ class AccountAnalyzer:
         profit_loss_ratio = abs(avg_profit / avg_loss)
         return win_rate_val - (1 - win_rate_val) / profit_loss_ratio
 
-    @metric(name='半凯利仓位', desc='凯利公式最优仓位的50%', type='float', order=51)
+    @metric(name='半凯利仓位', group='交易', fmt='.1%', desc='凯利公式最优仓位的50%', order=51)
     def kelly_fraction(self, fraction: float = 0.5) -> Optional[float]:
         """计算凯利分数仓位"""
         kelly = self.kelly_criterion()
@@ -708,8 +711,9 @@ class AccountAnalyzer:
                     metrics[attr._metric_name] = {
                         'name': attr._metric_name,
                         'value': value,
+                        'group': getattr(attr, '_metric_group', ''),
                         'desc': attr._metric_desc,
-                        'type': attr._metric_type,
+                        'fmt': getattr(attr, '_metric_fmt', '.1%'),
                         'order': attr._metric_order,
                         'method': name
                     }
@@ -853,27 +857,24 @@ class AccountAnalyzer:
         dates = sorted(assets.keys()) if assets else []
 
         def _fmt(val, t='.1%'):
+            """格式化指标值，遵循 Python format 规范 ('.1%', '.2%', '.2f', '.1f')"""
             if val is None:
                 return 'N/A'
             if isinstance(val, tuple):
                 val = val[0]
-            if t == '.1%':
-                return f"{val*100:.1f}%"
-            if t == '.2f':
-                return f"{val:.2f}"
-            if t == '.1f':
-                return f"{val:.1f}"
+            if t.endswith('%'):
+                d = int(t[1:-1])
+                return f"{val*100:.{d}f}%"
+            if t.endswith('f'):
+                d = int(t[1:-1])
+                return f"{val:.{d}f}"
             return str(val)
 
-        def _add(m, k, v, t='.1%'):
-            """安全添加指标：跳过 None 和 inf"""
-            if v is not None and not (isinstance(v, float) and v == float('inf')):
-                m[k] = _fmt(v, t)
+
 
         has_records = self.account and self.account.trade_records
 
         # 预计算（供 section 内使用）
-        dd = self.max_drawdown()
         initial_cash = self.account.snapshots[0].cash if self.account and self.account.snapshots else 0
         final_nav = self.account.snapshots[-1].nav if self.account and self.account.snapshots else 0
 
@@ -887,59 +888,66 @@ class AccountAnalyzer:
             running_max = np.maximum.accumulate(cumulative)
             dd_pct = (-(running_max - cumulative) / running_max * 100).tolist()
 
+        # [重构] 2026-05-30 指标改为 @metric(group=...) 自动分组驱动
+        #   新增指标只需加 @metric(group='xxx')，无需修改此处
+        all_metrics = self.metrics()
+
+        # 基础信息（非 @metric，单独处理）
+        info_m = {}
+        if dates and len(dates) >= 2:
+            info_m['开始日期'] = dates[1].strftime('%Y-%m-%d')
+            info_m['结束日期'] = dates[-1].strftime('%Y-%m-%d')
+        if initial_cash > 0:
+            info_m['初始资金'] = f"{initial_cash:,.0f}"
+        if final_nav > 0:
+            info_m['最终资产'] = f"{final_nav:,.0f}"
+
+        # 按 group 分组指标（组内按 order 排序，附带 desc，根据指标类型判断格式）
+        grouped = {}
+        for m in all_metrics.values():
+            g = m.get('group', '')
+            if not g:
+                continue
+            val = m['value']
+            if isinstance(val, tuple):
+                val = val[0]
+            if val is not None and not (isinstance(val, float) and val == float('inf')):
+                # 使用 @metric 声明的 fmt 格式（默认 .1%）
+                fmt_val = _fmt(val, m.get('fmt', '.1%'))
+                grouped.setdefault(g, []).append(
+                    (m['order'], m['name'], fmt_val, m.get('desc', ''))
+                )
+        for items in grouped.values():
+            items.sort(key=lambda x: x[0])
+
         # ═══════════════════════════════════════════
-        # ① Section：回测指标（内部用 title 做小标题，不嵌套 section）
+        # ① Section：回测指标（@metric 驱动 + 基础信息）
         # ═══════════════════════════════════════════
         with nb.section("回测指标"):
-            # 基础信息
-            info_m = {}
-            if dates and len(dates) >= 2:
-                info_m['开始日期'] = dates[1].strftime('%Y-%m-%d')
-                info_m['结束日期'] = dates[-1].strftime('%Y-%m-%d')
-            if initial_cash > 0:
-                info_m['初始资金'] = f"{initial_cash:,.0f}"
-            if final_nav > 0:
-                info_m['最终资产'] = f"{final_nav:,.0f}"
             nb.metrics(info_m, title="基础指标", columns=4)
 
-            # 收益指标
-            return_m = {}
-            _add(return_m, '累计收益率', self.return_rate())
-            _add(return_m, '年化收益率', self.annualized_return())
-            _add(return_m, '夏普比率', self.sharpe_ratio(), '.2f')
-            _add(return_m, '胜率', self.win_rate())
-            nb.metrics(return_m, title="收益指标", columns=4)
-
-            # 风险指标
-            risk_m = {}
-            _add(risk_m, '年化波动率', self.volatility())
-            _add(risk_m, '最大回撤', dd[0] if dd else None)
-            _add(risk_m, '索提诺比率', self.sortino_ratio(), '.2f')
-            _add(risk_m, 'VaR(95%)', self.var(0.95))
-            _add(risk_m, 'CVaR(95%)', self.cvar(0.95))
-            _add(risk_m, 'Ulcer Index', self.ulcer_index(), '.2f')
-            _add(risk_m, 'UPI', self.upi(), '.2f')
-            nb.metrics(risk_m, title="风险指标", columns=4)
-
-            # 交易指标
-            if has_records:
-                trade_m = {}
-                _add(trade_m, '胜率', self.win_rate())
-                _add(trade_m, '平均盈亏比', self.avg_profit_loss_ratio(), '.2f')
-                _add(trade_m, '平均持仓(天)', self.avg_holding_period(), '.1f')
-                kc = self.kelly_criterion()
-                if kc is not None:
-                    _add(trade_m, '凯利仓位', kc)
-                    kf = self.kelly_fraction(0.5)
-                    if kf is not None:
-                        _add(trade_m, '半凯利仓位', kf)
-                avg_p = self.avg_profit(mode='amount')
-                avg_l = self.avg_loss(mode='amount')
-                if avg_p is not None:
-                    trade_m['平均盈利'] = f"{avg_p:,.0f}"
-                if avg_l is not None:
-                    trade_m['平均亏损'] = f"{avg_l:,.0f}"
-                nb.metrics(trade_m, title="交易指标", columns=4)
+            # 按预设顺序输出各组指标
+            for group_name in ('收益', '风险', '交易'):
+                if group_name not in grouped:
+                    continue
+                # 交易组只在有成交记录时展示
+                if group_name == '交易' and not has_records:
+                    continue
+                metrics_list = []
+                for _, name, val, desc in grouped[group_name]:
+                    item = {'name': name, 'value': val}
+                    if desc:
+                        item['desc'] = desc
+                    metrics_list.append(item)
+                # 交易组补充非 @metric 的平均盈亏
+                if group_name == '交易':
+                    avg_p = self.avg_profit(mode='amount')
+                    avg_l = self.avg_loss(mode='amount')
+                    if avg_p is not None:
+                        metrics_list.append({'name': '平均盈利', 'value': f"{avg_p:,.0f}"})
+                    if avg_l is not None:
+                        metrics_list.append({'name': '平均亏损', 'value': f"{avg_l:,.0f}"})
+                nb.metrics(metrics_list, title=f"{group_name}指标", columns=4)
 
         # ═══════════════════════════════════════════
         # ② Section：收益分析 — 净值 + 回撤图表
@@ -970,8 +978,10 @@ class AccountAnalyzer:
         # ═══════════════════════════════════════════
         if has_records:
             trades = []
+            # [新增] 2026-05-30 如果存在信号备注则展示备注列
+            has_notes = any(getattr(t, 'note', '') for t in self.account.trade_records)
             for t in self.account.trade_records:
-                trades.append({
+                row = {
                     '日期': t.created_at.strftime('%Y-%m-%d %H:%M'),
                     '标的': t.symbol,
                     '方向': '买入' if t.side == 1 else '卖出',
@@ -979,11 +989,155 @@ class AccountAnalyzer:
                     '数量': t.volume,
                     '金额': round(t.amount, 2),
                     '手续费': round(t.fee, 2),
-                })
+                }
+                if has_notes:
+                    row['备注'] = getattr(t, 'note', '')
+                trades.append(row)
             with nb.section("交易明细", collapsed=True):
                 nb.table(trades, page={'size': 20})
 
         return nb
+
+    def to_excel(self, report_name: str = "回测报告", output_dir: str = "."):
+        """导出 Excel 文件，与 notebook 报告结构对应
+
+        Sheet 结构:
+            回测指标 — 所有 @metric 指标汇总
+            每日资产 — 日期 + 现金 + 持仓市值 + 总净值
+            交易记录 — 全部成交明细（日期/标的/方向/价格/数量/金额/手续费/备注）
+
+        Args:
+            report_name: 报告名称，用于生成文件名
+                       格式：{report_name}_{YYYYMMDD_HHMM}.xlsx
+            output_dir: 输出目录（相对路径，基于调用者所在目录）
+        """
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+        # ---------- Sheet 1: 回测指标 ----------
+        metrics_data = self.metrics()
+        ordered = sorted(metrics_data.values(), key=lambda x: x.get('order', 99))
+
+        # ---------- Sheet 2: 每日资产 ----------
+        assets = self._daily_assets
+        dates_sorted = sorted(assets.keys())
+        # 从 snapshots 反推每日 cash（取当日最后一个快照）
+        if self.account and self.account.snapshots:
+            daily_last_snap = {}
+            for s in self.account.snapshots:
+                d = s.created_at.date()
+                daily_last_snap[d] = s
+            asset_rows = []
+            for d in dates_sorted:
+                nav = assets[d]
+                snap = daily_last_snap.get(d)
+                cash = snap.cash if snap else 0
+                pos_val = nav - cash
+                asset_rows.append({
+                    '日期': d.strftime('%Y-%m-%d'),
+                    '现金': round(cash, 2),
+                    '持仓市值': round(pos_val, 2),
+                    '总净值': round(nav, 2),
+                })
+        else:
+            asset_rows = [{'日期': d.strftime('%Y-%m-%d'), '总净值': round(v, 2)}
+                         for d, v in sorted(assets.items())]
+
+        # ---------- Sheet 3: 交易记录 ----------
+        trade_rows = []
+        has_notes = self.account and any(getattr(t, 'note', '') for t in self.account.trade_records)
+        if self.account:
+            for t in self.account.trade_records:
+                row = {
+                    '日期': t.created_at.strftime('%Y-%m-%d %H:%M'),
+                    '标的': t.symbol,
+                    '方向': '买入' if t.side == 1 else '卖出',
+                    '价格': t.price,
+                    '数量': t.volume,
+                    '金额': round(t.amount, 2),
+                    '手续费': round(t.fee, 2),
+                }
+                if has_notes:
+                    row['备注'] = getattr(t, 'note', '')
+                trade_rows.append(row)
+
+        # ---------- 写入 Excel ----------
+        wb = openpyxl.Workbook()
+
+        # 样式定义
+        header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+        header_font_white = Font(bold=True, size=11, color='FFFFFF')
+        thin_border = Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin')
+        )
+
+        def write_sheet(ws, title, headers, rows):
+            """写入一个 sheet，带标题和表头"""
+            # 标题行
+            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+            ws.cell(row=1, column=1, value=title).font = Font(bold=True, size=14)
+            # 表头
+            for ci, h in enumerate(headers, 1):
+                cell = ws.cell(row=2, column=ci, value=h)
+                cell.font = header_font_white
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal='center')
+                cell.border = thin_border
+            # 数据行
+            for ri, row in enumerate(rows, 3):
+                for ci, h in enumerate(headers, 1):
+                    val = row.get(h, '')
+                    cell = ws.cell(row=ri, column=ci, value=val)
+                    cell.border = thin_border
+                    # 数值列右对齐
+                    if isinstance(val, (int, float)):
+                        cell.alignment = Alignment(horizontal='right')
+            # 列宽自适应
+            for ci, h in enumerate(headers, 1):
+                max_len = max(len(str(h)), max((len(str(r.get(h, ''))) for r in rows), default=0)) + 2
+                ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = min(max_len, 30)
+
+        # Sheet 1: 回测指标
+        ws1 = wb.active
+        ws1.title = '回测指标'
+        m_headers = ['指标名称', '数值', '说明']
+        m_rows = []
+        for m in ordered:
+            val = m['value']
+            if isinstance(val, tuple):
+                val = val[0]
+            # 使用 @metric 声明的 fmt 格式输出
+            val_str = val
+            if isinstance(val, (int, float)):
+                fmt = m.get('fmt', '.1%')
+                if fmt.endswith('%'):
+                    d = int(fmt[1:-1])
+                    val_str = f"{val*100:.{d}f}%"
+                elif fmt.endswith('f'):
+                    d = int(fmt[1:-1])
+                    val_str = f"{val:.{d}f}"
+            m_rows.append({'指标名称': m['name'], '数值': val_str, '说明': m.get('desc', '')})
+        write_sheet(ws1, f'{report_name} — 回测指标', m_headers, m_rows)
+
+        # Sheet 2: 每日资产
+        ws2 = wb.create_sheet('每日资产')
+        a_headers = list(asset_rows[0].keys()) if asset_rows else []
+        write_sheet(ws2, f'{report_name} — 每日资产', a_headers, asset_rows)
+
+        # Sheet 3: 交易记录
+        ws3 = wb.create_sheet('交易记录')
+        t_headers = list(trade_rows[0].keys()) if trade_rows else []
+        write_sheet(ws3, f'{report_name} — 交易记录', t_headers, trade_rows)
+
+        # 保存
+        from pathlib import Path
+        current_datetime = datetime.now().strftime("%Y%m%d_%H%M")
+        output_path = Path(self.base_dir) / output_dir / f"{report_name}_{current_datetime}.xlsx"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        wb.save(output_path)
+        print(f'Excel 已生成至: {output_path}')
+        return str(output_path)
 
     def to_html(self, report_name: str = "回测报告", output_dir: str = "."):
         """
