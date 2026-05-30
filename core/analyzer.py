@@ -888,62 +888,58 @@ class AccountAnalyzer:
             dd_pct = (-(running_max - cumulative) / running_max * 100).tolist()
 
         # ═══════════════════════════════════════════
-        # ① Section：回测指标（一级，嵌套二级子分组）
+        # ① Section：回测指标（内部用 title 做小标题，不嵌套 section）
         # ═══════════════════════════════════════════
         with nb.section("回测指标"):
-            # 基础信息（二级）
-            with nb.section("基础指标"):
-                info_m = {}
-                if dates and len(dates) >= 2:
-                    info_m['开始日期'] = dates[1].strftime('%Y-%m-%d')
-                    info_m['结束日期'] = dates[-1].strftime('%Y-%m-%d')
-                if initial_cash > 0:
-                    info_m['初始资金'] = f"{initial_cash:,.0f}"
-                if final_nav > 0:
-                    info_m['最终资产'] = f"{final_nav:,.0f}"
-                nb.metrics(info_m, columns=4)
+            # 基础信息
+            info_m = {}
+            if dates and len(dates) >= 2:
+                info_m['开始日期'] = dates[1].strftime('%Y-%m-%d')
+                info_m['结束日期'] = dates[-1].strftime('%Y-%m-%d')
+            if initial_cash > 0:
+                info_m['初始资金'] = f"{initial_cash:,.0f}"
+            if final_nav > 0:
+                info_m['最终资产'] = f"{final_nav:,.0f}"
+            nb.metrics(info_m, title="基础指标", columns=4)
 
-            # 收益指标（二级）
-            with nb.section("收益指标"):
-                return_m = {}
-                _add(return_m, '累计收益率', self.return_rate())
-                _add(return_m, '年化收益率', self.annualized_return())
-                _add(return_m, '夏普比率', self.sharpe_ratio(), '.2f')
-                _add(return_m, '胜率', self.win_rate())
-                nb.metrics(return_m, columns=4)
+            # 收益指标
+            return_m = {}
+            _add(return_m, '累计收益率', self.return_rate())
+            _add(return_m, '年化收益率', self.annualized_return())
+            _add(return_m, '夏普比率', self.sharpe_ratio(), '.2f')
+            _add(return_m, '胜率', self.win_rate())
+            nb.metrics(return_m, title="收益指标", columns=4)
 
-            # 风险指标（二级）
-            with nb.section("风险指标"):
-                risk_m = {}
-                _add(risk_m, '年化波动率', self.volatility())
-                _add(risk_m, '最大回撤', dd[0] if dd else None)
-                _add(risk_m, '索提诺比率', self.sortino_ratio(), '.2f')
-                _add(risk_m, 'VaR(95%)', self.var(0.95))
-                _add(risk_m, 'CVaR(95%)', self.cvar(0.95))
-                _add(risk_m, 'Ulcer Index', self.ulcer_index(), '.2f')
-                _add(risk_m, 'UPI', self.upi(), '.2f')
-                nb.metrics(risk_m, columns=4)
+            # 风险指标
+            risk_m = {}
+            _add(risk_m, '年化波动率', self.volatility())
+            _add(risk_m, '最大回撤', dd[0] if dd else None)
+            _add(risk_m, '索提诺比率', self.sortino_ratio(), '.2f')
+            _add(risk_m, 'VaR(95%)', self.var(0.95))
+            _add(risk_m, 'CVaR(95%)', self.cvar(0.95))
+            _add(risk_m, 'Ulcer Index', self.ulcer_index(), '.2f')
+            _add(risk_m, 'UPI', self.upi(), '.2f')
+            nb.metrics(risk_m, title="风险指标", columns=4)
 
-            # 交易指标（二级，有成交记录时）
+            # 交易指标
             if has_records:
-                with nb.section("交易指标"):
-                    trade_m = {}
-                    _add(trade_m, '胜率', self.win_rate())
-                    _add(trade_m, '平均盈亏比', self.avg_profit_loss_ratio(), '.2f')
-                    _add(trade_m, '平均持仓(天)', self.avg_holding_period(), '.1f')
-                    kc = self.kelly_criterion()
-                    if kc is not None:
-                        _add(trade_m, '凯利仓位', kc)
-                        kf = self.kelly_fraction(0.5)
-                        if kf is not None:
-                            _add(trade_m, '半凯利仓位', kf)
-                    avg_p = self.avg_profit(mode='amount')
-                    avg_l = self.avg_loss(mode='amount')
-                    if avg_p is not None:
-                        trade_m['平均盈利'] = f"{avg_p:,.0f}"
-                    if avg_l is not None:
-                        trade_m['平均亏损'] = f"{avg_l:,.0f}"
-                    nb.metrics(trade_m, columns=4)
+                trade_m = {}
+                _add(trade_m, '胜率', self.win_rate())
+                _add(trade_m, '平均盈亏比', self.avg_profit_loss_ratio(), '.2f')
+                _add(trade_m, '平均持仓(天)', self.avg_holding_period(), '.1f')
+                kc = self.kelly_criterion()
+                if kc is not None:
+                    _add(trade_m, '凯利仓位', kc)
+                    kf = self.kelly_fraction(0.5)
+                    if kf is not None:
+                        _add(trade_m, '半凯利仓位', kf)
+                avg_p = self.avg_profit(mode='amount')
+                avg_l = self.avg_loss(mode='amount')
+                if avg_p is not None:
+                    trade_m['平均盈利'] = f"{avg_p:,.0f}"
+                if avg_l is not None:
+                    trade_m['平均亏损'] = f"{avg_l:,.0f}"
+                nb.metrics(trade_m, title="交易指标", columns=4)
 
         # ═══════════════════════════════════════════
         # ② Section：收益分析 — 净值 + 回撤图表
