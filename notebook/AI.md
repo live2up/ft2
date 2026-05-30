@@ -2,7 +2,7 @@
 
 > **AI 助手请先阅读此文件**，掌握 Notebook 输出模块的调用规范和数据格式
 >
-> **版本：v2.0.0 | 更新日期：2026-05-11**
+> **版本：v2.1.0 | 更新日期：2026-05-30**
 
 ---
 
@@ -16,6 +16,8 @@ Notebook 是 ft2 框架的 **HTML 报告生成器**，基于 Jinja2 + Vue3 + ECh
 - 表格通过 ft-table Vue 组件渲染
 - 最终由 Jinja2 模板 + Vue3 组装为完整 HTML
 - 数据以 JSON-LD 格式注入 `<head>`，AI 可优先抓取
+- **输入即输出**：xAxis 数据原样通过，前端不做日期格式转换
+- **后端管布局，前端管位置**：高度/间距/legend 空间由后端管理，前端仅做 legend 偏移
 
 ---
 
@@ -25,7 +27,7 @@ Notebook 是 ft2 框架的 **HTML 报告生成器**，基于 Jinja2 + Vue3 + ECh
 notebook/
 ├── __init__.py      # 导出 Notebook 类
 ├── cell.py          # Cell/Section 数据类 + CellBuilder + 图表构建器
-├── min_pyecharts.py # 精简版 pyecharts（自研，402行）
+├── min_pyecharts.py # 精简版 pyecharts（自研，668行，含 baseline diff 优化）
 ├── notebook.py      # Notebook 主类（用户 API 入口）
 ├── README.md        # 用户文档
 └── AI.md            # 本文件
@@ -33,8 +35,8 @@ notebook/
 template/
 ├── notebook.html    # Jinja2 HTML 模板（数据以 JSON-LD 注入 <head>）
 └── js/
-    ├── notebook3C.js   # Vue3 渲染逻辑
-    ├── notebook3.css   # 样式
+    ├── notebook3D.js   # Vue3 渲染逻辑（CHART_AXIS_RULES 共享规则 + applyGridAxisRules）
+    ├── notebook3D.css  # 样式
     ├── ft-table.js     # 表格组件
     └── echarts.min.js  # ECharts 库
 ```
@@ -59,12 +61,16 @@ nb = Notebook(title: str = "Notebook Report")
 ### 输出
 
 ```python
-nb.export_html(name=None, template_path=None)  # 导出 HTML（name 不含扩展名）
+nb.export_html(name=None, template_path=None, local_assets=False)
+# name: 输出文件名（不含 .html 扩展名），默认使用标题
+# template_path: 自定义模板路径，默认 ../template/notebook.html
+# local_assets: True=本地 file:// 资源（离线），False=CDN 资源（默认）
 nb.to_json()                                    # 导出 JSON 字符串
 nb.to_dict()                                    # 导出字典
 ```
 
 **输出路径规则：** HTML 文件输出到 **调用者脚本所在目录**（`base_dir`），非 notebook 模块目录。
+**本地测试：** 使用 `local_assets=True`，浏览器通过 `file://` 协议加载本地 JS/CSS。
 
 ---
 
@@ -119,27 +125,78 @@ columns=['code', 'name', 'return']  # 字符串列表，控制显示列及顺序
 |------|------|------|------|
 | `freeze` | `dict` | 冻结列 | `{'left': 2, 'right': 1}` |
 | `page` | `dict / False` | 分页配置 | `{'size': 20}` 或 `False` 禁用 |
-| `heatmap` | `dict` | 热力图配置 | `{'start': 2, 'end': 5, 'axis': 'column'}` |
+| `heatmap` | `dict` | 热力图效果 | `{'start': 2, 'end': -1, 'axis': 'column'}` |
+
+**freeze（列冻结）使用建议：**
+
+```python
+# 场景1：多列表格，冻结标识列（最常见的推荐用法）
+# 股票行情、持仓明细：冻结左侧 1-2 列标识列
+nb.table(data, freeze={'left': 2})          # 前2列（代码+名称）固定
+
+# 场景2：右侧汇总列固定
+nb.table(data, freeze={'left': 2, 'right': 1})  # 左侧2列+右侧1列固定
+
+# 何时用 freeze：
+# ✅ 列数 ≥ 6 且前两列为标识列（代码+名称/日期+品种）
+# ✅ 最后列为合计/汇总时，冻结 right:1
+# ❌ 列数 < 5 → 不需要冻结，屏幕够宽
+```
+
+**heatmap（热力图效果）使用建议：**
+
+```python
+# 核心参数
+heatmap={
+    'start': 2,      # 从第2列开始着色（跳过代码、名称列）
+    'end': -1,       # 到倒数第1列（-1 排除最后的汇总列）
+    'axis': 'column' # 'column'=每列独立归一化 / 'table'=全表统一
+}
+
+# 场景1：收益矩阵 → column 模式（每列独立看涨跌）
+heatmap={'start': 2, 'axis': 'column'}
+# 效果：收益%列 红涨绿跌，换手率列 深浅看活跃度，各自独立
+
+# 场景2：因子暴露 → table 模式（全表统一比较强度）
+heatmap={'start': 1, 'axis': 'table', 'colors': ['#fff', '#ff9800']}
+# 效果：全局按强度着色，发现最强/最弱因子
+
+# 场景3：自定义配色
+heatmap={'start': 2, 'colors': ['#2196f3', '#fff', '#f44336']}  # 蓝→白→红（A股风格）
+heatmap={'start': 2, 'colors': ['#4caf50', '#fff', '#f44336']}  # 绿→白→红
+
+# 何时用 heatmap：
+# ✅ 数据列 ≥ 3 且有数值列（收益率、因子值、权重等）
+# ✅ 需要快速识别数值大小/正负的矩阵数据
+# ❌ 纯文本列（策略名、分类标签）→ 不需要热力图
+```
+
+**freeze + heatmap 组合用法（推荐）：**
+
+```python
+# 场景：行业轮动矩阵
+nb.table(industry_data,
+    columns=['行业', '近1月', '近3月', '近6月', '近1年', '年均'],
+    freeze={'left': 1},                        # 冻结行业列
+    heatmap={'start': 2, 'end': -1, 'axis': 'column'},  # 数值列着色，汇总列除外
+    title='行业轮动收益矩阵')
+
+# 场景：选股结果
+nb.table(stock_data,
+    columns=['代码', '名称', '收益率', '因子得分', '市值', '行业'],
+    freeze={'left': 2},                        # 代码+名称固定
+    heatmap={'start': 3, 'end': 5, 'axis': 'column'},  # 数值列着色
+    page={'size': 20},                         # 分页
+    title='优选股票池')
+```
 
 **page 配置：**
 
 ```python
-page=False                    # 禁用分页
-page={'size': 20}             # 每页 20 条
+page=False                              # 禁用分页（≤20行时推荐）
+page={'size': 20}                       # 每页 20 条
 page={'size': 20, 'options': [10, 20, 50, 100]}  # 自定义选项
 # 不传 page → 默认分页，每页 10 条
-```
-
-**heatmap 配置：**
-
-```python
-heatmap={'start': 2, 'end': 5, 'axis': 'column'}
-# start/end: 列索引（1-based，支持负数）
-# axis: 'column'（每列独立归一化）或 'table'（全表统一）
-# colors: 自定义颜色，默认 A 股配色 ['#2196f3', '#fff', '#f44336']（蓝→白→红）
-# columns: 直接指定列名数组（优先级最高）
-# exclude: 排除的列索引数组
-# excludeRows: 排除的行索引（如 [-1] 排除汇总行）
 ```
 
 ---
@@ -276,17 +333,24 @@ nb.chart('line', data,
 主要用于**同一时间轴的多个数据纵向堆叠**（如净值+仓位+信号）。
 
 ```python
-nb.chartg('line', nav_data, height=300, yaxis_opts={'min_': 0.9})
-nb.chartg('bar', pos_data, height=150)
+nb.chartg('line', nav_data, height=300)
+nb.chartg('bar',  pos_data, height=150)
+nb.chartg('line', sig_data, height=100)
 # 在下一个 cell 或 section 退出时自动合并输出
-# 总高度 = sum(heights)
 ```
+
+**高度语义（px 绝对定位）：**
+- `height=300` → chart 绘图区 300px（不包含 legend 和间距）
+- 总高度 = `sum(heights) + gap×N + legend_h×N`
+- `gap=30px`（子图间距，后端常量）
+- `legend_h=28px`（每子图 legend 预留，后端常量，前端 `GRID_LEGEND_HEIGHT` 同步）
 
 **Grid 特性：**
 - 所有子图**共享 xAxis**（联动的 datazoom），各自独立 yAxis
 - datazoom 滑块**联动全部子图**
-- 各子图的 legend 分别定位在各自 grid 顶部
-- 最后一个子图显示 x 轴标签
+- 各子图的 legend 分别定位在各自 grid 上方 28px
+- Y 轴左对齐（统一 `left: 80px`，`containLabel: false`）
+- 折线图/面积图从 X 轴起点开始（`boundaryGap: false`），柱状图/K线留白（`true`）
 
 **触发合并的时机：**
 - 调用任何非 chartg 的 cell 方法时
@@ -449,16 +513,16 @@ with nb.section("分组收益"):
 nb.export_html()
 ```
 
-### Grid 多图合并（同时间轴)
+### Grid 多图合并（同时间轴）
 
 ```python
 nb = Notebook("策略综合分析")
 
 # 同一时间轴的多个指标纵向堆叠
-nb.chartg('line', nav_data, height=300, yaxis_opts={'min_': 0.9})  # 净值
-nb.chartg('bar', pos_data, height=150)                               # 仓位
-nb.chartg('line', sig_data, height=100)                              # 信号
-# 自动合并为一个 Grid 布局，datazoom 联动全部
+nb.chartg('line', nav_data, height=300)   # 净值：chart 绘图区 300px
+nb.chartg('bar',  pos_data, height=150)   # 仓位：chart 绘图区 150px
+nb.chartg('line', sig_data, height=100)   # 信号：chart 绘图区 100px
+nb.divider()  # 触发合并，总高 = 300+150+100 + 30×2 + 28×3 = 694px
 
 nb.export_html()
 ```
@@ -471,10 +535,66 @@ nb.export_html()
 2. **DataFrame 转换规则（按类型不同）**：line/area/bar → 第一列→xAxis其余→series；kline → 第一列→xAxis+自动识别OHLC字段；pie → 第一列→name第二列→value；heatmap → 第一列→X轴其余列名→Y轴
 3. **scatter 不支持 DataFrame**：散点图必须使用标准格式 dict
 4. **chartg 自动合并**：chartg 是累加模式，在下一个非 chartg 操作时自动 flush
-5. **输出路径**：`export_html()` 输出到调用者脚本所在目录，非 notebook 模块目录
-6. **链式调用**：所有 cell 方法返回 self，可 `nb.title("A").text("B").divider()`
-7. **section 内 title**：在 `with nb.section(...)` 内，cell 的 `title` 参数作为小标题；在 section 外，`title` 参数会自动创建一个单元素 section
-8. **pyecharts 延迟导入**：pyecharts 仅在首次使用图表时导入，不影响纯文本/表格场景的性能
+5. **输入即输出原则**：xAxis 日期字符串原样传入，前端用 `category` 类型直接显示，不做时区/格式转换
+6. **Grid 高度语义**：`height` = chart 绘图区高度（px），不包含 legend 和间距，后端自动累加
+7. **输出路径**：`export_html()` 输出到调用者脚本所在目录，非 notebook 模块目录
+8. **链式调用**：所有 cell 方法返回 self，可 `nb.title("A").text("B").divider()`
+9. **section 内 title**：在 `with nb.section(...)` 内，cell 的 `title` 参数作为小标题；在 section 外，`title` 参数会自动创建一个单元素 section
+10. **pyecharts 延迟导入**：pyecharts 仅在首次使用图表时导入，不影响纯文本/表格场景的性能
+
+---
+
+## AI 建议性用法
+
+### 表格 ft-table 最佳实践
+
+| 场景 | freeze | heatmap | page | 说明 |
+|------|--------|---------|------|------|
+| 持仓明细 | `left:2` | `start:3` column | `{size:20}` | 代码+名称固定，盈亏列着色 |
+| 交易记录 | — | — | `{size:20}` | 纯文本为主，不需要冻结 |
+| 行业轮动矩阵 | `left:1` | `start:2,end:-1` column | False | 行业名固定，收益列红涨绿跌 |
+| 因子暴露分析 | `left:1` | `start:2` table | False | 全表统一比较，找最强因子 |
+| 选股结果 | `left:2` | `start:3,end:5` column | `{size:20}` | 多列数值指标着色 |
+| 绩效汇总（≤10行） | — | — | False | 行少直接展示，不用分页 |
+
+**推荐原则：**
+- 标识列（代码/名称/日期）→ freeze 左冻结
+- 数值列 ≥ 3 → heatmap 着色，`axis: 'column'` 最常见
+- 汇总/合计列 → `end: -1` 排除，不参与着色
+- 行数 ≤ 20 → `page: False`，一眼看完
+- freeze + heatmap 组合是最出彩的表格用法
+
+### 图表高度选择
+
+| 场景 | 推荐 height | 说明 |
+|------|------------|------|
+| 主净值图 | 300-400 | 核心图表，应占较多视觉空间 |
+| K线图 | 300 | 蜡烛图需要足够高度才能看清 |
+| 柱状图 | 150-200 | 适合月度收益、仓位等 |
+| 信号/辅助图 | 100-150 | 次要信息，紧凑即可 |
+| Grid 总计 | 500-700 | 2-3 个子图组合的推荐总高 |
+
+### 何时用 chart vs chartg
+
+```
+chart()  → 独立图表，需要单独标题/legend/坐标轴
+chartg() → 多个图表共享时间轴，纵向堆叠（如净值+仓位+信号）
+```
+
+### Grid 高度计算规则
+
+```python
+# 后端自动计算，无需手动
+total = sum(chart_heights) + 30×(n-1) + 28×n
+# 例: 300+150+150 → total = 600 + 30×2 + 28×3 = 744px
+```
+
+### 前端渲染规则（AI 无需关心，仅供参考）
+
+- xAxis: Grid 统一 `type='category'`，单图 `time`(日期)/`category`(非日期) 自动检测
+- yAxis: line/scatter/kline → `scale:true`（自适应），bar → `scale:false`（从0起步）
+- legend: 始终 `type='scroll'`，ECharts 自动根据容器宽度决定是否翻页
+- Grid Y轴对齐: `left: 80px` + `containLabel: false`
 
 ---
 
@@ -487,4 +607,4 @@ nb.export_html()
 
 ---
 
-> 最后更新：2026-05-27
+> 最后更新：2026-05-30
