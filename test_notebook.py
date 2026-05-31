@@ -2,8 +2,9 @@
 Notebook 模块测试
 """
 
-import sys
-sys.path.insert(0, 'd:/01-Doc/程序化/ft2')
+import sys, os
+# [修复] 2026-05-30 使用相对路径获取项目根目录，替代硬编码的绝对路径
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 import pandas as pd
 import numpy as np
 from notebook import Notebook
@@ -204,7 +205,8 @@ def test_comprehensive():
         nb.chartg('bar', {
             'xAxis': grid_dates,
             'series': [{'name': '成交金额', 'data': grid_volume}]
-        }, height=150, title="K线 + 成交金额")
+        }, height=150)  # 场景1结束
+        nb.divider()    # 触发 Grid 合并输出
 
         # 场景2：净值 + 模拟信号 + 仓位
         nav_dates = ['2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05', '2024-01-08']
@@ -219,11 +221,30 @@ def test_comprehensive():
         nb.chartg('bar', {
             'xAxis': nav_dates,
             'series': [{'name': '信号', 'data': signal_data}]
-        }, height=100, title="净值 + 信号")
+        }, height=100)
         nb.chartg('line', {
             'xAxis': nav_dates,
             'series': [{'name': '仓位', 'data': position_data}]
-        }, height=150, title="仓位")
+        }, height=150)
+        nb.divider()  # 触发 Grid 合并输出
+
+        # 场景3：资产净值 + 仓位（仅2层，数据更真实）
+        asset_dates = ['2024-01-02', '2024-01-05', '2024-01-10', '2024-01-15', '2024-01-22',
+                       '2024-01-29', '2024-02-05', '2024-02-12', '2024-02-19', '2024-02-26']
+        asset_values = [1000000, 1020000, 1015000, 1050000, 1040000,
+                        1080000, 1100000, 1130000, 1110000, 1150000]  # 策略资产
+        position_pct = [0, 0.5, 0.8, 0.8, 0.5, 0, 0.6, 0.6, 0.4, 0.8]  # 仓位比例%
+
+        nb.chartg('line', {
+            'xAxis': asset_dates,
+            'series': [{'name': '策略净值', 'data': asset_values}],
+        }, height=300, series_opts={'is_smooth': True})
+
+        nb.chartg('bar', {
+            'xAxis': asset_dates,
+            'series': [{'name': '仓位', 'data': position_pct}],
+        }, height=150)
+        nb.divider()  # 触发 Grid 合并输出
 
         # 嵌套：风险评估
         with nb.section("风险评估", collapsed=True):

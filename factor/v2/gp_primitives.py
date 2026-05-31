@@ -290,6 +290,411 @@ def signed_power(x: np.ndarray, exponent: float = 2.0) -> np.ndarray:
 
 
 # ============================================================================
+# 191 因子扩展原语（滚动统计 + 复合滚动 + 特殊）
+# [新增] 2026-05-30 适配 GTJA 191 Alpha 因子库探索
+# ============================================================================
+
+# ---- 滚动统计（单变量） ----
+
+def ts_sum(x: np.ndarray, period: int = 10) -> np.ndarray:
+    """滚动求和：过去 period 日的累加和
+
+    参数说明：
+        x: 输入数组，shape (T,) 或 (T, N)
+        period: 回看窗口
+
+    返回：
+        np.ndarray: 滚动和数组，前 period-1 个位置为 NaN
+    """
+    x = np.asarray(x, dtype=float)
+    period = int(period)
+    if x.ndim == 1:
+        return _ts_sum_1d(x, period)
+    else:
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = _ts_sum_1d(x[:, j], period)
+        return result
+
+
+def _ts_sum_1d(x: np.ndarray, period: int) -> np.ndarray:
+    n = len(x)
+    result = np.full(n, np.nan)
+    if n < period:
+        return result
+    # 用累积和 O(n) 计算滚动窗口和
+    cumsum = np.nancumsum(np.where(np.isnan(x), 0, x))
+    result[period - 1:] = cumsum[period - 1:]
+    if period > 1:
+        result[period - 1:] -= cumsum[:n - period + 1]
+    # 窗口内有 NaN 的位置置为 NaN
+    nan_count = np.zeros(n)
+    nan_count[np.isnan(x)] = 1
+    nan_cumsum = np.cumsum(nan_count)
+    window_nan = nan_cumsum[period - 1:] - (nan_cumsum[:n - period + 1] if period > 1 else 0)
+    result[period - 1:][window_nan > 0] = np.nan
+    return result
+
+
+def ts_mean(x: np.ndarray, period: int = 10) -> np.ndarray:
+    """滚动均值：过去 period 日的算术平均
+
+    [新增] 2026-05-30 191 因子扩展
+    等价于 ts_sum(x, period) / period，但 NaN 处理更精细。
+    对应 GTJA191 的 MEAN(x, d)。
+
+    参数说明：
+        x: 输入数组，shape (T,) 或 (T, N)
+        period: 回看窗口
+
+    返回：
+        np.ndarray: 滚动均值数组
+    """
+    x = np.asarray(x, dtype=float)
+    period = int(period)
+    if x.ndim == 1:
+        return _ts_mean_1d(x, period)
+    else:
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = _ts_mean_1d(x[:, j], period)
+        return result
+
+
+def _ts_mean_1d(x: np.ndarray, period: int) -> np.ndarray:
+    n = len(x)
+    result = np.full(n, np.nan)
+    for i in range(period - 1, n):
+        window = x[max(0, i - period + 1): i + 1]
+        if np.all(np.isnan(window)):
+            continue
+        result[i] = np.nanmean(window)
+    return result
+
+
+def ts_std(x: np.ndarray, period: int = 20) -> np.ndarray:
+    """滚动标准差：过去 period 日的标准差
+
+    [新增] 2026-05-30 191 因子扩展
+    使用 ddof=1（样本标准差）。对应 GTJA191 的 STD(x, d)。
+
+    参数说明：
+        x: 输入数组，shape (T,) 或 (T, N)
+        period: 回看窗口
+
+    返回：
+        np.ndarray: 滚动标准差数组
+    """
+    x = np.asarray(x, dtype=float)
+    period = int(period)
+    if x.ndim == 1:
+        return _ts_std_1d(x, period)
+    else:
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = _ts_std_1d(x[:, j], period)
+        return result
+
+
+def _ts_std_1d(x: np.ndarray, period: int) -> np.ndarray:
+    n = len(x)
+    result = np.full(n, np.nan)
+    for i in range(period - 1, n):
+        window = x[max(0, i - period + 1): i + 1]
+        valid = window[~np.isnan(window)]
+        if len(valid) < 2:
+            continue
+        result[i] = np.nanstd(valid, ddof=1)
+    return result
+
+
+def ts_max(x: np.ndarray, period: int = 10) -> np.ndarray:
+    """滚动最大值：过去 period 日的最大值
+
+    [新增] 2026-05-30 191 因子扩展
+    对应 GTJA191 的 MAX(x, d)。
+
+    参数说明：
+        x: 输入数组，shape (T,) 或 (T, N)
+        period: 回看窗口
+
+    返回：
+        np.ndarray: 滚动最大值数组
+    """
+    x = np.asarray(x, dtype=float)
+    period = int(period)
+    if x.ndim == 1:
+        return _ts_extreme_1d(x, period, np.nanmax)
+    else:
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = _ts_extreme_1d(x[:, j], period, np.nanmax)
+        return result
+
+
+def ts_min(x: np.ndarray, period: int = 10) -> np.ndarray:
+    """滚动最小值：过去 period 日的最小值
+
+    [新增] 2026-05-30 191 因子扩展
+    对应 GTJA191 的 MIN(x, d)。
+
+    参数说明：
+        x: 输入数组，shape (T,) 或 (T, N)
+        period: 回看窗口
+
+    返回：
+        np.ndarray: 滚动最小值数组
+    """
+    x = np.asarray(x, dtype=float)
+    period = int(period)
+    if x.ndim == 1:
+        return _ts_extreme_1d(x, period, np.nanmin)
+    else:
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = _ts_extreme_1d(x[:, j], period, np.nanmin)
+        return result
+
+
+def _ts_extreme_1d(x: np.ndarray, period: int, fn) -> np.ndarray:
+    """1D 滚动极值（max/min 共用）"""
+    n = len(x)
+    result = np.full(n, np.nan)
+    for i in range(period - 1, n):
+        window = x[max(0, i - period + 1): i + 1]
+        valid = window[~np.isnan(window)]
+        if len(valid) == 0:
+            continue
+        result[i] = fn(valid)
+    return result
+
+
+# ---- 复合滚动（双变量 / 多参数） ----
+
+def sma(x: np.ndarray, period: int = 10, lag: int = 0) -> np.ndarray:
+    """简单移动平均（含延迟）：period 日均线，滞后 lag 日
+
+    [新增] 2026-05-30 191 因子扩展
+    SME(x, period, lag) = ts_mean(x_{t - lag - period + 1 : t - lag}, period)
+    即先对原始序列做 period 日简单移动平均，再延迟 lag 日。
+    对应 GTJA191 的 SMA(x, n, m)。
+
+    参数说明：
+        x: 输入数组，shape (T,) 或 (T, N)
+        period: 均线窗口
+        lag: 延迟天数（≥ 0，默认 0 即不延迟）
+
+    返回：
+        np.ndarray: 延迟后的移动均值数组
+    """
+    x = np.asarray(x, dtype=float)
+    period = int(period)
+    lag = int(lag)
+    if x.ndim == 1:
+        return _sma_1d(x, period, lag)
+    else:
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = _sma_1d(x[:, j], period, lag)
+        return result
+
+
+def _sma_1d(x: np.ndarray, period: int, lag: int) -> np.ndarray:
+    """先 delay 再 rolling mean，或等价地，用位移后的窗口"""
+    n = len(x)
+    result = np.full(n, np.nan)
+    start = period - 1 + lag
+    if start >= n:
+        return result
+    for i in range(start, n):
+        # 窗口: [i - lag - period + 1, i - lag]，不含 t > i-lag 的数据
+        window = x[max(0, i - lag - period + 1): i - lag + 1]
+        valid = window[~np.isnan(window)]
+        if len(valid) == 0:
+            continue
+        result[i] = np.nanmean(valid)
+    return result
+
+
+def covariance(x: np.ndarray, y: np.ndarray,
+               period: int = 20) -> np.ndarray:
+    """滚动协方差：x 与 y 的 period 日滚动样本协方差
+
+    [新增] 2026-05-30 191 因子扩展
+    对应 GTJA191 的 COVIANCE(x, y, d)。
+
+    参数说明：
+        x, y: 输入数组，shape 相同
+        period: 回看窗口
+
+    返回：
+        np.ndarray: 滚动协方差数组
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    period = int(period)
+    if x.shape != y.shape:
+        raise ValueError(f"x.shape={x.shape} 与 y.shape={y.shape} 不匹配")
+    if x.ndim == 1:
+        return _covariance_1d(x, y, period)
+    else:
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = _covariance_1d(x[:, j], y[:, j], period)
+        return result
+
+
+def _covariance_1d(x: np.ndarray, y: np.ndarray, period: int) -> np.ndarray:
+    n = len(x)
+    result = np.full(n, np.nan)
+    for i in range(period - 1, n):
+        xw = x[max(0, i - period + 1): i + 1]
+        yw = y[max(0, i - period + 1): i + 1]
+        mask = ~np.isnan(xw) & ~np.isnan(yw)
+        if mask.sum() < 2:
+            continue
+        result[i] = np.cov(xw[mask], yw[mask], ddof=1)[0, 1]
+    return result
+
+
+def regbeta(x: np.ndarray, y: np.ndarray,
+            period: int = 20) -> np.ndarray:
+    """滚动回归 Beta：y 对 x 的 period 日滚动线性回归斜率
+
+    [新增] 2026-05-30 191 因子扩展
+    β = Cov(x, y) / Var(x)。对应 GTJA191 的 REGBETA(x, y, d)。
+
+    参数说明：
+        x, y: 输入数组，shape 相同
+        period: 回看窗口
+
+    返回：
+        np.ndarray: 滚动回归 Beta 数组
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    period = int(period)
+    if x.shape != y.shape:
+        raise ValueError(f"x.shape={x.shape} 与 y.shape={y.shape} 不匹配")
+    if x.ndim == 1:
+        return _regbeta_1d(x, y, period)
+    else:
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = _regbeta_1d(x[:, j], y[:, j], period)
+        return result
+
+
+def _regbeta_1d(x: np.ndarray, y: np.ndarray, period: int) -> np.ndarray:
+    n = len(x)
+    result = np.full(n, np.nan)
+    for i in range(period - 1, n):
+        xw = x[max(0, i - period + 1): i + 1]
+        yw = y[max(0, i - period + 1): i + 1]
+        mask = ~np.isnan(xw) & ~np.isnan(yw)
+        if mask.sum() < 3:
+            continue
+        cov_mat = np.cov(xw[mask], yw[mask], ddof=1)
+        var_x = cov_mat[0, 0]
+        if var_x < 1e-10:
+            continue
+        result[i] = cov_mat[0, 1] / var_x
+    return result
+
+
+# ---- 特殊原语 ----
+
+def ts_argmin(x: np.ndarray, period: int = 10) -> np.ndarray:
+    """距 N 日最低点的天数：返回过去 period 日中最小值距今的天数
+
+    [新增] 2026-05-30 191 因子扩展
+    对应 GTJA191 的 LOWDAY(x, d)。返回值为 0 ~ period-1。
+    若当天为最低点则返回 0，若 period-1 天前为最低点则返回 period-1。
+
+    参数说明：
+        x: 输入数组，shape (T,) 或 (T, N)
+        period: 回看窗口
+
+    返回：
+        np.ndarray: 距离最低点的天数
+    """
+    x = np.asarray(x, dtype=float)
+    period = int(period)
+    if x.ndim == 1:
+        return _ts_argextreme_1d(x, period, np.nanargmin)
+    else:
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = _ts_argextreme_1d(x[:, j], period, np.nanargmin)
+        return result
+
+
+def ts_argmax(x: np.ndarray, period: int = 10) -> np.ndarray:
+    """距 N 日最高点的天数：返回过去 period 日中最大值距今的天数
+
+    [新增] 2026-05-30 191 因子扩展
+    对应 GTJA191 的 HIGHDAY(x, d)。返回值为 0 ~ period-1。
+    若当天为最高点则返回 0，若 period-1 天前为最高点则返回 period-1。
+
+    参数说明：
+        x: 输入数组，shape (T,) 或 (T, N)
+        period: 回看窗口
+
+    返回：
+        np.ndarray: 距离最高点的天数
+    """
+    x = np.asarray(x, dtype=float)
+    period = int(period)
+    if x.ndim == 1:
+        return _ts_argextreme_1d(x, period, np.nanargmax)
+    else:
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = _ts_argextreme_1d(x[:, j], period, np.nanargmax)
+        return result
+
+
+def _ts_argextreme_1d(x: np.ndarray, period: int, fn) -> np.ndarray:
+    """1D 滚动 argmin/argmax 共用"""
+    n = len(x)
+    result = np.full(n, np.nan)
+    for i in range(period - 1, n):
+        window = x[max(0, i - period + 1): i + 1]
+        valid_mask = ~np.isnan(window)
+        if valid_mask.sum() == 0:
+            continue
+        arg_in_window = fn(window[valid_mask])
+        # arg 相对于有效值序列的位置，还原回窗口内原始位置
+        valid_indices = np.where(valid_mask)[0]
+        pos_in_window = valid_indices[arg_in_window]
+        # 距离当前的天数 = (窗口长度 - 1) - 位置
+        days_back = len(window) - 1 - pos_in_window
+        result[i] = float(days_back)
+    return result
+
+
+def ifelse(cond: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """条件选择：cond > 0 时取 a，否则取 b
+
+    [新增] 2026-05-30 191 因子扩展
+    对应 GTJA191 的 IFELSE(cond, a, b)。
+    三个输入广播到相同 shape。
+
+    参数说明：
+        cond: 条件数组，>0 为 True
+        a: 条件为 True 时的取值
+        b: 条件为 False 时的取值
+
+    返回：
+        np.ndarray: 与输入广播一致的结果
+    """
+    cond = np.asarray(cond, dtype=float)
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    return np.where(cond > 0, a, b)
+
+
+# ============================================================================
 # 原语元信息（供 GP 引擎引用）
 # ============================================================================
 
@@ -304,6 +709,18 @@ EXTENDED_PRIMITIVES = {
     'decay_linear':  (decay_linear, 1, False),
     'cs_rank':       (cs_rank, 1, False),
     'signed_power':  (signed_power, 1, False),
+    # 191 因子扩展
+    'ts_sum':        (ts_sum, 1, False),
+    'ts_mean':       (ts_mean, 1, False),
+    'ts_std':        (ts_std, 1, False),
+    'ts_max':        (ts_max, 1, False),
+    'ts_min':        (ts_min, 1, False),
+    'sma':           (sma, 1, False),
+    'covariance':    (covariance, 2, False),
+    'regbeta':       (regbeta, 2, False),
+    'ts_argmin':     (ts_argmin, 1, False),
+    'ts_argmax':     (ts_argmax, 1, False),
+    'ifelse':        (ifelse, 3, False),
 }
 
 # 所有可安全求值的原语名称集合

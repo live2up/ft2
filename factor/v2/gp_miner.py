@@ -93,6 +93,15 @@ PRIMITIVE_WITH_PARAMS = [
     ('cs_zscore',     'period', [20]),       # period 预留但当前未使用
     ('cs_rank',       None, []),              # 无超参数
     ('signed_power',  'exponent', [2.0]),
+    # 191 因子扩展（2026-05-30）
+    ('ts_sum',        'period', [5, 10, 15, 20, 30, 60]),
+    ('ts_mean',       'period', [5, 10, 15, 20, 30, 60]),
+    ('ts_std',        'period', [10, 20, 30, 60]),
+    ('ts_max',        'period', [5, 10, 20, 30, 60]),
+    ('ts_min',        'period', [5, 10, 20, 30, 60]),
+    ('sma',           'period', [5, 10, 20, 30]),
+    ('ts_argmin',     'period', [5, 10, 20]),
+    ('ts_argmax',     'period', [5, 10, 20]),
 ]
 
 # 可随机生成的常量

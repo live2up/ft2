@@ -491,6 +491,8 @@ class AccountManager:
             raise ValueError(f"品种 {symbol} 未订阅任何频率数据")
 
         frequencies = [f for f in self.FREQ_ORDER if f in subscribed_freqs]
+        # [修复] 2026-05-30 补充不在 FREQ_ORDER 中的自定义频率（如 m10）
+        frequencies += [f for f in subscribed_freqs if f not in self.FREQ_ORDER]
 
         for freq in frequencies:
             try:

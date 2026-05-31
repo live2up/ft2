@@ -18,7 +18,7 @@ factor/v2/expression.py — 因子表达式引擎
 
 终端变量:
   open, high, low, close, volume, amount
-  直接引用面板中的 OHLCV 列，每个返回 (T, N) ndarray
+  returns, vwap（衍生字段，由 ExpressionFactor 自动注入）
 
 常量: 0, -1, 20, 0.5, ...
 
@@ -57,7 +57,11 @@ from enum import Enum
 # 复用 gp_primitives 中的时序原语
 from .gp_primitives import (
     ts_rank, ts_zscore, delay, decay_linear,
-    cs_rank, signed_power,
+    cs_rank, signed_power, correlation,
+    # 191 因子扩展原语
+    ts_sum, ts_mean, ts_std, ts_max, ts_min,
+    sma, covariance, regbeta,
+    ts_argmin, ts_argmax, ifelse,
 )
 
 
@@ -134,6 +138,9 @@ class ASTNode:
 VARIABLE_MAP = {
     'open': 'open', 'high': 'high', 'low': 'low',
     'close': 'close', 'volume': 'volume', 'amount': 'amount',
+    # 衍生字段（由 ExpressionFactor.calculate 或上游自动注入）
+    'returns': 'returns',
+    'vwap': 'vwap',
 }
 
 # 一元函数实现（纯 numpy，操作 (T,N) 数组）
@@ -160,9 +167,22 @@ PRIMITIVE_FUNCTIONS = {
     'ts_rank': ts_rank,
     'ts_zscore': ts_zscore,
     'delay': delay,
+    'correlation': correlation,
     'decay_linear': decay_linear,
     'cs_rank': cs_rank,
     'signed_power': signed_power,
+    # 191 因子扩展（2026-05-30）
+    'ts_sum': ts_sum,
+    'ts_mean': ts_mean,
+    'ts_std': ts_std,
+    'ts_max': ts_max,
+    'ts_min': ts_min,
+    'sma': sma,
+    'covariance': covariance,
+    'regbeta': regbeta,
+    'ts_argmin': ts_argmin,
+    'ts_argmax': ts_argmax,
+    'ifelse': ifelse,
 }
 
 
