@@ -99,6 +99,20 @@ from .gp_miner import (
     Individual,
     DEFAULT_GP_CONFIG,
 )
+from .alpha101 import (
+    ALPHA101,
+    ALPHA101_CATEGORIES,
+)
+from .alpha191 import (
+    ALPHA191,
+    ALPHA191_CATEGORIES,
+)
+from .expression_factor import (
+    ExpressionFactor,
+    expression_factor,
+    AlphaExplorer,
+    AlphaResult,
+)
 
 __all__ = [
     # 基类（V2 自包含）
@@ -166,4 +180,15 @@ __all__ = [
     'FactorGPMiner',
     'Individual',
     'DEFAULT_GP_CONFIG',
+    # WQ 101 因子公式
+    'ALPHA101',
+    'ALPHA101_CATEGORIES',
+    # 国泰 191 因子公式
+    'ALPHA191',
+    'ALPHA191_CATEGORIES',
+    # 表达式因子适配器 + 批量探索器
+    'ExpressionFactor',
+    'expression_factor',
+    'AlphaExplorer',
+    'AlphaResult',
 ]
