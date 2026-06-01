@@ -204,7 +204,25 @@ class RiskParity(WeightAllocator):
             return weights
         try:
             from scipy.optimize import minimize
+            # [修复] 2026-06-01 检查协方差矩阵有效性，防止全NaN输入
+            if np.all(np.isnan(returns_history)):
+                valid_mask = ~np.isnan(scores)
+                n_valid = valid_mask.sum()
+                if n_valid == 0:
+                    return np.zeros(n)
+                weights = np.zeros(n)
+                weights[valid_mask] = 1.0 / n_valid
+                return weights
             cov = np.cov(returns_history, rowvar=False)
+            # [修复] 2026-06-01 协方差含 NaN 时退化为等权
+            if np.any(np.isnan(cov)):
+                valid_mask = ~np.isnan(scores)
+                n_valid = valid_mask.sum()
+                if n_valid == 0:
+                    return np.zeros(n)
+                weights = np.zeros(n)
+                weights[valid_mask] = 1.0 / n_valid
+                return weights
             cov = cov + np.eye(cov.shape[0]) * 1e-6
             m = cov.shape[0]
 

@@ -30,6 +30,7 @@ from .primitives import (
     ts_sum, ts_mean, ts_std, ts_max, ts_min,
     sma, covariance, regbeta,
     ts_argmin, ts_argmax, ifelse,
+    cs_mean, ts_skew,                     # [新增] 2026-06-01
 )
 from .primitives import cs_zscore as _prim_cs_zscore
 
@@ -96,8 +97,10 @@ UNARY_FUNCTIONS = {
     'abs': lambda x: np.abs(x),
     'sqrt': lambda x: np.sqrt(np.maximum(x, 0)),
     'log': lambda x: np.log(np.maximum(x, 1e-10)),
+    'exp': lambda x: np.exp(x),                       # [新增] 2026-06-01 指数变换
     'neg': lambda x: -x,
     'sign': lambda x: np.sign(x),
+    'tanh': lambda x: np.tanh(x),                     # [新增] 2026-06-01 双曲正切软压缩
 }
 
 # 二元函数
@@ -120,6 +123,7 @@ PRIMITIVE_FUNCTIONS = {
     'sma': sma, 'covariance': covariance, 'regbeta': regbeta,
     'ts_argmin': ts_argmin, 'ts_argmax': ts_argmax, 'ifelse': ifelse,
     'cs_zscore': _prim_cs_zscore,
+    'cs_mean': cs_mean, 'ts_skew': ts_skew,  # [新增] 2026-06-01
 }
 
 

@@ -35,10 +35,10 @@ from .base import (
 # ── primitives ──
 from .primitives import (
     ts_rank, ts_zscore, delay, correlation, decay_linear,
-    cs_rank, cs_zscore, signed_power,
+    cs_rank, cs_zscore, cs_mean, signed_power,
     ts_sum, ts_mean, ts_std, ts_max, ts_min,
     sma, covariance, regbeta,
-    ts_argmin, ts_argmax, ifelse,
+    ts_argmin, ts_argmax, ifelse, ts_skew,
     EXTENDED_PRIMITIVES, get_primitive, list_primitives,
 )
 
@@ -99,10 +99,10 @@ __all__ = [
     'LibraryEntry', 'FactorLibrary',
     # primitives
     'ts_rank', 'ts_zscore', 'delay', 'correlation', 'decay_linear',
-    'cs_rank', 'cs_zscore', 'signed_power',
+    'cs_rank', 'cs_zscore', 'cs_mean', 'signed_power',
     'ts_sum', 'ts_mean', 'ts_std', 'ts_max', 'ts_min',
     'sma', 'covariance', 'regbeta',
-    'ts_argmin', 'ts_argmax', 'ifelse',
+    'ts_argmin', 'ts_argmax', 'ifelse', 'ts_skew',
     'EXTENDED_PRIMITIVES', 'get_primitive', 'list_primitives',
     # engine
     'NodeType', 'ASTNode', 'FactorExpression', 'parse_expression',

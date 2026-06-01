@@ -201,6 +201,22 @@ def signed_power(x: np.ndarray, exponent: float = 2.0) -> np.ndarray:
     return np.sign(x) * np.power(np.abs(x), exponent)
 
 
+def cs_mean(x: np.ndarray) -> np.ndarray:
+    """截面均值：每行中有值股票的均值，广播回 (T,N)
+
+    [新增] 2026-06-01 v3 行业中性化
+    """
+    x = np.asarray(x, dtype=float)
+    result = np.full_like(x, np.nan)
+    for i in range(x.shape[0]):
+        row = x[i, :]
+        valid = row[~np.isnan(row)]
+        if len(valid) == 0:
+            continue
+        result[i, :] = np.nanmean(valid)
+    return result
+
+
 # ============================================================================
 # 191 因子扩展：滚动统计 (5 个)
 # ============================================================================
@@ -469,6 +485,44 @@ def ifelse(cond: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.where(cond > 0, a, b)
 
 
+def ts_skew(x: np.ndarray, period: int = 20) -> np.ndarray:
+    """滚动偏度：过去 period 日的分布偏度
+
+    >0 = 右偏（涨多跌少，正收益为主导）
+    <0 = 左偏（暴跌风险大）
+    适合捕捉行业指数回报分布的不对称性。
+
+    [新增] 2026-06-01 v3
+    """
+    x = np.asarray(x, dtype=float)
+    period = int(period)
+    if x.ndim == 1:
+        return _ts_skew_1d(x, period)
+    else:
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = _ts_skew_1d(x[:, j], period)
+        return result
+
+
+def _ts_skew_1d(x: np.ndarray, period: int) -> np.ndarray:
+    """单列滚动偏度"""
+    n = len(x)
+    result = np.full(n, np.nan)
+    for i in range(period - 1, n):
+        window = x[max(0, i - period + 1):i + 1]
+        valid = window[~np.isnan(window)]
+        if len(valid) < 3:
+            continue
+        mu = np.nanmean(valid)
+        sigma = np.nanstd(valid, ddof=1)
+        if sigma < 1e-10:
+            result[i] = 0.0
+        else:
+            result[i] = float(np.nanmean(((valid - mu) / sigma) ** 3))
+    return result
+
+
 # ============================================================================
 # 原语注册表
 # ============================================================================
@@ -481,6 +535,7 @@ EXTENDED_PRIMITIVES = {
     'decay_linear':  (decay_linear, 1),
     'cs_rank':       (cs_rank, 1),
     'cs_zscore':     (cs_zscore, 1),
+    'cs_mean':       (cs_mean, 1),         # [新增] v3
     'signed_power':  (signed_power, 1),
     'ts_sum':        (ts_sum, 1),
     'ts_mean':       (ts_mean, 1),
@@ -493,6 +548,7 @@ EXTENDED_PRIMITIVES = {
     'ts_argmin':     (ts_argmin, 1),
     'ts_argmax':     (ts_argmax, 1),
     'ifelse':        (ifelse, 3),
+    'ts_skew':       (ts_skew, 1),         # [新增] v3
 }
 
 

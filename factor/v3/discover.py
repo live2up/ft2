@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════
 
 TERMINALS = ['close', 'volume', 'open', 'high', 'low', 'amount']
-UNARY_OPS = ['abs', 'sqrt', 'log', 'neg']
+UNARY_OPS = ['abs', 'sqrt', 'log', 'neg', 'exp', 'tanh']  # [新增] 2026-06-01 exp/tanh
 BINARY_OPS = ['add', 'sub', 'mul', 'div', 'max', 'min']
 CONSTANTS = [0.0, -1.0, 1.0, 0.5, 2.0]
 
@@ -53,6 +53,7 @@ PRIMITIVE_WITH_PARAMS = [
     ('decay_linear',  'period', [5, 10, 20, 30]),
     ('cs_zscore',     'period', [20]),
     ('cs_rank',       None, []),
+    ('cs_mean',       None, []),            # [新增] 2026-06-01 截面均值
     ('signed_power',  'exponent', [2.0]),
     ('ts_sum',        'period', [5, 10, 15, 20, 30, 60]),
     ('ts_mean',       'period', [5, 10, 15, 20, 30, 60]),
@@ -62,6 +63,7 @@ PRIMITIVE_WITH_PARAMS = [
     ('sma',           'period', [5, 10, 20, 30]),
     ('ts_argmin',     'period', [5, 10, 20]),
     ('ts_argmax',     'period', [5, 10, 20]),
+    ('ts_skew',       'period', [10, 20, 30, 60]),  # [新增] 2026-06-01
 ]
 
 DEFAULT_GP_CONFIG = {
@@ -386,6 +388,11 @@ class GPEngine:
             if ind.is_seed:
                 logger.warning(f"[GP Eval] 种子求值异常: {e}")
             return -999.0
+        # [修复] 2026-06-01 拦截变异产生的 NaN/Inf，防止适应度计算错误
+        if not np.isfinite(factor_values).all():
+            return -999.0
+        if np.allclose(factor_values, factor_values.flat[0], atol=1e-10):
+            return -999.0  # 常数因子无区分度
         fitness = self.fitness_calc.compute(factor_values)
         # [修复] 2026-06-01 用 > -998.0 替代 <= -999，避免 float vs int 比较
         if fitness < -998.0:
