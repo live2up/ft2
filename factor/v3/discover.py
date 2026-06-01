@@ -672,6 +672,8 @@ class FactorDiscoveryEngine:
                 - population_size: 种群大小（可选）
                 - top_n: 入库的 Top N 数量
                 - max_depth: 最大树深（可选）
+                - freq: 验证阶段调仓频率（可选，默认 'ME'）
+                - val_top_n: 验证阶段持仓数（可选，默认 3）
             verbose: 是否打印进度
 
         Returns:

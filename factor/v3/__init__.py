@@ -65,6 +65,7 @@ from .backtest import (
 from .formulas import (
     ALPHA101, ALPHA101_CATEGORIES,
     ALPHA191, ALPHA191_CATEGORIES,
+    BASIC_FACTORS, BASIC_FACTORS_CATEGORIES,
 )
 
 # ── validator ──
@@ -119,6 +120,7 @@ __all__ = [
     # formulas
     'ALPHA101', 'ALPHA101_CATEGORIES',
     'ALPHA191', 'ALPHA191_CATEGORIES',
+    'BASIC_FACTORS', 'BASIC_FACTORS_CATEGORIES',
     # validator
     'FactorValidator', 'ValidationResult', 'ValidationMetric', 'validation_metric',
     # search
