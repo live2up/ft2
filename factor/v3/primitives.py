@@ -95,6 +95,22 @@ def delay(x: np.ndarray, period: int = 1) -> np.ndarray:
     return result
 
 
+def delta(x: np.ndarray, period: int = 1) -> np.ndarray:
+    """差分：x_t - x_{t-period}（语法糖：省 1 层 AST 深度）
+
+    等价于 sub(x, delay(x, period))，但只占 1 层而非 2 层。
+    292 个公式中出现 139 次，是最高频的隐式原语。
+
+    [新增] 2026-06-01 v3 高频语法糖
+    """
+    x = np.asarray(x, dtype=float)
+    period = int(period)
+    if period < 1:
+        raise ValueError(f"period 必须 >= 1，当前: {period}")
+    shifted = delay(x, period)
+    return x - shifted
+
+
 def correlation(x: np.ndarray, y: np.ndarray, period: int = 20) -> np.ndarray:
     """滚动相关性：x 与 y 的 period 日滚动 Pearson 相关系数"""
     x = np.asarray(x, dtype=float)
@@ -199,6 +215,21 @@ def signed_power(x: np.ndarray, exponent: float = 2.0) -> np.ndarray:
     x = np.asarray(x, dtype=float)
     exponent = float(exponent)
     return np.sign(x) * np.power(np.abs(x), exponent)
+
+
+def winsorize(x: np.ndarray, n: float = 3.0) -> np.ndarray:
+    """Winsorize 截尾：clamp 到 ±n 倍标准差
+
+    抑制离群值（如行业单日暴涨 10%），提高因子稳健性。
+
+    [新增] 2026-06-01 v3
+    """
+    x = np.asarray(x, dtype=float)
+    mu = float(np.nanmean(x))
+    sig = float(np.nanstd(x))
+    if sig < 1e-10:
+        return np.full_like(x, mu)
+    return np.clip(x, mu - n * sig, mu + n * sig)
 
 
 def cs_mean(x: np.ndarray) -> np.ndarray:
@@ -531,12 +562,14 @@ EXTENDED_PRIMITIVES = {
     'ts_rank':       (ts_rank, 1),
     'ts_zscore':     (ts_zscore, 1),
     'delay':         (delay, 1),
+    'delta':         (delta, 1),           # [新增] v3 语法糖
     'correlation':   (correlation, 2),
     'decay_linear':  (decay_linear, 1),
     'cs_rank':       (cs_rank, 1),
     'cs_zscore':     (cs_zscore, 1),
     'cs_mean':       (cs_mean, 1),         # [新增] v3
     'signed_power':  (signed_power, 1),
+    'winsorize':     (winsorize, 1),       # [新增] v3
     'ts_sum':        (ts_sum, 1),
     'ts_mean':       (ts_mean, 1),
     'ts_std':        (ts_std, 1),

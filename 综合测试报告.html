@@ -4,153 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>综合测试报告</title>
-    <link rel="stylesheet" href="template/js/notebook3.css">
-    <script src="https://gitee.com/liveup_admin/ft2/raw/master/template/js/vue.global.prod.js"></script>
-    <script src="template/js/ft-table.js"></script>
-    <script src="https://gitee.com/liveup_admin/ft2/raw/master/template/js/echarts.min.js"></script>
-    <script src="https://gitee.com/liveup_admin/ft2/raw/master/template/js/snapdom.min.js"></script>
-</head>
-<body>
-    
-    <div id="app">
-        <!-- Toast 提示容器 -->
-        <div class="toast-container" v-if="toastMessage">
-            <div class="toast" :class="toastType">{{ toastMessage }}</div>
-        </div>
-        
-        <!-- 整体居中 wrapper -->
-        <div class="notebook-wrapper">
-            <!-- ========== 左侧浮动目录菜单 ========== -->
-            <nav class="toc-float-menu" :class="{ expanded: menuExpanded }" v-if="tocItems.length > 0">
-                <!-- 宽屏状态 - 完整显示 -->
-                <div class="menu-wide">
-                    <div class="menu-header">
-                        <span>📑 目录</span>
-                        <button v-if="isNarrow" class="collapse-btn" @click="toggleMenu" title="收起">✕</button>
-                    </div>
-                    <ul class="menu-list">
-                        <li v-for="(item, index) in tocItems" :key="index" 
-                            class="menu-item" 
-                            :class="{ selected: isSelected(item.index) }"
-                            @click="scrollToSection(item.index)">
-                            <input type="checkbox" :checked="isSelected(item.index)" 
-                                   @click.stop="toggleSelection(item.index)">
-                            <span class="menu-title">{{ item.title }}</span>
-                        </li>
-                    </ul>
-                    <div class="menu-footer">
-                        <button @click="selectAll">全选</button>
-                        <button @click="clearSelection">清空</button>
-                        <button @click="captureScreenshot" :disabled="selectedCount === 0">截图选中</button>
-                        <button @click="captureAll" class="full-btn">📋 全页</button>
-                    </div>
-                </div>
-                
-                <!-- 窄屏状态 - 显示首字，点击展开 -->
-                <div class="menu-narrow">
-                    <div class="collapsed-header" @click="toggleMenu" title="展开目录">📑</div>
-                    <ul class="collapsed-list">
-                        <li v-for="(item, index) in tocItems" :key="index" 
-                            class="collapsed-item"
-                            :class="{ selected: isSelected(item.index) }"
-                            @click="scrollToSection(item.index)"
-                            :title="item.title">
-                            {{ item.title.charAt(0) }}
-                        </li>
-                    </ul>
-                </div>
-            </nav>
-            
-            <!-- 主体容器 -->
-            <div class="notebook-container">
-                <!-- 头部 -->
-                <div class="notebook-header">
-                    <h1>{{ title }}</h1>
-                    <div class="meta">
-                        <span>📅 {{ createdAt }}</span>
-                    </div>
-                </div>
-                
-                <!-- 内容区域 -->
-                <cell-renderer 
-                    v-for="(cell, index) in cells" 
-                    :key="index"
-                    :cell="cell"
-                    :cell-id="index"
-                    :level="0">
-                </cell-renderer>
-            </div>
-            
-        </div>
-            
-        <!-- 配色按钮 - 固定在右下角 -->
-        <div class="color-float-btn" @click="toggleColorPicker" :class="{ active: showColorPicker }" title="配色">
-            <span>🎨</span>
-        </div>
-        
-        <!-- ========== 配色器抽屉 ========== -->
-        <div class="drawer-overlay" v-if="showColorPicker" @click="showColorPicker = false"></div>
-        <aside class="color-drawer" :class="{ open: showColorPicker }">
-            <div class="drawer-header">
-                <span>🎨 配色方案</span>
-                <button class="close-btn" @click="showColorPicker = false">✕</button>
-            </div>
-            <div class="drawer-body">
-                <div class="palette-group">
-                    <h5>全局配色</h5>
-                    <div class="palette-options">
-                        <button v-for="(palette, key) in colorPalettes.palettes" :key="key"
-                                class="palette-btn"
-                                :class="{ active: colorPalettes.global === key }"
-                                @click="setColorPalette('global', key)">
-                            <div class="palette-preview">
-                                <span v-for="(color, idx) in palette.colors.slice(0, 5)" 
-                                      :key="idx"
-                                      class="palette-color-dot" 
-                                      :style="{ backgroundColor: color }"></span>
-                            </div>
-                            <span class="palette-name">{{ palette.name }}</span>
-                        </button>
-                    </div>
-                </div>
-                <div class="palette-group">
-                    <h5>按图表类型</h5>
-                    <div class="palette-options">
-                        <div class="chart-type-picker">
-                            <label>折线图:</label>
-                            <select v-model="colorPalettes.types.line" @change="updateChartColors">
-                                <option v-for="(palette, key) in colorPalettes.palettes" :key="key" :value="key">
-                                    {{ palette.name }}
-                                </option>
-                            </select>
-                        </div>
-                        <div class="chart-type-picker">
-                            <label>柱状图:</label>
-                            <select v-model="colorPalettes.types.bar" @change="updateChartColors">
-                                <option v-for="(palette, key) in colorPalettes.palettes" :key="key" :value="key">
-                                    {{ palette.name }}
-                                </option>
-                            </select>
-                        </div>
-                        <div class="chart-type-picker">
-                            <label>饼图:</label>
-                            <select v-model="colorPalettes.types.pie" @change="updateChartColors">
-                                <option v-for="(palette, key) in colorPalettes.palettes" :key="key" :value="key">
-                                    {{ palette.name }}
-                                </option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </aside>
-    </div>
-    
+    <link rel="stylesheet" href="file:///d:/01-Doc/Quant/ft2/template/js/notebook3D.css">
+    <script src="file:///d:/01-Doc/Quant/ft2/template/js/vue.global.prod.js"></script>
+    <script src="file:///d:/01-Doc/Quant/ft2/template/js/ft-table.js"></script>
+    <script src="file:///d:/01-Doc/Quant/ft2/template/js/echarts.min.js"></script>
+    <script src="file:///d:/01-Doc/Quant/ft2/template/js/snapdom.min.js"></script>
 
-    <!-- Notebook 数据注入（Jinja2 渲染） -->
-    <script id="notebook-data" type="application/json">{
+    <!-- AI 优先读取：Notebook 结构化数据（JSON-LD） -->
+    <script id="notebook-data" type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "Dataset",
   "title": "综合测试报告",
-  "createdAt": "2026-03-15 16:54:06",
+  "createdAt": "2026-05-30 12:55:20",
   "children": [
     {
       "type": "title",
@@ -203,39 +68,12 @@
       "type": "section",
       "children": [
         {
-          "type": "text",
-          "content": "净值曲线与基准对比：",
-          "options": {
-            "style": "normal"
-          }
-        },
-        {
           "type": "chart",
           "content": {
             "charts": {
-              "animation": true,
-              "animationThreshold": 2000,
-              "animationDuration": 1000,
-              "animationEasing": "cubicOut",
-              "animationDelay": 0,
-              "animationDurationUpdate": 300,
-              "animationEasingUpdate": "cubicOut",
-              "animationDelayUpdate": 0,
-              "aria": {
-                "enabled": false
-              },
               "series": [
                 {
-                  "type": "line",
                   "name": "策略",
-                  "connectNulls": false,
-                  "xAxisIndex": 0,
-                  "symbolSize": 4,
-                  "showSymbol": true,
-                  "smooth": false,
-                  "clip": true,
-                  "step": false,
-                  "stackStrategy": "samesign",
                   "data": [
                     [
                       "2024-01",
@@ -258,35 +96,10 @@
                       1.15
                     ]
                   ],
-                  "hoverAnimation": true,
-                  "label": {
-                    "show": true,
-                    "margin": 8,
-                    "richInheritPlainLabel": true,
-                    "valueAnimation": false
-                  },
-                  "logBase": 10,
-                  "seriesLayoutBy": "column",
-                  "lineStyle": {
-                    "show": false
-                  },
-                  "areaStyle": {
-                    "opacity": 0
-                  },
-                  "zlevel": 0,
-                  "z": 0
+                  "type": "line"
                 },
                 {
-                  "type": "line",
                   "name": "基准",
-                  "connectNulls": false,
-                  "xAxisIndex": 0,
-                  "symbolSize": 4,
-                  "showSymbol": true,
-                  "smooth": false,
-                  "clip": true,
-                  "step": false,
-                  "stackStrategy": "samesign",
                   "data": [
                     [
                       "2024-01",
@@ -309,23 +122,7 @@
                       1.08
                     ]
                   ],
-                  "hoverAnimation": true,
-                  "label": {
-                    "show": true,
-                    "margin": 8,
-                    "richInheritPlainLabel": true,
-                    "valueAnimation": false
-                  },
-                  "logBase": 10,
-                  "seriesLayoutBy": "column",
-                  "lineStyle": {
-                    "show": false
-                  },
-                  "areaStyle": {
-                    "opacity": 0
-                  },
-                  "zlevel": 0,
-                  "z": 0
+                  "type": "line"
                 }
               ],
               "legend": [
@@ -333,62 +130,11 @@
                   "data": [
                     "策略",
                     "基准"
-                  ],
-                  "selected": {}
+                  ]
                 }
               ],
-              "tooltip": {
-                "show": true,
-                "trigger": "item",
-                "triggerOn": "mousemove|click",
-                "axisPointer": {
-                  "type": "line"
-                },
-                "showContent": true,
-                "alwaysShowContent": false,
-                "showDelay": 0,
-                "hideDelay": 100,
-                "enterable": false,
-                "confine": false,
-                "appendToBody": false,
-                "transitionDuration": 0.4,
-                "displayTransition": true,
-                "textStyle": {
-                  "fontSize": 14,
-                  "richInheritPlainLabel": true
-                },
-                "borderWidth": 0,
-                "padding": 5,
-                "order": "seriesAsc"
-              },
               "xAxis": [
                 {
-                  "show": true,
-                  "scale": false,
-                  "nameLocation": "end",
-                  "nameGap": 15,
-                  "nameTruncate": {},
-                  "nameMoveOverlap": true,
-                  "inverse": false,
-                  "offset": 0,
-                  "splitNumber": 5,
-                  "minInterval": 0,
-                  "silent": false,
-                  "triggerEvent": false,
-                  "splitLine": {
-                    "show": true,
-                    "lineStyle": {
-                      "show": false
-                    }
-                  },
-                  "animation": true,
-                  "animationThreshold": 2000,
-                  "animationDuration": 1000,
-                  "animationEasing": "cubicOut",
-                  "animationDelay": 0,
-                  "animationDurationUpdate": 300,
-                  "animationEasingUpdate": "cubicOut",
-                  "animationDelayUpdate": 0,
                   "data": [
                     "2024-01",
                     "2024-02",
@@ -397,42 +143,1141 @@
                     "2024-05"
                   ]
                 }
-              ],
-              "yAxis": [
+              ]
+            },
+            "width": "100%",
+            "height": "400px"
+          },
+          "title": "净值曲线（字典格式：xAxis + series）"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
                 {
-                  "show": true,
-                  "scale": false,
-                  "nameLocation": "end",
-                  "nameGap": 15,
-                  "nameTruncate": {},
-                  "nameMoveOverlap": true,
-                  "inverse": false,
-                  "offset": 0,
-                  "splitNumber": 5,
-                  "minInterval": 0,
-                  "silent": false,
-                  "triggerEvent": false,
-                  "splitLine": {
-                    "show": true,
-                    "lineStyle": {
-                      "show": false
-                    }
-                  },
-                  "animation": true,
-                  "animationThreshold": 2000,
-                  "animationDuration": 1000,
-                  "animationEasing": "cubicOut",
-                  "animationDelay": 0,
-                  "animationDurationUpdate": 300,
-                  "animationEasingUpdate": "cubicOut",
-                  "animationDelayUpdate": 0
+                  "name": "策略A",
+                  "data": [
+                    [
+                      "2024-01",
+                      1.0
+                    ],
+                    [
+                      "2024-02",
+                      1.0249666833293656
+                    ],
+                    [
+                      "2024-03",
+                      1.0497338661590123
+                    ],
+                    [
+                      "2024-04",
+                      1.0741040413322678
+                    ],
+                    [
+                      "2024-05",
+                      1.0978836684617301
+                    ],
+                    [
+                      "2024-06",
+                      1.1208851077208406
+                    ],
+                    [
+                      "2024-07",
+                      1.142928494679007
+                    ],
+                    [
+                      "2024-08",
+                      1.1638435374475382
+                    ],
+                    [
+                      "2024-09",
+                      1.1834712181799045
+                    ],
+                    [
+                      "2024-10",
+                      1.2016653819254965
+                    ],
+                    [
+                      "2024-11",
+                      1.2182941969615795
+                    ],
+                    [
+                      "2024-12",
+                      1.233241472012287
+                    ],
+                    [
+                      "2024-13",
+                      1.2464078171934454
+                    ],
+                    [
+                      "2024-14",
+                      1.2577116370834385
+                    ],
+                    [
+                      "2024-15",
+                      1.267089945997692
+                    ],
+                    [
+                      "2024-16",
+                      1.274498997320811
+                    ],
+                    [
+                      "2024-17",
+                      1.279914720608301
+                    ],
+                    [
+                      "2024-18",
+                      1.2833329620904936
+                    ],
+                    [
+                      "2024-19",
+                      1.284769526175639
+                    ],
+                    [
+                      "2024-20",
+                      1.284260017537483
+                    ],
+                    [
+                      "2024-21",
+                      1.2818594853651364
+                    ],
+                    [
+                      "2024-22",
+                      1.2776418733297747
+                    ],
+                    [
+                      "2024-23",
+                      1.271699280763918
+                    ],
+                    [
+                      "2024-24",
+                      1.264141042435344
+                    ],
+                    [
+                      "2024-25",
+                      1.2550926361102301
+                    ],
+                    [
+                      "2024-26",
+                      1.2446944288207913
+                    ],
+                    [
+                      "2024-27",
+                      1.233100274364293
+                    ],
+                    [
+                      "2024-28",
+                      1.220475976046766
+                    ],
+                    [
+                      "2024-29",
+                      1.2069976300311809
+                    ],
+                    [
+                      "2024-30",
+                      1.1928498658427964
+                    ],
+                    [
+                      "2024-31",
+                      1.1782240016119734
+                    ],
+                    [
+                      "2024-32",
+                      1.163316132486658
+                    ],
+                    [
+                      "2024-33",
+                      1.148325171314484
+                    ],
+                    [
+                      "2024-34",
+                      1.1334508611713503
+                    ],
+                    [
+                      "2024-35",
+                      1.1188917795946336
+                    ],
+                    [
+                      "2024-36",
+                      1.104843354462076
+                    ],
+                    [
+                      "2024-37",
+                      1.0914959113410294
+                    ],
+                    [
+                      "2024-38",
+                      1.0790327718183013
+                    ],
+                    [
+                      "2024-39",
+                      1.0676284218114562
+                    ],
+                    [
+                      "2024-40",
+                      1.0574467681632052
+                    ],
+                    [
+                      "2024-41",
+                      1.0486395009384144
+                    ],
+                    [
+                      "2024-42",
+                      1.0413445777871178
+                    ],
+                    [
+                      "2024-43",
+                      1.0356848455172825
+                    ],
+                    [
+                      "2024-44",
+                      1.031766812650109
+                    ],
+                    [
+                      "2024-45",
+                      1.0296795852220968
+                    ],
+                    [
+                      "2024-46",
+                      1.0294939764669806
+                    ],
+                    [
+                      "2024-47",
+                      1.031261799273307
+                    ],
+                    [
+                      "2024-48",
+                      1.0350153484871798
+                    ],
+                    [
+                      "2024-49",
+                      1.040767078232832
+                    ],
+                    [
+                      "2024-50",
+                      1.0485094774751333
+                    ],
+                    [
+                      "2024-51",
+                      1.0582151450673722
+                    ],
+                    [
+                      "2024-52",
+                      1.0698370635344534
+                    ],
+                    [
+                      "2024-53",
+                      1.0833090688559692
+                    ],
+                    [
+                      "2024-54",
+                      1.0985465115552198
+                    ],
+                    [
+                      "2024-55",
+                      1.1154471024888026
+                    ],
+                    [
+                      "2024-56",
+                      1.1338919348859218
+                    ],
+                    [
+                      "2024-57",
+                      1.1537466724255359
+                    ],
+                    [
+                      "2024-58",
+                      1.1748628914804726
+                    ],
+                    [
+                      "2024-59",
+                      1.1970795641172487
+                    ],
+                    [
+                      "2024-60",
+                      1.2202246670339527
+                    ],
+                    [
+                      "2024-61",
+                      1.2441169003602148
+                    ],
+                    [
+                      "2024-62",
+                      1.268567499145581
+                    ],
+                    [
+                      "2024-63",
+                      1.2933821194365007
+                    ],
+                    [
+                      "2024-64",
+                      1.31836278009687
+                    ],
+                    [
+                      "2024-65",
+                      1.3433098409700988
+                    ],
+                    [
+                      "2024-66",
+                      1.368023997617563
+                    ],
+                    [
+                      "2024-67",
+                      1.3923082727026759
+                    ],
+                    [
+                      "2024-68",
+                      1.4159699841233195
+                    ],
+                    [
+                      "2024-69",
+                      1.4388226702277218
+                    ],
+                    [
+                      "2024-70",
+                      1.46068795287764
+                    ],
+                    [
+                      "2024-71",
+                      1.481397319743758
+                    ],
+                    [
+                      "2024-72",
+                      1.5007938080251753
+                    ],
+                    [
+                      "2024-73",
+                      1.5187335727698308
+                    ],
+                    [
+                      "2024-74",
+                      1.535087324125713
+                    ],
+                    [
+                      "2024-75",
+                      1.5497416191623254
+                    ],
+                    [
+                      "2024-76",
+                      1.5625999953549479
+                    ],
+                    [
+                      "2024-77",
+                      1.5735839344062974
+                    ],
+                    [
+                      "2024-78",
+                      1.5826336467754
+                    ],
+                    [
+                      "2024-79",
+                      1.5897086690749211
+                    ],
+                    [
+                      "2024-80",
+                      1.5947882683679544
+                    ],
+                    [
+                      "2024-81",
+                      1.5978716493246763
+                    ],
+                    [
+                      "2024-82",
+                      1.5989779621690172
+                    ],
+                    [
+                      "2024-83",
+                      1.5981461113359545
+                    ],
+                    [
+                      "2024-84",
+                      1.5954343667512587
+                    ],
+                    [
+                      "2024-85",
+                      1.5909197816176561
+                    ],
+                    [
+                      "2024-86",
+                      1.5846974225246981
+                    ],
+                    [
+                      "2024-87",
+                      1.5768794195748226
+                    ],
+                    [
+                      "2024-88",
+                      1.5675938460164365
+                    ],
+                    [
+                      "2024-89",
+                      1.5569834385783523
+                    ],
+                    [
+                      "2024-90",
+                      1.545204171291577
+                    ],
+                    [
+                      "2024-91",
+                      1.5324236970483514
+                    ],
+                    [
+                      "2024-92",
+                      1.5188196724698706
+                    ],
+                    [
+                      "2024-93",
+                      1.5045779828200492
+                    ],
+                    [
+                      "2024-94",
+                      1.4898908847014125
+                    ],
+                    [
+                      "2024-95",
+                      1.4749550850906716
+                    ],
+                    [
+                      "2024-96",
+                      1.4599697759076382
+                    ],
+                    [
+                      "2024-97",
+                      1.4451346437554036
+                    ],
+                    [
+                      "2024-98",
+                      1.430647874717811
+                    ],
+                    [
+                      "2024-99",
+                      1.4167041741496145
+                    ],
+                    [
+                      "2024-100",
+                      1.4034928212449356
+                    ]
+                  ],
+                  "type": "line"
+                },
+                {
+                  "name": "策略B",
+                  "data": [
+                    [
+                      "2024-01",
+                      1.15
+                    ],
+                    [
+                      "2024-02",
+                      1.1522506247917037
+                    ],
+                    [
+                      "2024-03",
+                      1.1530099866761863
+                    ],
+                    [
+                      "2024-04",
+                      1.152300473368841
+                    ],
+                    [
+                      "2024-05",
+                      1.1501591491004328
+                    ],
+                    [
+                      "2024-06",
+                      1.1466373842835558
+                    ],
+                    [
+                      "2024-07",
+                      1.1418003422364518
+                    ],
+                    [
+                      "2024-08",
+                      1.135726328092673
+                    ],
+                    [
+                      "2024-09",
+                      1.1285060064020749
+                    ],
+                    [
+                      "2024-10",
+                      1.1202414952405995
+                    ],
+                    [
+                      "2024-11",
+                      1.111045345880221
+                    ],
+                    [
+                      "2024-12",
+                      1.1010394182138366
+                    ],
+                    [
+                      "2024-13",
+                      1.090353663171501
+                    ],
+                    [
+                      "2024-14",
+                      1.079124824293688
+                    ],
+                    [
+                      "2024-15",
+                      1.0674950714350362
+                    ],
+                    [
+                      "2024-16",
+                      1.0556105802501554
+                    ],
+                    [
+                      "2024-17",
+                      1.0436200716548067
+                    ],
+                    [
+                      "2024-18",
+                      1.0316733258556712
+                    ],
+                    [
+                      "2024-19",
+                      1.0199196857960369
+                    ],
+                    [
+                      "2024-20",
+                      1.0085065649704745
+                    ],
+                    [
+                      "2024-21",
+                      0.9975779745179287
+                    ],
+                    [
+                      "2024-22",
+                      0.9872730843100213
+                    ],
+                    [
+                      "2024-23",
+                      0.977724832411698
+                    ],
+                    [
+                      "2024-24",
+                      0.9690585968080263
+                    ],
+                    [
+                      "2024-25",
+                      0.9613909426688132
+                    ],
+                    [
+                      "2024-26",
+                      0.9548284576679599
+                    ],
+                    [
+                      "2024-27",
+                      0.9494666869946579
+                    ],
+                    [
+                      "2024-28",
+                      0.9453891786974408
+                    ],
+                    [
+                      "2024-29",
+                      0.9426666488997012
+                    ],
+                    [
+                      "2024-30",
+                      0.9413562752275614
+                    ],
+                    [
+                      "2024-31",
+                      0.9415011255099331
+                    ],
+                    [
+                      "2024-32",
+                      0.943129727459008
+                    ],
+                    [
+                      "2024-33",
+                      0.946255783630787
+                    ],
+                    [
+                      "2024-34",
+                      0.9508780345136703
+                    ],
+                    [
+                      "2024-35",
+                      0.9569802711130808
+                    ],
+                    [
+                      "2024-36",
+                      0.9645314969063805
+                    ],
+                    [
+                      "2024-37",
+                      0.973486237549878
+                    ],
+                    [
+                      "2024-38",
+                      0.9837849952434388
+                    ],
+                    [
+                      "2024-39",
+                      0.9953548432128375
+                    ],
+                    [
+                      "2024-40",
+                      1.008110154369979
+                    ],
+                    [
+                      "2024-41",
+                      1.0219534568704582
+                    ],
+                    [
+                      "2024-42",
+                      1.0367764080200097
+                    ],
+                    [
+                      "2024-43",
+                      1.0524608767988952
+                    ],
+                    [
+                      "2024-44",
+                      1.0688801241880037
+                    ],
+                    [
+                      "2024-45",
+                      1.085900069503237
+                    ],
+                    [
+                      "2024-46",
+                      1.103380630085383
+                    ],
+                    [
+                      "2024-47",
+                      1.1211771209597419
+                    ],
+                    [
+                      "2024-48",
+                      1.1391417004805664
+                    ],
+                    [
+                      "2024-49",
+                      1.157124847515917
+                    ],
+                    [
+                      "2024-50",
+                      1.1749768554133864
+                    ],
+                    [
+                      "2024-51",
+                      1.1925493278194839
+                    ],
+                    [
+                      "2024-52",
+                      1.209696661406947
+                    ],
+                    [
+                      "2024-53",
+                      1.2262775006950564
+                    ],
+                    [
+                      "2024-54",
+                      1.2421561504268743
+                    ],
+                    [
+                      "2024-55",
+                      1.2572039313913952
+                    ],
+                    [
+                      "2024-56",
+                      1.271300466143689
+                    ],
+                    [
+                      "2024-57",
+                      1.2843348817765374
+                    ],
+                    [
+                      "2024-58",
+                      1.296206917725874
+                    ],
+                    [
+                      "2024-59",
+                      1.3068279275411978
+                    ],
+                    [
+                      "2024-60",
+                      1.3161217646116055
+                    ],
+                    [
+                      "2024-61",
+                      1.324025542997555
+                    ],
+                    [
+                      "2024-62",
+                      1.3304902657663877
+                    ],
+                    [
+                      "2024-63",
+                      1.3354813145534825
+                    ],
+                    [
+                      "2024-64",
+                      1.3389787954575123
+                    ],
+                    [
+                      "2024-65",
+                      1.3409777378137289
+                    ],
+                    [
+                      "2024-66",
+                      1.3414881438592037
+                    ],
+                    [
+                      "2024-67",
+                      1.3405348887937794
+                    ],
+                    [
+                      "2024-68",
+                      1.338157472235298
+                    ],
+                    [
+                      "2024-69",
+                      1.3344096235524736
+                    ],
+                    [
+                      "2024-70",
+                      1.3293587650188037
+                    ],
+                    [
+                      "2024-71",
+                      1.3230853381514955
+                    ],
+                    [
+                      "2024-72",
+                      1.3156819999664209
+                    ],
+                    [
+                      "2024-73",
+                      1.3072526971798382
+                    ],
+                    [
+                      "2024-74",
+                      1.2979116276071658
+                    ],
+                    [
+                      "2024-75",
+                      1.2877820991361586
+                    ],
+                    [
+                      "2024-76",
+                      1.2769952976752539
+                    ],
+                    [
+                      "2024-77",
+                      1.2656889763873382
+                    ],
+                    [
+                      "2024-78",
+                      1.2540060793056798
+                    ],
+                    [
+                      "2024-79",
+                      1.2420933130843974
+                    ],
+                    [
+                      "2024-80",
+                      1.2300996811540694
+                    ],
+                    [
+                      "2024-81",
+                      1.218174994928708
+                    ],
+                    [
+                      "2024-82",
+                      1.2064683769396312
+                    ],
+                    [
+                      "2024-83",
+                      1.1951267708524247
+                    ],
+                    [
+                      "2024-84",
+                      1.184293473254407
+                    ],
+                    [
+                      "2024-85",
+                      1.174106701882497
+                    ],
+                    [
+                      "2024-86",
+                      1.1646982145972764
+                    ],
+                    [
+                      "2024-87",
+                      1.1561919929019981
+                    ],
+                    [
+                      "2024-88",
+                      1.14870300316039
+                    ],
+                    [
+                      "2024-89",
+                      1.1423360478907516
+                    ],
+                    [
+                      "2024-90",
+                      1.1371847186138333
+                    ],
+                    [
+                      "2024-91",
+                      1.1333304607172985
+                    ],
+                    [
+                      "2024-92",
+                      1.130841759680333
+                    ],
+                    [
+                      "2024-93",
+                      1.1297734567893754
+                    ],
+                    [
+                      "2024-94",
+                      1.1301662011821096
+                    ],
+                    [
+                      "2024-95",
+                      1.132046043694719
+                    ],
+                    [
+                      "2024-96",
+                      1.1354241765705433
+                    ],
+                    [
+                      "2024-97",
+                      1.140296821630881
+                    ],
+                    [
+                      "2024-98",
+                      1.1466452680253034
+                    ],
+                    [
+                      "2024-99",
+                      1.154436059184287
+                    ],
+                    [
+                      "2024-100",
+                      1.163621327106196
+                    ]
+                  ],
+                  "type": "line"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "策略A",
+                    "策略B"
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
+                  "data": [
+                    "2024-01",
+                    "2024-02",
+                    "2024-03",
+                    "2024-04",
+                    "2024-05",
+                    "2024-06",
+                    "2024-07",
+                    "2024-08",
+                    "2024-09",
+                    "2024-10",
+                    "2024-11",
+                    "2024-12",
+                    "2024-13",
+                    "2024-14",
+                    "2024-15",
+                    "2024-16",
+                    "2024-17",
+                    "2024-18",
+                    "2024-19",
+                    "2024-20",
+                    "2024-21",
+                    "2024-22",
+                    "2024-23",
+                    "2024-24",
+                    "2024-25",
+                    "2024-26",
+                    "2024-27",
+                    "2024-28",
+                    "2024-29",
+                    "2024-30",
+                    "2024-31",
+                    "2024-32",
+                    "2024-33",
+                    "2024-34",
+                    "2024-35",
+                    "2024-36",
+                    "2024-37",
+                    "2024-38",
+                    "2024-39",
+                    "2024-40",
+                    "2024-41",
+                    "2024-42",
+                    "2024-43",
+                    "2024-44",
+                    "2024-45",
+                    "2024-46",
+                    "2024-47",
+                    "2024-48",
+                    "2024-49",
+                    "2024-50",
+                    "2024-51",
+                    "2024-52",
+                    "2024-53",
+                    "2024-54",
+                    "2024-55",
+                    "2024-56",
+                    "2024-57",
+                    "2024-58",
+                    "2024-59",
+                    "2024-60",
+                    "2024-61",
+                    "2024-62",
+                    "2024-63",
+                    "2024-64",
+                    "2024-65",
+                    "2024-66",
+                    "2024-67",
+                    "2024-68",
+                    "2024-69",
+                    "2024-70",
+                    "2024-71",
+                    "2024-72",
+                    "2024-73",
+                    "2024-74",
+                    "2024-75",
+                    "2024-76",
+                    "2024-77",
+                    "2024-78",
+                    "2024-79",
+                    "2024-80",
+                    "2024-81",
+                    "2024-82",
+                    "2024-83",
+                    "2024-84",
+                    "2024-85",
+                    "2024-86",
+                    "2024-87",
+                    "2024-88",
+                    "2024-89",
+                    "2024-90",
+                    "2024-91",
+                    "2024-92",
+                    "2024-93",
+                    "2024-94",
+                    "2024-95",
+                    "2024-96",
+                    "2024-97",
+                    "2024-98",
+                    "2024-99",
+                    "2024-100"
+                  ]
                 }
               ]
             },
             "width": "100%",
-            "height": "300px"
+            "height": "400px"
           },
-          "title": "净值曲线"
+          "title": "100条数据折线图测试"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "策略",
+                  "data": [
+                    [
+                      "2024-01",
+                      1.0
+                    ],
+                    [
+                      "2024-02",
+                      1.05
+                    ],
+                    [
+                      "2024-03",
+                      1.12
+                    ],
+                    [
+                      "2024-04",
+                      1.08
+                    ],
+                    [
+                      "2024-05",
+                      1.15
+                    ]
+                  ],
+                  "type": "line"
+                },
+                {
+                  "name": "基准",
+                  "data": [
+                    [
+                      "2024-01",
+                      1.0
+                    ],
+                    [
+                      "2024-02",
+                      1.02
+                    ],
+                    [
+                      "2024-03",
+                      1.04
+                    ],
+                    [
+                      "2024-04",
+                      1.06
+                    ],
+                    [
+                      "2024-05",
+                      1.08
+                    ]
+                  ],
+                  "type": "line"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "策略",
+                    "基准"
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
+                  "data": [
+                    "2024-01",
+                    "2024-02",
+                    "2024-03",
+                    "2024-04",
+                    "2024-05"
+                  ]
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "400px"
+          },
+          "title": "净值曲线（DataFrame格式：第一列=X轴）"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "盈利",
+                  "data": [
+                    100,
+                    150,
+                    80,
+                    200,
+                    120
+                  ],
+                  "type": "bar"
+                },
+                {
+                  "name": "亏损",
+                  "data": [
+                    30,
+                    20,
+                    50,
+                    10,
+                    40
+                  ],
+                  "type": "bar"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "盈利",
+                    "亏损"
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
+                  "data": [
+                    "1月",
+                    "2月",
+                    "3月",
+                    "4月",
+                    "5月"
+                  ]
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "400px"
+          },
+          "title": "月度盈亏（字典格式）"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "盈利",
+                  "data": [
+                    100,
+                    150,
+                    80,
+                    200,
+                    120
+                  ],
+                  "stack": "total",
+                  "type": "bar"
+                },
+                {
+                  "name": "亏损",
+                  "data": [
+                    30,
+                    20,
+                    50,
+                    10,
+                    40
+                  ],
+                  "stack": "total",
+                  "type": "bar"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "盈利",
+                    "亏损"
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
+                  "data": [
+                    "1月",
+                    "2月",
+                    "3月",
+                    "4月",
+                    "5月"
+                  ]
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "400px"
+          },
+          "title": "月度盈亏（DataFrame格式）"
         },
         {
           "type": "section",
@@ -441,22 +1286,9 @@
               "type": "chart",
               "content": {
                 "charts": {
-                  "animation": true,
-                  "animationThreshold": 2000,
-                  "animationDuration": 1000,
-                  "animationEasing": "cubicOut",
-                  "animationDelay": 0,
-                  "animationDurationUpdate": 300,
-                  "animationEasingUpdate": "cubicOut",
-                  "animationDelayUpdate": 0,
-                  "aria": {
-                    "enabled": false
-                  },
                   "series": [
                     {
-                      "type": "bar",
                       "name": "月收益%",
-                      "legendHoverLink": true,
                       "data": [
                         5,
                         -2,
@@ -464,88 +1296,18 @@
                         3,
                         6
                       ],
-                      "realtimeSort": false,
-                      "showBackground": false,
-                      "stackStrategy": "samesign",
-                      "cursor": "pointer",
-                      "barMinHeight": 0,
-                      "barCategoryGap": "20%",
-                      "barGap": "30%",
-                      "large": false,
-                      "largeThreshold": 400,
-                      "seriesLayoutBy": "column",
-                      "datasetIndex": 0,
-                      "clip": true,
-                      "zlevel": 0,
-                      "z": 2,
-                      "label": {
-                        "show": true,
-                        "margin": 8,
-                        "richInheritPlainLabel": true,
-                        "valueAnimation": false
-                      }
+                      "type": "bar"
                     }
                   ],
                   "legend": [
                     {
                       "data": [
                         "月收益%"
-                      ],
-                      "selected": {}
+                      ]
                     }
                   ],
-                  "tooltip": {
-                    "show": true,
-                    "trigger": "item",
-                    "triggerOn": "mousemove|click",
-                    "axisPointer": {
-                      "type": "line"
-                    },
-                    "showContent": true,
-                    "alwaysShowContent": false,
-                    "showDelay": 0,
-                    "hideDelay": 100,
-                    "enterable": false,
-                    "confine": false,
-                    "appendToBody": false,
-                    "transitionDuration": 0.4,
-                    "displayTransition": true,
-                    "textStyle": {
-                      "fontSize": 14,
-                      "richInheritPlainLabel": true
-                    },
-                    "borderWidth": 0,
-                    "padding": 5,
-                    "order": "seriesAsc"
-                  },
                   "xAxis": [
                     {
-                      "show": true,
-                      "scale": false,
-                      "nameLocation": "end",
-                      "nameGap": 15,
-                      "nameTruncate": {},
-                      "nameMoveOverlap": true,
-                      "inverse": false,
-                      "offset": 0,
-                      "splitNumber": 5,
-                      "minInterval": 0,
-                      "silent": false,
-                      "triggerEvent": false,
-                      "splitLine": {
-                        "show": true,
-                        "lineStyle": {
-                          "show": false
-                        }
-                      },
-                      "animation": true,
-                      "animationThreshold": 2000,
-                      "animationDuration": 1000,
-                      "animationEasing": "cubicOut",
-                      "animationDelay": 0,
-                      "animationDurationUpdate": 300,
-                      "animationEasingUpdate": "cubicOut",
-                      "animationDelayUpdate": 0,
                       "data": [
                         "1月",
                         "2月",
@@ -553,36 +1315,6 @@
                         "4月",
                         "5月"
                       ]
-                    }
-                  ],
-                  "yAxis": [
-                    {
-                      "show": true,
-                      "scale": false,
-                      "nameLocation": "end",
-                      "nameGap": 15,
-                      "nameTruncate": {},
-                      "nameMoveOverlap": true,
-                      "inverse": false,
-                      "offset": 0,
-                      "splitNumber": 5,
-                      "minInterval": 0,
-                      "silent": false,
-                      "triggerEvent": false,
-                      "splitLine": {
-                        "show": true,
-                        "lineStyle": {
-                          "show": false
-                        }
-                      },
-                      "animation": true,
-                      "animationThreshold": 2000,
-                      "animationDuration": 1000,
-                      "animationEasing": "cubicOut",
-                      "animationDelay": 0,
-                      "animationDurationUpdate": 300,
-                      "animationEasingUpdate": "cubicOut",
-                      "animationDelayUpdate": 0
                     }
                   ]
                 },
@@ -595,43 +1327,8 @@
               "type": "chart",
               "content": {
                 "charts": {
-                  "animation": true,
-                  "animationThreshold": 2000,
-                  "animationDuration": 1000,
-                  "animationEasing": "cubicOut",
-                  "animationDelay": 0,
-                  "animationDurationUpdate": 300,
-                  "animationEasingUpdate": "cubicOut",
-                  "animationDelayUpdate": 0,
-                  "aria": {
-                    "enabled": false
-                  },
                   "series": [
                     {
-                      "type": "pie",
-                      "colorBy": "data",
-                      "legendHoverLink": true,
-                      "selectedMode": false,
-                      "selectedOffset": 10,
-                      "clockwise": true,
-                      "startAngle": 90,
-                      "minAngle": 0,
-                      "minShowLabelAngle": 0,
-                      "avoidLabelOverlap": true,
-                      "stillShowZeroSum": true,
-                      "percentPrecision": 2,
-                      "showEmptyCircle": true,
-                      "emptyCircleStyle": {
-                        "color": "lightgray",
-                        "borderColor": "#000",
-                        "borderWidth": 0,
-                        "borderType": "solid",
-                        "borderDashOffset": 0,
-                        "borderCap": "butt",
-                        "borderJoin": "bevel",
-                        "borderMiterLimit": 10,
-                        "opacity": 1
-                      },
                       "data": [
                         {
                           "name": "股票",
@@ -646,29 +1343,7 @@
                           "value": 15
                         }
                       ],
-                      "radius": [
-                        "0%",
-                        "75%"
-                      ],
-                      "center": [
-                        "50%",
-                        "50%"
-                      ],
-                      "label": {
-                        "show": true,
-                        "margin": 8,
-                        "richInheritPlainLabel": true,
-                        "valueAnimation": false
-                      },
-                      "labelLine": {
-                        "show": true,
-                        "showAbove": false,
-                        "length": 15,
-                        "length2": 15,
-                        "smooth": false,
-                        "minTurnAngle": 90,
-                        "maxSurfaceAngle": 90
-                      }
+                      "type": "pie"
                     }
                   ],
                   "legend": [
@@ -677,34 +1352,9 @@
                         "股票",
                         "债券",
                         "现金"
-                      ],
-                      "selected": {}
+                      ]
                     }
-                  ],
-                  "tooltip": {
-                    "show": true,
-                    "trigger": "item",
-                    "triggerOn": "mousemove|click",
-                    "axisPointer": {
-                      "type": "line"
-                    },
-                    "showContent": true,
-                    "alwaysShowContent": false,
-                    "showDelay": 0,
-                    "hideDelay": 100,
-                    "enterable": false,
-                    "confine": false,
-                    "appendToBody": false,
-                    "transitionDuration": 0.4,
-                    "displayTransition": true,
-                    "textStyle": {
-                      "fontSize": 14,
-                      "richInheritPlainLabel": true
-                    },
-                    "borderWidth": 0,
-                    "padding": 5,
-                    "order": "seriesAsc"
-                  }
+                  ]
                 },
                 "width": "100%",
                 "height": "250px"
@@ -725,10 +1375,7 @@
     },
     {
       "type": "text",
-      "content": "【自由内容】以下是风险分析部分，可直接阅读或点击目录跳转。",
-      "options": {
-        "style": "normal"
-      }
+      "content": "【自由内容】以下是风险分析部分，可直接阅读或点击目录跳转。"
     },
     {
       "type": "section",
@@ -737,29 +1384,9 @@
           "type": "chart",
           "content": {
             "charts": {
-              "animation": true,
-              "animationThreshold": 2000,
-              "animationDuration": 1000,
-              "animationEasing": "cubicOut",
-              "animationDelay": 0,
-              "animationDurationUpdate": 300,
-              "animationEasingUpdate": "cubicOut",
-              "animationDelayUpdate": 0,
-              "aria": {
-                "enabled": false
-              },
               "series": [
                 {
-                  "type": "line",
                   "name": "回撤%",
-                  "connectNulls": false,
-                  "xAxisIndex": 0,
-                  "symbolSize": 4,
-                  "showSymbol": true,
-                  "smooth": false,
-                  "clip": true,
-                  "step": false,
-                  "stackStrategy": "samesign",
                   "data": [
                     [
                       "2024-01",
@@ -782,85 +1409,21 @@
                       -1
                     ]
                   ],
-                  "hoverAnimation": true,
-                  "label": {
-                    "show": true,
-                    "margin": 8,
-                    "richInheritPlainLabel": true,
-                    "valueAnimation": false
-                  },
-                  "logBase": 10,
-                  "seriesLayoutBy": "column",
-                  "lineStyle": {
-                    "show": false
-                  },
                   "areaStyle": {
                     "opacity": 0.3
                   },
-                  "zlevel": 0,
-                  "z": 0
+                  "type": "line"
                 }
               ],
               "legend": [
                 {
                   "data": [
                     "回撤%"
-                  ],
-                  "selected": {}
+                  ]
                 }
               ],
-              "tooltip": {
-                "show": true,
-                "trigger": "item",
-                "triggerOn": "mousemove|click",
-                "axisPointer": {
-                  "type": "line"
-                },
-                "showContent": true,
-                "alwaysShowContent": false,
-                "showDelay": 0,
-                "hideDelay": 100,
-                "enterable": false,
-                "confine": false,
-                "appendToBody": false,
-                "transitionDuration": 0.4,
-                "displayTransition": true,
-                "textStyle": {
-                  "fontSize": 14,
-                  "richInheritPlainLabel": true
-                },
-                "borderWidth": 0,
-                "padding": 5,
-                "order": "seriesAsc"
-              },
               "xAxis": [
                 {
-                  "show": true,
-                  "scale": false,
-                  "nameLocation": "end",
-                  "nameGap": 15,
-                  "nameTruncate": {},
-                  "nameMoveOverlap": true,
-                  "inverse": false,
-                  "offset": 0,
-                  "splitNumber": 5,
-                  "minInterval": 0,
-                  "silent": false,
-                  "triggerEvent": false,
-                  "splitLine": {
-                    "show": true,
-                    "lineStyle": {
-                      "show": false
-                    }
-                  },
-                  "animation": true,
-                  "animationThreshold": 2000,
-                  "animationDuration": 1000,
-                  "animationEasing": "cubicOut",
-                  "animationDelay": 0,
-                  "animationDurationUpdate": 300,
-                  "animationEasingUpdate": "cubicOut",
-                  "animationDelayUpdate": 0,
                   "data": [
                     "2024-01",
                     "2024-02",
@@ -868,36 +1431,6 @@
                     "2024-04",
                     "2024-05"
                   ]
-                }
-              ],
-              "yAxis": [
-                {
-                  "show": true,
-                  "scale": false,
-                  "nameLocation": "end",
-                  "nameGap": 15,
-                  "nameTruncate": {},
-                  "nameMoveOverlap": true,
-                  "inverse": false,
-                  "offset": 0,
-                  "splitNumber": 5,
-                  "minInterval": 0,
-                  "silent": false,
-                  "triggerEvent": false,
-                  "splitLine": {
-                    "show": true,
-                    "lineStyle": {
-                      "show": false
-                    }
-                  },
-                  "animation": true,
-                  "animationThreshold": 2000,
-                  "animationDuration": 1000,
-                  "animationEasing": "cubicOut",
-                  "animationDelay": 0,
-                  "animationDurationUpdate": 300,
-                  "animationEasingUpdate": "cubicOut",
-                  "animationDelayUpdate": 0
                 }
               ]
             },
@@ -910,34 +1443,21 @@
           "type": "chart",
           "content": {
             "charts": {
-              "animation": true,
-              "animationThreshold": 2000,
-              "animationDuration": 1000,
-              "animationEasing": "cubicOut",
-              "animationDelay": 0,
-              "animationDurationUpdate": 300,
-              "animationEasingUpdate": "cubicOut",
-              "animationDelayUpdate": 0,
-              "aria": {
-                "enabled": false
-              },
               "series": [
                 {
-                  "type": "heatmap",
-                  "coordinateSystem": "cartesian2d",
                   "data": [
                     [
-                      0,
+                      1,
                       0,
                       0.02
                     ],
                     [
-                      1,
+                      2,
                       0,
                       -0.01
                     ],
                     [
-                      2,
+                      0,
                       0,
                       0.03
                     ],
@@ -957,17 +1477,17 @@
                       0.04
                     ],
                     [
-                      0,
+                      1,
                       1,
                       0.05
                     ],
                     [
-                      1,
+                      2,
                       1,
                       -0.02
                     ],
                     [
-                      2,
+                      0,
                       1,
                       0.08
                     ],
@@ -987,97 +1507,126 @@
                       -0.01
                     ]
                   ],
-                  "label": {
-                    "show": true,
-                    "margin": 8,
-                    "richInheritPlainLabel": true,
-                    "valueAnimation": false
-                  },
-                  "selectedMode": false,
-                  "zlevel": 0,
-                  "z": 2
+                  "type": "heatmap"
                 }
               ],
               "legend": [
                 {
                   "data": [
                     ""
-                  ],
-                  "selected": {},
-                  "show": true,
-                  "padding": 5,
-                  "itemGap": 10,
-                  "itemWidth": 25,
-                  "itemHeight": 14,
-                  "backgroundColor": "transparent",
-                  "borderColor": "#ccc",
-                  "borderRadius": 0,
-                  "pageButtonItemGap": 5,
-                  "pageButtonPosition": "end",
-                  "pageFormatter": "{current}/{total}",
-                  "pageIconColor": "#2f4554",
-                  "pageIconInactiveColor": "#aaa",
-                  "pageIconSize": 15,
-                  "animationDurationUpdate": 800,
-                  "selector": false,
-                  "selectorPosition": "auto",
-                  "selectorItemGap": 7,
-                  "selectorButtonGap": 10,
-                  "triggerEvent": false
+                  ]
                 }
               ],
-              "tooltip": {
-                "show": true,
-                "trigger": "item",
-                "triggerOn": "mousemove|click",
-                "axisPointer": {
-                  "type": "line"
-                },
-                "showContent": true,
-                "alwaysShowContent": false,
-                "showDelay": 0,
-                "hideDelay": 100,
-                "enterable": false,
-                "confine": false,
-                "appendToBody": false,
-                "transitionDuration": 0.4,
-                "displayTransition": true,
-                "textStyle": {
-                  "fontSize": 14,
-                  "richInheritPlainLabel": true
-                },
-                "borderWidth": 0,
-                "padding": 5,
-                "order": "seriesAsc"
-              },
               "xAxis": [
                 {
-                  "show": true,
-                  "scale": false,
-                  "nameLocation": "end",
-                  "nameGap": 15,
-                  "nameTruncate": {},
-                  "nameMoveOverlap": true,
-                  "inverse": false,
-                  "offset": 0,
-                  "splitNumber": 5,
-                  "minInterval": 0,
-                  "silent": false,
-                  "triggerEvent": false,
-                  "splitLine": {
-                    "show": true,
-                    "lineStyle": {
-                      "show": false
-                    }
-                  },
-                  "animation": true,
-                  "animationThreshold": 2000,
-                  "animationDuration": 1000,
-                  "animationEasing": "cubicOut",
-                  "animationDelay": 0,
-                  "animationDurationUpdate": 300,
-                  "animationEasingUpdate": "cubicOut",
-                  "animationDelayUpdate": 0,
+                  "data": [
+                    "03",
+                    "01",
+                    "02",
+                    "04",
+                    "05",
+                    "06"
+                  ]
+                }
+              ],
+              "yAxis": [
+                {
+                  "data": [
+                    "2023",
+                    "2024"
+                  ]
+                }
+              ],
+              "visualMap": {
+                "orient": "horizontal",
+                "type": "continuous"
+              }
+            },
+            "width": "100%",
+            "height": "400px"
+          },
+          "title": "月度收益热力图（字典格式：Y轴=年份，X轴=月份）"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "data": [
+                    [
+                      0,
+                      0,
+                      0.02
+                    ],
+                    [
+                      0,
+                      1,
+                      0.05
+                    ],
+                    [
+                      1,
+                      0,
+                      -0.01
+                    ],
+                    [
+                      1,
+                      1,
+                      -0.02
+                    ],
+                    [
+                      2,
+                      0,
+                      0.03
+                    ],
+                    [
+                      2,
+                      1,
+                      0.08
+                    ],
+                    [
+                      3,
+                      0,
+                      0.01
+                    ],
+                    [
+                      3,
+                      1,
+                      0.03
+                    ],
+                    [
+                      4,
+                      0,
+                      -0.02
+                    ],
+                    [
+                      4,
+                      1,
+                      0.06
+                    ],
+                    [
+                      5,
+                      0,
+                      0.04
+                    ],
+                    [
+                      5,
+                      1,
+                      -0.01
+                    ]
+                  ],
+                  "type": "heatmap"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    ""
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
                   "data": [
                     "01",
                     "02",
@@ -1090,78 +1639,795 @@
               ],
               "yAxis": [
                 {
-                  "show": true,
-                  "scale": false,
-                  "nameLocation": "end",
-                  "nameGap": 15,
-                  "nameTruncate": {},
-                  "nameMoveOverlap": true,
-                  "inverse": false,
-                  "offset": 0,
-                  "splitNumber": 5,
-                  "minInterval": 0,
-                  "silent": false,
-                  "triggerEvent": false,
-                  "splitLine": {
-                    "show": true,
-                    "lineStyle": {
-                      "show": false
-                    }
-                  },
-                  "animation": true,
-                  "animationThreshold": 2000,
-                  "animationDuration": 1000,
-                  "animationEasing": "cubicOut",
-                  "animationDelay": 0,
-                  "animationDurationUpdate": 300,
-                  "animationEasingUpdate": "cubicOut",
-                  "animationDelayUpdate": 0,
                   "data": [
                     "2023",
                     "2024"
                   ]
                 }
               ],
-              "title": [
-                {
-                  "show": true,
-                  "target": "blank",
-                  "subtarget": "blank",
-                  "padding": 5,
-                  "itemGap": 10,
-                  "textAlign": "auto",
-                  "textVerticalAlign": "auto",
-                  "triggerEvent": false
-                }
-              ],
               "visualMap": {
-                "show": true,
-                "type": "continuous",
-                "min": 0,
-                "max": 100,
-                "inRange": {
-                  "color": [
-                    "#50a3ba",
-                    "#eac763",
-                    "#d94e5d"
-                  ]
-                },
-                "calculable": true,
-                "inverse": false,
-                "splitNumber": 5,
-                "hoverLink": true,
                 "orient": "horizontal",
-                "padding": 5,
-                "showLabel": true,
-                "itemWidth": 20,
-                "itemHeight": 140,
-                "borderWidth": 0
+                "type": "continuous"
               }
             },
             "width": "100%",
             "height": "400px"
           },
-          "title": "月度收益热力图"
+          "title": "月度收益热力图（DataFrame格式：第一列=X轴）"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "收益率",
+                  "data": [
+                    [
+                      "浦发银行",
+                      5.2
+                    ],
+                    [
+                      "平安银行",
+                      -3.1
+                    ],
+                    [
+                      "万科A",
+                      8.7
+                    ],
+                    [
+                      "贵州茅台",
+                      12.3
+                    ],
+                    [
+                      "中国平安",
+                      -1.5
+                    ]
+                  ],
+                  "type": "scatter"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "收益率"
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
+                  "data": [
+                    "浦发银行",
+                    "平安银行",
+                    "万科A",
+                    "贵州茅台",
+                    "中国平安"
+                  ]
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "400px"
+          },
+          "title": "类目散点图（xAxis标签 + y值）"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "波动率-收益",
+                  "data": [
+                    [
+                      7.49,
+                      3.69
+                    ],
+                    [
+                      19.01,
+                      15.96
+                    ],
+                    [
+                      14.64,
+                      10.51
+                    ],
+                    [
+                      11.97,
+                      9.0
+                    ],
+                    [
+                      3.12,
+                      1.29
+                    ],
+                    [
+                      3.12,
+                      6.2
+                    ],
+                    [
+                      1.16,
+                      0.9
+                    ],
+                    [
+                      17.32,
+                      11.74
+                    ],
+                    [
+                      12.02,
+                      11.26
+                    ],
+                    [
+                      14.16,
+                      8.89
+                    ],
+                    [
+                      0.41,
+                      0.75
+                    ],
+                    [
+                      19.4,
+                      11.6
+                    ],
+                    [
+                      16.65,
+                      10.66
+                    ],
+                    [
+                      4.25,
+                      3.79
+                    ],
+                    [
+                      3.64,
+                      4.39
+                    ],
+                    [
+                      3.67,
+                      3.28
+                    ],
+                    [
+                      6.08,
+                      4.64
+                    ],
+                    [
+                      10.5,
+                      7.79
+                    ],
+                    [
+                      8.64,
+                      3.95
+                    ],
+                    [
+                      5.82,
+                      3.22
+                    ],
+                    [
+                      12.24,
+                      8.87
+                    ],
+                    [
+                      2.79,
+                      4.35
+                    ],
+                    [
+                      5.84,
+                      5.36
+                    ],
+                    [
+                      7.33,
+                      2.34
+                    ],
+                    [
+                      9.12,
+                      7.95
+                    ],
+                    [
+                      15.7,
+                      11.79
+                    ],
+                    [
+                      3.99,
+                      1.84
+                    ],
+                    [
+                      10.28,
+                      9.45
+                    ],
+                    [
+                      11.85,
+                      11.54
+                    ],
+                    [
+                      0.93,
+                      2.61
+                    ]
+                  ],
+                  "type": "scatter"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "波动率-收益"
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
+                  "data": []
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "400px"
+          },
+          "title": "数值散点图（[x,y] 二维数组）"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "日K",
+                  "data": [
+                    [
+                      100,
+                      105,
+                      98,
+                      106
+                    ],
+                    [
+                      105,
+                      103,
+                      101,
+                      107
+                    ],
+                    [
+                      103,
+                      108,
+                      102,
+                      109
+                    ],
+                    [
+                      108,
+                      106,
+                      104,
+                      110
+                    ],
+                    [
+                      106,
+                      112,
+                      105,
+                      113
+                    ]
+                  ],
+                  "type": "candlestick"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "日K"
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
+                  "data": [
+                    "2024-01-02",
+                    "2024-01-03",
+                    "2024-01-04",
+                    "2024-01-05",
+                    "2024-01-08"
+                  ]
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "400px"
+          },
+          "title": "K线图（标准格式）"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "K线",
+                  "data": [
+                    [
+                      100,
+                      105,
+                      98,
+                      106
+                    ],
+                    [
+                      105,
+                      103,
+                      101,
+                      107
+                    ],
+                    [
+                      103,
+                      108,
+                      102,
+                      109
+                    ],
+                    [
+                      108,
+                      106,
+                      104,
+                      110
+                    ],
+                    [
+                      106,
+                      112,
+                      105,
+                      113
+                    ]
+                  ],
+                  "type": "candlestick"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "K线"
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
+                  "data": [
+                    "2024-01-02",
+                    "2024-01-03",
+                    "2024-01-04",
+                    "2024-01-05",
+                    "2024-01-08"
+                  ]
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "400px"
+          },
+          "title": "K线图（DataFrame格式）"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "日K",
+                  "data": [
+                    [
+                      100,
+                      105,
+                      98,
+                      106
+                    ],
+                    [
+                      105,
+                      103,
+                      101,
+                      107
+                    ],
+                    [
+                      103,
+                      108,
+                      102,
+                      109
+                    ],
+                    [
+                      108,
+                      106,
+                      104,
+                      110
+                    ],
+                    [
+                      106,
+                      112,
+                      105,
+                      113
+                    ]
+                  ],
+                  "type": "candlestick",
+                  "xAxisIndex": 0,
+                  "yAxisIndex": 0
+                },
+                {
+                  "name": "成交金额",
+                  "data": [
+                    10000,
+                    15000,
+                    8000,
+                    12000,
+                    20000
+                  ],
+                  "type": "bar",
+                  "xAxisIndex": 1,
+                  "yAxisIndex": 1
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "日K"
+                  ]
+                },
+                {
+                  "data": [
+                    "成交金额"
+                  ]
+                }
+              ],
+              "tooltip": {
+                "trigger": "axis"
+              },
+              "xAxis": [
+                {
+                  "data": [
+                    "2024-01-02",
+                    "2024-01-03",
+                    "2024-01-04",
+                    "2024-01-05",
+                    "2024-01-08"
+                  ],
+                  "gridIndex": 0
+                },
+                {
+                  "data": [
+                    "2024-01-02",
+                    "2024-01-03",
+                    "2024-01-04",
+                    "2024-01-05",
+                    "2024-01-08"
+                  ],
+                  "gridIndex": 1
+                }
+              ],
+              "grid": [
+                {
+                  "containLabel": true,
+                  "height": "300px",
+                  "top": "28px"
+                },
+                {
+                  "containLabel": true,
+                  "height": "150px",
+                  "top": "386px"
+                }
+              ],
+              "yAxis": [
+                {
+                  "gridIndex": 0
+                },
+                {
+                  "gridIndex": 1
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "536px"
+          }
+        },
+        {
+          "type": "divider",
+          "content": null
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "净值",
+                  "data": [
+                    [
+                      "2024-01-02",
+                      1.0
+                    ],
+                    [
+                      "2024-01-03",
+                      1.02
+                    ],
+                    [
+                      "2024-01-04",
+                      1.01
+                    ],
+                    [
+                      "2024-01-05",
+                      1.05
+                    ],
+                    [
+                      "2024-01-08",
+                      1.08
+                    ]
+                  ],
+                  "type": "line",
+                  "xAxisIndex": 0,
+                  "yAxisIndex": 0
+                },
+                {
+                  "name": "信号",
+                  "data": [
+                    0,
+                    1,
+                    1,
+                    0,
+                    1
+                  ],
+                  "type": "bar",
+                  "xAxisIndex": 1,
+                  "yAxisIndex": 1
+                },
+                {
+                  "name": "仓位",
+                  "data": [
+                    [
+                      "2024-01-02",
+                      0
+                    ],
+                    [
+                      "2024-01-03",
+                      0.5
+                    ],
+                    [
+                      "2024-01-04",
+                      0.8
+                    ],
+                    [
+                      "2024-01-05",
+                      0
+                    ],
+                    [
+                      "2024-01-08",
+                      0.6
+                    ]
+                  ],
+                  "type": "line",
+                  "xAxisIndex": 2,
+                  "yAxisIndex": 2
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "净值"
+                  ]
+                },
+                {
+                  "data": [
+                    "信号"
+                  ]
+                },
+                {
+                  "data": [
+                    "仓位"
+                  ]
+                }
+              ],
+              "tooltip": {
+                "trigger": "axis"
+              },
+              "xAxis": [
+                {
+                  "data": [
+                    "2024-01-02",
+                    "2024-01-03",
+                    "2024-01-04",
+                    "2024-01-05",
+                    "2024-01-08"
+                  ],
+                  "gridIndex": 0
+                },
+                {
+                  "data": [
+                    "2024-01-02",
+                    "2024-01-03",
+                    "2024-01-04",
+                    "2024-01-05",
+                    "2024-01-08"
+                  ],
+                  "gridIndex": 1
+                },
+                {
+                  "data": [
+                    "2024-01-02",
+                    "2024-01-03",
+                    "2024-01-04",
+                    "2024-01-05",
+                    "2024-01-08"
+                  ],
+                  "gridIndex": 2
+                }
+              ],
+              "grid": [
+                {
+                  "containLabel": true,
+                  "height": "200px",
+                  "top": "28px"
+                },
+                {
+                  "containLabel": true,
+                  "height": "100px",
+                  "top": "286px"
+                },
+                {
+                  "containLabel": true,
+                  "height": "150px",
+                  "top": "444px"
+                }
+              ],
+              "yAxis": [
+                {
+                  "gridIndex": 0
+                },
+                {
+                  "gridIndex": 1
+                },
+                {
+                  "gridIndex": 2
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "594px"
+          }
+        },
+        {
+          "type": "divider",
+          "content": null
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "策略净值",
+                  "smooth": true,
+                  "data": [
+                    [
+                      "2024-01-02",
+                      1000000
+                    ],
+                    [
+                      "2024-01-05",
+                      1020000
+                    ],
+                    [
+                      "2024-01-10",
+                      1015000
+                    ],
+                    [
+                      "2024-01-15",
+                      1050000
+                    ],
+                    [
+                      "2024-01-22",
+                      1040000
+                    ],
+                    [
+                      "2024-01-29",
+                      1080000
+                    ],
+                    [
+                      "2024-02-05",
+                      1100000
+                    ],
+                    [
+                      "2024-02-12",
+                      1130000
+                    ],
+                    [
+                      "2024-02-19",
+                      1110000
+                    ],
+                    [
+                      "2024-02-26",
+                      1150000
+                    ]
+                  ],
+                  "type": "line",
+                  "xAxisIndex": 0,
+                  "yAxisIndex": 0
+                },
+                {
+                  "name": "仓位",
+                  "data": [
+                    0,
+                    0.5,
+                    0.8,
+                    0.8,
+                    0.5,
+                    0,
+                    0.6,
+                    0.6,
+                    0.4,
+                    0.8
+                  ],
+                  "type": "bar",
+                  "xAxisIndex": 1,
+                  "yAxisIndex": 1
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "策略净值"
+                  ]
+                },
+                {
+                  "data": [
+                    "仓位"
+                  ]
+                }
+              ],
+              "tooltip": {
+                "trigger": "axis"
+              },
+              "xAxis": [
+                {
+                  "data": [
+                    "2024-01-02",
+                    "2024-01-05",
+                    "2024-01-10",
+                    "2024-01-15",
+                    "2024-01-22",
+                    "2024-01-29",
+                    "2024-02-05",
+                    "2024-02-12",
+                    "2024-02-19",
+                    "2024-02-26"
+                  ],
+                  "gridIndex": 0
+                },
+                {
+                  "data": [
+                    "2024-01-02",
+                    "2024-01-05",
+                    "2024-01-10",
+                    "2024-01-15",
+                    "2024-01-22",
+                    "2024-01-29",
+                    "2024-02-05",
+                    "2024-02-12",
+                    "2024-02-19",
+                    "2024-02-26"
+                  ],
+                  "gridIndex": 1
+                }
+              ],
+              "grid": [
+                {
+                  "containLabel": true,
+                  "height": "300px",
+                  "top": "28px"
+                },
+                {
+                  "containLabel": true,
+                  "height": "150px",
+                  "top": "386px"
+                }
+              ],
+              "yAxis": [
+                {
+                  "gridIndex": 0
+                },
+                {
+                  "gridIndex": 1
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "536px"
+          }
+        },
+        {
+          "type": "divider",
+          "content": null
         },
         {
           "type": "section",
@@ -1259,10 +2525,7 @@
       "children": [
         {
           "type": "text",
-          "content": "多列表格，冻结左侧2列：",
-          "options": {
-            "style": "normal"
-          }
+          "content": "多列表格，冻结左侧2列："
         },
         {
           "type": "table",
@@ -1620,6 +2883,56 @@
       "type": "section",
       "children": [
         {
+          "type": "text",
+          "content": "【text三引号测试】第一行\n第二行\n第三行"
+        },
+        {
+          "type": "text",
+          "content": "【text单引号+\\n测试】第一行\n第二行\n第三行"
+        },
+        {
+          "type": "text",
+          "content": "【text变量拼接测试】\n项目1\n项目2\n项目3"
+        }
+      ],
+      "title": "文本换行测试",
+      "options": {
+        "level": 1
+      }
+    },
+    {
+      "type": "section",
+      "children": [
+        {
+          "type": "markdown",
+          "content": "【markdown三引号测试】\n# 一级标题\n## 二级标题\n正文第一行\n正文第二行\n**加粗文本**\n*斜体文本*"
+        },
+        {
+          "type": "markdown",
+          "content": "【markdown单引号+\\n测试】\n# 标题\n第一行\n第二行\n**加粗**"
+        },
+        {
+          "type": "markdown",
+          "content": "【markdown列表测试】\n- 列表项1\n- 列表项2\n- 列表项3\n\n1. 有序列表1\n2. 有序列表2\n3. 有序列表3"
+        },
+        {
+          "type": "markdown",
+          "content": "【markdown代码块测试】\n```python\ndef hello():\n    print(\"world\")\n```\n行内代码: `print(1)`"
+        },
+        {
+          "type": "markdown",
+          "content": "【markdown引用测试】\n> 这是引用内容\n> 第二行引用\n>\n> 嵌套引用"
+        }
+      ],
+      "title": "Markdown换行测试",
+      "options": {
+        "level": 1
+      }
+    },
+    {
+      "type": "section",
+      "children": [
+        {
           "type": "table",
           "content": [
             {
@@ -1707,9 +3020,49 @@
     }
   ]
 }</script>
+</head>
+<body>
     
+    <div id="app">
+                    
+            <!-- Toast 提示组件 -->
+            <toast></toast>
+        <!-- 整体居中 wrapper -->
+            <div class="notebook-wrapper">
+                <!-- 主体容器 -->
+
+                <!-- 目录菜单组件 -->
+                <toc-menu :title="title" :cells="cells" @scroll-to="scrollToSection"></toc-menu>
+
+                <div class="notebook-container">
+                    <!-- 头部 -->
+                    <div class="notebook-header">
+                        <h1>{{ title }}</h1>
+                        <div class="meta">
+                            <span>📅 {{ createdAt }}</span>
+                        </div>
+                    </div>
+                    
+                    <!-- 内容区域 -->
+                    <cell-renderer 
+                        v-for="(cell, index) in cells" 
+                        :key="index"
+                        :cell="cell"
+                        :cell-id="index"
+                        :level="0">
+                    </cell-renderer>
+                </div>
+
+            </div>
+
+            
+            <!-- 配色器组件 -->
+            <color-picker></color-picker>
+        </div>
+    
+
     <!-- Notebook Vue3 JS -->
-    <script src="template/js/notebook3.js"></script>
+    <script src="file:///d:/01-Doc/Quant/ft2/template/js/notebook3D.js"></script>
     <script>
         // 从 Jinja2 注入的数据创建配置
         const dataElement = document.getElementById('notebook-data');

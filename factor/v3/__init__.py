@@ -38,7 +38,7 @@ from .primitives import (
     cs_rank, cs_zscore, cs_mean, signed_power,
     ts_sum, ts_mean, ts_std, ts_max, ts_min,
     sma, covariance, regbeta,
-    ts_argmin, ts_argmax, ifelse, ts_skew,
+    ts_argmin, ts_argmax, ifelse, ts_skew, delta, winsorize,
     EXTENDED_PRIMITIVES, get_primitive, list_primitives,
 )
 
@@ -102,7 +102,7 @@ __all__ = [
     'cs_rank', 'cs_zscore', 'cs_mean', 'signed_power',
     'ts_sum', 'ts_mean', 'ts_std', 'ts_max', 'ts_min',
     'sma', 'covariance', 'regbeta',
-    'ts_argmin', 'ts_argmax', 'ifelse', 'ts_skew',
+    'ts_argmin', 'ts_argmax', 'ifelse', 'ts_skew', 'delta', 'winsorize',
     'EXTENDED_PRIMITIVES', 'get_primitive', 'list_primitives',
     # engine
     'NodeType', 'ASTNode', 'FactorExpression', 'parse_expression',

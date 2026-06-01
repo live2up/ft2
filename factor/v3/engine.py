@@ -30,7 +30,7 @@ from .primitives import (
     ts_sum, ts_mean, ts_std, ts_max, ts_min,
     sma, covariance, regbeta,
     ts_argmin, ts_argmax, ifelse,
-    cs_mean, ts_skew,                     # [新增] 2026-06-01
+    cs_mean, ts_skew, delta, winsorize,     # [新增] 2026-06-01
 )
 from .primitives import cs_zscore as _prim_cs_zscore
 
@@ -123,13 +123,20 @@ PRIMITIVE_FUNCTIONS = {
     'sma': sma, 'covariance': covariance, 'regbeta': regbeta,
     'ts_argmin': ts_argmin, 'ts_argmax': ts_argmax, 'ifelse': ifelse,
     'cs_zscore': _prim_cs_zscore,
-    'cs_mean': cs_mean, 'ts_skew': ts_skew,  # [新增] 2026-06-01
+    'cs_mean': cs_mean, 'ts_skew': ts_skew, 'delta': delta,  # [新增] 2026-06-01
+    'winsorize': winsorize,  # [新增] 2026-06-01
+    'ret': None, 'adv': None, 'intra_ret': None,  # [新增] 零参数语法糖
 }
 
 
 def evaluate_node(node: ASTNode, data: Dict[str, np.ndarray]) -> np.ndarray:
     """递归求值 AST 节点"""
     if node.node_type == NodeType.VARIABLE:
+        # [新增] 2026-06-01 零参数语法糖直接求值
+        if node.value == 'intra_ret':
+            close, opn = data['close'], data['open']
+            diff = close - opn
+            return np.where(np.abs(opn) > 1e-10, diff / opn, 0.0)
         col = VARIABLE_MAP.get(node.value.lower())
         if col is None or col not in data:
             raise KeyError(f"字段 '{node.value}' 未提供，当前可用: {list(data.keys())}")
@@ -147,6 +154,16 @@ def evaluate_node(node: ASTNode, data: Dict[str, np.ndarray]) -> np.ndarray:
 
     elif node.node_type == NodeType.FUNCTION:
         fn_name = node.value
+        # [新增] 2026-06-01 零参数语法糖，省 1 层 AST 深度
+        if fn_name == 'ret':
+            period = int(node.params.get('period', 1))
+            return delta(data.get('close'), period)
+        if fn_name == 'adv':
+            period = int(node.params.get('period', 10))
+            return ts_mean(data.get('volume'), period)
+        if fn_name == 'intra_ret':
+            close, opn = data['close'], data['open']
+            return np.where(np.abs(opn) > 1e-10, (close - opn) / opn, 0.0)
         if fn_name in BINARY_FUNCTIONS:
             vals = [evaluate_node(c, data) for c in node.children]
             return BINARY_FUNCTIONS[fn_name](*vals)

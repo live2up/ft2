@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+; 设置 Python stdout/stderr 为 UTF-8 编码
+; 解决 Windows PowerShell (GBK/cp936) 输出中文/特殊字符报错的问题
+; 双击导入，重启终端生效
+
+[HKEY_CURRENT_USER\Environment]
+"PYTHONIOENCODING"="utf-8"

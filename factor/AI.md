@@ -38,21 +38,22 @@ panel = expr.evaluate(data_dict)  # → ndarray(T, N)
 **表达式语法速查：**
 ```
 终端变量:   open, high, low, close, volume, amount
-一元函数:   abs(x), sqrt(x), log(x), neg(x)
+一元函数:   abs(x), sqrt(x), log(x), exp(x), neg(x), sign(x), tanh(x)
 二元函数:   add(x,y), sub(x,y), mul(x,y), div(x,y), max(x,y), min(x,y)
 时序原语:   ts_rank(x, period)      ts_zscore(x, period)
-            delay(x, period)         decay_linear(x, period)
-            ts_sum(x, period)        ts_mean(x, period)
-            ts_std(x, period)        ts_max(x, period)
-            ts_min(x, period)        sma(x, period, lag)
-            correlation(x, y, p)     covariance(x, y, p)
-            regbeta(x, y, p)         ts_argmin(x, p)
-            ts_argmax(x, p)
+            delay(x, period)         delta(x, period)  差分(省1层)
+            decay_linear(x, period)  ts_sum/mean/std/max/min(x, p)
+            sma(x, period, lag)      correlation/covariance/regbeta(x,y,p)
+            ts_argmin/max(x, p)      ts_skew(x, period)  偏度
 截面原语:   cs_rank(x)              cs_zscore(x, period)
-            signed_power(x, exp)
+            cs_mean(x)              signed_power(x, exp)
+健壮处理:   winsorize(x, n)         截尾到 ±nσ
+语法糖:     ret(period)             收益差（省2层）
+            adv(period)             均量（省1层）
+            intra_ret               日内收益（(c-o)/o）
 条件分支:   ifelse(cond, a, b)
 
-示例: ts_rank(mul(cs_zscore(sub(close, delay(close, 20))), abs(close)), 10)
+示例: ts_rank(winsorize(mul(delta(close, 20), adv(10)), 3), 10)
 ```
 
 ### 2. GP 符号回归引擎（核心升级）
@@ -257,10 +258,13 @@ lib.to_dataframe()            # 导出
 ### 11. 公式库
 
 ```python
-from factor.v3 import ALPHA101, ALPHA191
+from factor.v3 import ALPHA101, ALPHA191, BASIC_FACTORS
 
-len(ALPHA101)  # 101
-len(ALPHA191)  # 171（含20个预留基本面缺口）
+len(ALPHA101)       # 101   WorldQuant 101 Alpha
+len(ALPHA191)       # 171   国泰安 191 Alpha（含20个预留基本面缺口）
+len(BASIC_FACTORS)  # 20    因子原子基元（动量/反转/波动率/量价/截面/均线）
+
+# 总计: 292 条公式，全部可解析求值
 ```
 
 ---
@@ -271,10 +275,10 @@ len(ALPHA191)  # 171（含20个预留基本面缺口）
 factor/v3/  (10 文件)
 ├── __init__.py         统一导出
 ├── base.py             FactorCategory / FactorMetadata / FactorLibrary
-├── primitives.py       19 个时序/截面原语（纯 numpy，无状态）
+├── primitives.py       26 个原语（时序19 + 截面4 + 健壮1 + 语法糖3）
 ├── engine.py           表达式引擎：Tokenizer → Parser → AST → FactorExpression
 ├── backtest.py         回测：Scheduler + Allocator + Combiner + Pipeline
-├── formulas.py         WQ101 + GT191 公式字典
+├── formulas.py         WQ101(101) + GT191(171) + BASIC(20) = 292公式
 ├── validator.py        IC/IR/Bootstrap/换手率 检验
 ├── search.py           网格搜索 + 贝叶斯优化
 ├── discover.py【核心】 GPEngine + 可插拔适应度 + FactorDiscoveryEngine
@@ -307,6 +311,14 @@ formulas → engine(编译) → primitives(原语) → fitness(适应度) → gp
 | GP 适应度 | 固定 ICIR | **可插拔** |
 | 调度器/分配器 | 硬编码 | **构造注入** |
 | 因子库 | 无 | **自增长 FactorLibrary** |
+
+---
+
+## 配套工具：Notebook 可视化报告
+
+因子验证结果可通过 `notebook` 模块生成交互式 HTML 报告（IC/IR 指标卡片、分组收益图、因子权重饼图等）。
+
+详见 [`notebook/AI.md`](../notebook/AI.md)
 
 ---
 
