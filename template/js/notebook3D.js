@@ -760,6 +760,13 @@ const PerfChart = {
             return drawdowns;
         };
 
+        // [新增] 2026-06-02 超额收益 = 策略收益率 - 基准收益率
+        const calculateExcessReturns = (strategyReturns, benchmarkReturns) => {
+            if (!strategyReturns || !benchmarkReturns) return [];
+            const len = Math.min(strategyReturns.length, benchmarkReturns.length);
+            return strategyReturns.slice(0, len).map((v, i) => parseFloat((v - benchmarkReturns[i]).toFixed(2)));
+        };
+
         // 生成唯一 ID（必须用 ref 才能在模板中访问）
         const chartId = ref('perf-' + Math.random().toString(36).slice(2, 8));
 
@@ -781,6 +788,7 @@ const PerfChart = {
             const stratData = to1D(series[0]?.data || []);
             const benchData = series.length > 1 ? to1D(series[1]?.data) : null;
             const benchName = series.length > 1 ? (series[1]?.name || '基准') : '基准';
+            const stratName = series[0]?.name || '策略';
 
             // 初始化
             chartInstance = echarts.init(chartRef.value);
@@ -796,7 +804,7 @@ const PerfChart = {
                 const stratDD = calculateDrawdown(stratData.slice(startIdx, endIdx + 1), 0);
 
                 const seriesData = [
-                    { name: series[0]?.name || '策略', type: 'line', smooth: true, symbol: 'none',
+                    { name: stratName, type: 'line', smooth: true, symbol: 'none',
                       xAxisIndex: 0, yAxisIndex: 0, data: visibleStratRets,
                       lineStyle: { width: 2 }, areaStyle: { opacity: 0.05 } },
                     { name: '回撤', type: 'line', smooth: true, symbol: 'none',
@@ -804,53 +812,92 @@ const PerfChart = {
                       lineStyle: { width: 2, color: '#e74c3c' }, itemStyle: { color: '#e74c3c' } }
                 ];
 
+                let visibleBenchRets = null;
+                let benchDD = null;
                 if (benchData) {
                     const benchRets = calculateCumulativeReturns(benchData, baseIdx);
-                    const visibleBenchRets = benchRets.slice(startIdx, endIdx + 1);
-                    const benchDD = calculateDrawdown(benchData.slice(startIdx, endIdx + 1), 0);
+                    visibleBenchRets = benchRets.slice(startIdx, endIdx + 1);
+                    benchDD = calculateDrawdown(benchData.slice(startIdx, endIdx + 1), 0);
+
+                    // [新增] 超额收益曲线
+                    const excessRets = calculateExcessReturns(visibleStratRets, visibleBenchRets);
 
                     seriesData.push(
                         { name: benchName, type: 'line', smooth: true, symbol: 'none',
                           xAxisIndex: 0, yAxisIndex: 0, data: visibleBenchRets,
                           lineStyle: { width: 2 } },
+                        { name: '超额', type: 'line', smooth: true, symbol: 'none',
+                          xAxisIndex: 0, yAxisIndex: 0, data: excessRets,
+                          lineStyle: { width: 2, type: 'dashed' } },
                         { name: benchName + '回撤', type: 'line', smooth: true, symbol: 'none',
                           xAxisIndex: 1, yAxisIndex: 1, data: benchDD,
-                          lineStyle: { width: 2 } }
+                          lineStyle: { width: 2, color: '#1890ff' }, itemStyle: { color: '#1890ff' } }
                     );
                 }
 
-                // 更新统计面板
-                const periodRet = visibleStratRets.length > 0 ? visibleStratRets[visibleStratRets.length - 1].toFixed(2) + '%' : '—';
-                const benchPeriodRet = benchData && visibleStratRets.length > 0 ?
-                    calculateCumulativeReturns(benchData, baseIdx).slice(startIdx, endIdx + 1).pop().toFixed(2) + '%' : '—';
-                const maxDD = stratDD.length > 0 ? Math.min(...stratDD.filter(d => d !== null)).toFixed(2) + '%' : '—';
-                const benchMaxDD = benchData ? (() => {
-                    const bdd = calculateDrawdown(benchData.slice(startIdx, endIdx + 1), 0);
-                    return bdd.length > 0 ? Math.min(...bdd.filter(d => d !== null)).toFixed(2) + '%' : '—';
-                })() : '—';
+                // [重构] 2026-06-02 统计面板改用 metric-card 样式，新增超额指标
+                const periodRet = visibleStratRets.length > 0 ? visibleStratRets[visibleStratRets.length - 1] : null;
+                const benchPeriodRet = benchData && visibleBenchRets && visibleBenchRets.length > 0
+                    ? visibleBenchRets[visibleBenchRets.length - 1] : null;
+                const excessRet = (periodRet !== null && benchPeriodRet !== null)
+                    ? periodRet - benchPeriodRet : null;
+                const maxDD = stratDD.length > 0 ? Math.min(...stratDD.filter(d => d !== null)) : null;
+                const benchMaxDD = benchDD ? Math.min(...benchDD.filter(d => d !== null)) : null;
+
+                const fmtPct = (v) => v !== null && !isNaN(v) ? (v >= 0 ? '+' : '') + v.toFixed(2) + '%' : '—';
+                const fmtDD = (v) => v !== null && !isNaN(v) ? v.toFixed(2) + '%' : '—';
+                const colorCls = (v) => v !== null && !isNaN(v) ? (v >= 0 ? 'positive' : 'negative') : '';
+
+                let statsHTML = `
+                    <div class="metric-card ${colorCls(periodRet)}">
+                        <div class="metric-value">${fmtPct(periodRet)}</div>
+                        <div class="metric-label">组合收益</div>
+                    </div>`;
+                if (benchData) {
+                    statsHTML += `
+                    <div class="metric-card ${colorCls(excessRet)}">
+                        <div class="metric-value">${fmtPct(excessRet)}</div>
+                        <div class="metric-label">超额</div>
+                    </div>`;
+                }
+                statsHTML += `
+                    <div class="metric-card down">
+                        <div class="metric-value">${fmtDD(maxDD)}</div>
+                        <div class="metric-label">最大回撤</div>
+                    </div>`;
+                if (benchData) {
+                    statsHTML += `
+                    <div class="metric-card ${colorCls(benchPeriodRet)}">
+                        <div class="metric-value">${fmtPct(benchPeriodRet)}</div>
+                        <div class="metric-label">${benchName}</div>
+                    </div>
+                    <div class="metric-card down">
+                        <div class="metric-value">${fmtDD(benchMaxDD)}</div>
+                        <div class="metric-label">${benchName}回撤</div>
+                    </div>`;
+                }
 
                 const statsEl = document.getElementById('perf-stats-' + chartId.value);
                 if (statsEl) {
-                    statsEl.innerHTML = `
-                        <span class="perf-stat"><em>区间收益</em><strong>${periodRet}</strong></span>
-                        ${benchData ? `<span class="perf-stat"><em>${benchName}</em><strong>${benchPeriodRet}</strong></span>` : ''}
-                        <span class="perf-stat"><em>最大回撤</em><strong style="color:#e74c3c">${maxDD}</strong></span>
-                        ${benchData ? `<span class="perf-stat"><em>${benchName}回撤</em><strong style="color:#e74c3c">${benchMaxDD}</strong></span>` : ''}
-                    `;
+                    statsEl.innerHTML = statsHTML;
                 }
 
+                // [对齐] 2026-06-02 参考 return2.html 布局：百分比 grid、axisPointer 联动、DataZoom 边距对齐
+                const ECHART_PAD = { left: 60, right: 30 };
                 chartInstance.setOption({
                     grid: [
-                        { left: 60, right: 30, top: 60, bottom: '45%' },
-                        { left: 60, right: 30, top: '62%', bottom: 30 }
+                        { left: ECHART_PAD.left, right: ECHART_PAD.right, top: '14%', bottom: '33%' },
+                        { left: ECHART_PAD.left, right: ECHART_PAD.right, top: '75%', bottom: '8%' }
                     ],
                     xAxis: [
                         { type: 'category', gridIndex: 0, data: dates.slice(startIdx, endIdx + 1), axisLabel: { show: false } },
-                        { type: 'category', gridIndex: 1, data: dates.slice(startIdx, endIdx + 1) }
+                        { type: 'category', gridIndex: 1, data: dates.slice(startIdx, endIdx + 1), axisLabel: { show: false } }
                     ],
                     yAxis: [
-                        { gridIndex: 0, type: 'value', name: '收益率(%)', axisLabel: { formatter: '{value}%' } },
-                        { gridIndex: 1, type: 'value', name: '回撤(%)', axisLabel: { formatter: '{value}%' }, max: 0 }
+                        { gridIndex: 0, type: 'value', name: '收益率(%)', nameLocation: 'end', nameGap: 10,
+                          axisLabel: { formatter: '{value}%' } },
+                        { gridIndex: 1, type: 'value', name: '回撤(%)', nameLocation: 'end', nameGap: 10,
+                          axisLabel: { formatter: '{value}%' } }
                     ],
                     series: seriesData,
                     tooltip: {
@@ -864,19 +911,40 @@ const PerfChart = {
                             return res;
                         }
                     },
+                    axisPointer: { link: [{ xAxisIndex: 'all' }] },
                     legend: [
-                        { data: seriesData.filter(s => s.yAxisIndex === 0).map(s => s.name), top: 25 },
-                        { data: seriesData.filter(s => s.yAxisIndex === 1).map(s => s.name), top: '60%' }
+                        { data: seriesData.filter(s => s.yAxisIndex === 0).map(s => s.name), top: 35,
+                          selected: benchData ? { '超额': false } : {} },
+                        { data: seriesData.filter(s => s.yAxisIndex === 1).map(s => s.name), top: '68%' }
                     ],
                     dataZoom: [
                         { type: 'inside', xAxisIndex: [0, 1], start: startPercent, end: endPercent },
-                        { type: 'slider', xAxisIndex: [0, 1], start: startPercent, end: endPercent, height: 30, bottom: 0 }
+                        { type: 'slider', xAxisIndex: [0, 1], start: startPercent, end: endPercent,
+                          height: 40, bottom: 0, left: ECHART_PAD.left, right: ECHART_PAD.right }
                     ],
                     color: ['#e74c3c', '#1890ff', '#ffa500', '#52c41a', '#722ed1', '#13c2c2']
                 }, true);
             };
 
             updateChartData(0, 100);
+
+            // [新增] 2026-06-02 图例联动：策略↔回撤 同色联动，基准↔基准回撤 同色联动
+            chartInstance.on('legendselectchanged', function(params) {
+                const selected = params.selected;
+                const name = params.name;
+                const linkageMap = {};
+                linkageMap[stratName] = '回撤';
+                linkageMap['回撤'] = stratName;
+                if (benchData) {
+                    linkageMap[benchName] = benchName + '回撤';
+                    linkageMap[benchName + '回撤'] = benchName;
+                }
+                const linked = linkageMap[name];
+                if (linked && selected[name] !== undefined) {
+                    const action = selected[name] ? 'legendSelect' : 'legendUnSelect';
+                    chartInstance.dispatchAction({ type: action, name: linked });
+                }
+            });
 
             // dataZoom 事件
             chartInstance.on('datazoom', (params) => {
