@@ -738,8 +738,10 @@ const PerfChart = {
             return series.length > 1;
         });
 
-        // [新增] 2026-06-02 区间切换按钮
+        // [新增] 2026-06-02 区间切换按钮 + 日期输入框
         let _zoomJumping = false;
+        const dateStart = ref('');
+        const dateEnd = ref('');
         const jumpToRange = (range) => {
             if (!chartInstance || !datesRef.value.length) return;
             selectedRange.value = range;
@@ -764,6 +766,24 @@ const PerfChart = {
             }
             const pct = Math.max(0, (startIdx / n) * 100);
             chartInstance.dispatchAction({ type: 'dataZoom', start: pct, end: 100 });
+        };
+        const jumpToDateRange = () => {
+            if (!chartInstance || !datesRef.value.length) return;
+            const n = datesRef.value.length;
+            const sd = dateStart.value, ed = dateEnd.value;
+            let startIdx = 0, endIdx = n - 1;
+            for (let i = 0; i < n; i++) {
+                if (datesRef.value[i] >= sd) { startIdx = i; break; }
+            }
+            for (let i = n - 1; i >= 0; i--) {
+                if (datesRef.value[i] <= ed) { endIdx = i; break; }
+            }
+            if (startIdx >= endIdx) return;
+            selectedRange.value = null;
+            _zoomJumping = true;
+            const sp = (startIdx / n) * 100;
+            const ep = ((endIdx + 1) / n) * 100;
+            chartInstance.dispatchAction({ type: 'dataZoom', start: sp, end: ep });
         };
 
         // ---- 原子函数：从 return2.html 移植 ----
@@ -922,6 +942,9 @@ const PerfChart = {
                 if (statsEl) {
                     statsEl.innerHTML = statsHTML;
                 }
+                // [新增] 更新日期输入框
+                dateStart.value = dates[startIdx];
+                dateEnd.value = dates[endIdx];
 
                 // [对齐] 2026-06-02 参考 return2.html 布局：百分比 grid、axisPointer 联动、DataZoom 边距对齐
                 const ECHART_PAD = { left: 60, right: 30 };
@@ -953,11 +976,18 @@ const PerfChart = {
                         }
                     },
                     axisPointer: { link: [{ xAxisIndex: 'all' }] },
-                    legend: [
-                        { data: seriesData.filter(s => s.yAxisIndex === 0).map(s => s.name), top: 35,
-                          selected: benchData ? { '超额': false } : {} },
-                        { data: seriesData.filter(s => s.yAxisIndex === 1).map(s => s.name), top: '68%' }
-                    ],
+                    legend: (() => {
+                        // [修复] 2026-06-02 保留用户图例选中状态，仅首载默认隐藏超额
+                        const currentOpt = chartInstance.getOption() || {};
+                        const prev0 = currentOpt.legend && currentOpt.legend[0] && currentOpt.legend[0].selected || {};
+                        const prev1 = currentOpt.legend && currentOpt.legend[1] && currentOpt.legend[1].selected || {};
+                        return [
+                            { data: seriesData.filter(s => s.yAxisIndex === 0).map(s => s.name), top: 35,
+                              selected: Object.assign(benchData ? { '超额': false } : {}, prev0) },
+                            { data: seriesData.filter(s => s.yAxisIndex === 1).map(s => s.name), top: '68%',
+                              selected: prev1 }
+                        ];
+                    })(),
                     dataZoom: [
                         { type: 'inside', xAxisIndex: [0, 1], start: startPercent, end: endPercent },
                         { type: 'slider', xAxisIndex: [0, 1], start: startPercent, end: endPercent,
@@ -1010,15 +1040,18 @@ const PerfChart = {
             chartInstance?.dispose();
         });
 
-        return { chartRef, chartId, isFullscreen, toggleFullscreen, hasBenchmark, selectedRange, jumpToRange };
+        return { chartRef, chartId, isFullscreen, toggleFullscreen, hasBenchmark, selectedRange, jumpToRange, jumpToDateRange, dateStart, dateEnd };
     },
     template: `
         <div class="chart-wrapper" :class="{ 'chart-fullscreen': isFullscreen }">
             <div class="perf-range-btns">
-                <button @click="jumpToRange('all')" :class="{ active: selectedRange === 'all' }">成立来</button>
-                <button @click="jumpToRange('1y')" :class="{ active: selectedRange === '1y' }">近一年</button>
-                <button @click="jumpToRange('6m')" :class="{ active: selectedRange === '6m' }">近半年</button>
-                <button @click="jumpToRange('3m')" :class="{ active: selectedRange === '3m' }">近三月</button>
+                <button @click="jumpToRange('all')" :class="{ active: selectedRange === 'all' }">成立以来</button>
+                <button @click="jumpToRange('3m')" :class="{ active: selectedRange === '3m' }">近3个月</button>
+                <button @click="jumpToRange('6m')" :class="{ active: selectedRange === '6m' }">半年</button>
+                <button @click="jumpToRange('1y')" :class="{ active: selectedRange === '1y' }">1年</button>
+                <input type="date" class="perf-date-input" v-model="dateStart" @change="jumpToDateRange" title="起始日期">
+                <span class="perf-date-sep">至</span>
+                <input type="date" class="perf-date-input" v-model="dateEnd" @change="jumpToDateRange" title="结束日期">
             </div>
             <div class="chart-container chart-container-main"
                  ref="chartRef" :id="'perf-chart-' + chartId"

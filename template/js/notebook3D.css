@@ -516,6 +516,8 @@ body {
     gap: 6px;
     margin-bottom: 8px;
     flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
 }
 .perf-range-btns button {
     padding: 4px 12px;
@@ -535,6 +537,24 @@ body {
     background: #9b51e0;
     border-color: #9b51e0;
     color: #fff;
+}
+.perf-date-input {
+    padding: 4px 6px;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #666;
+    background: #fff;
+    outline: none;
+    width: 120px;
+}
+.perf-date-input:focus {
+    border-color: #9b51e0;
+}
+.perf-date-sep {
+    font-size: 12px;
+    color: #999;
+    align-self: center;
 }
 
 /* 图表容器 */
