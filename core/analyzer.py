@@ -481,7 +481,7 @@ class AccountAnalyzer:
         
         return ((1 + interval_return) ** (252 / trading_days)) - 1
 
-    @metric(name='年化波动率', group='风险', fmt='.1%', desc='衡量资产价格的波动程度', order=20)
+    @metric(name='年化波动率', group='风险', fmt='.1%', desc='衡量资产价格的波动程度', order=22)
     def volatility(self) -> Optional[float]:
         """计算年化波动率"""
         sliced_data_info = self._ensure_sliced_data()
@@ -494,7 +494,7 @@ class AccountAnalyzer:
         
         return np.std(returns) * np.sqrt(252)
 
-    @metric(name='夏普比率', group='风险', fmt='.2f', desc='每承担一单位风险获得的超额收益', order=30)
+    @metric(name='夏普比率', group='风险', fmt='.2f', desc='每承担一单位风险获得的超额收益', order=21)
     def sharpe_ratio(self) -> Optional[float]:
         """计算夏普比率"""
         annualized = self.annualized_return()
@@ -505,7 +505,7 @@ class AccountAnalyzer:
         
         return (annualized - self.risk_free_rate) / vol
 
-    @metric(name='最大回撤', group='风险', fmt='.1%', desc='历史最大亏损幅度', order=21)
+    @metric(name='最大回撤', group='风险', fmt='.1%', desc='历史最大亏损幅度', order=20)
     def max_drawdown(self) -> Optional[Tuple[float, date, date]]:
         """计算最大回撤"""
         sliced_data_info = self._ensure_sliced_data()
@@ -532,7 +532,7 @@ class AccountAnalyzer:
         
         return max_dd, dates[peak_idx], dates[max_dd_idx]
 
-    @metric(name='VaR(95%) / 风险价值', group='风险', fmt='.1%', desc='95% 置信度下的最大可能损失', order=22)
+    @metric(name='VaR(95%) / 风险价值', group='风险', fmt='.1%', desc='95% 置信度下的最大可能损失', order=24)
     def var(self, confidence: float = 0.95) -> Optional[float]:
         """计算风险价值"""
         sliced_data_info = self._ensure_sliced_data()
@@ -545,7 +545,7 @@ class AccountAnalyzer:
         
         return -np.percentile(returns, (1 - confidence) * 100)
 
-    @metric(name='CVaR(95%) / 条件风险价值', group='风险', fmt='.1%', desc='超过 VaR 阈值的平均损失', order=23)
+    @metric(name='CVaR(95%) / 条件风险价值', group='风险', fmt='.1%', desc='超过 VaR 阈值的平均损失', order=25)
     def cvar(self, confidence: float = 0.95) -> Optional[float]:
         """计算条件风险价值"""
         sliced_data_info = self._ensure_sliced_data()
@@ -563,7 +563,7 @@ class AccountAnalyzer:
         sorted_returns = np.sort(returns)
         return -np.mean(sorted_returns[:index])
 
-    @metric(name='Ulcer Index / 溃疡指数', group='风险', fmt='.2f', desc='衡量回撤深度和持续时间的综合指标', order=24)
+    @metric(name='Ulcer Index / 溃疡指数', group='风险', fmt='.2f', desc='衡量回撤深度和持续时间的综合指标', order=27)
     def ulcer_index(self) -> Optional[float]:
         """计算溃疡指数"""
         sliced_data_info = self._ensure_sliced_data()
@@ -581,7 +581,7 @@ class AccountAnalyzer:
         
         return np.sqrt(np.mean(drawdown_pct ** 2))
 
-    @metric(name='索提诺比率', group='风险', fmt='.2f', desc='只考虑下行风险的夏普比率改进版', order=31)
+    @metric(name='索提诺比率', group='风险', fmt='.2f', desc='只考虑下行风险的夏普比率改进版', order=23)
     def sortino_ratio(self, risk_free_rate: float = 0.02) -> Optional[float]:
         """计算索提诺比率"""
         annualized_return = self.annualized_return()
@@ -609,7 +609,7 @@ class AccountAnalyzer:
         
         return (annualized_return - risk_free_rate) / annualized_downside_deviation
 
-    @metric(name='UPI / 溃疡绩效指数', group='风险', fmt='.2f', desc='用溃疡指数调整的风险收益比', order=32)
+    @metric(name='UPI / 溃疡绩效指数', group='风险', fmt='.2f', desc='用溃疡指数调整的风险收益比', order=26)
     def upi(self, risk_free_rate: float = 0.02) -> Optional[float]:
         """计算 Ulcer Performance Index"""
         annualized_return = self.annualized_return()
@@ -1050,61 +1050,67 @@ class AccountAnalyzer:
 
         has_bench = self._bench_assets and has_bench_data
 
-        # ---- 1. 基础指标 ----
-        base_items = []
-        for k, v in info_m.items():
-            base_items.append({'name': k, 'value': v})
-        for group_name in ('收益', '风险'):
-            if group_name in grouped:
-                for _, name, val, desc in grouped[group_name]:
-                    item = {'name': name, 'value': val}
-                    if desc:
-                        item['desc'] = desc
-                    base_items.append(item)
+        # ═══════════════════════════════════════════
+        # 模块1：指标分析
+        # ═══════════════════════════════════════════
+        with nb.section("指标分析"):
+            # 基础指标
+            base_items = []
+            for k, v in info_m.items():
+                base_items.append({'name': k, 'value': v})
+            for group_name in ('收益', '风险'):
+                if group_name in grouped:
+                    for _, name, val, desc in grouped[group_name]:
+                        item = {'name': name, 'value': val}
+                        if desc:
+                            item['desc'] = desc
+                        base_items.append(item)
 
-        if has_bench:
-            with nb.section("基础指标"):
+            if has_bench:
                 nb.table(cmp_rows, title=f"策略 vs {bench_label} 指标对比",
                          columns=['指标', '策略', bench_label])
-        else:
-            with nb.section("基础指标"):
+            else:
                 nb.metrics(base_items, columns=5)
 
-        # ---- 2. 交易指标 ----
-        if has_records and '交易' in grouped:
-            trade_m = []
-            for _, name, val, desc in grouped['交易']:
-                trade_m.append({'指标': name, '数值': val})
-            avg_p = self.avg_profit(mode='amount')
-            avg_l = self.avg_loss(mode='amount')
-            if avg_p is not None:
-                trade_m.append({'指标': '平均盈利', '数值': f"{avg_p:,.0f}"})
-            if avg_l is not None:
-                trade_m.append({'指标': '平均亏损', '数值': f"{avg_l:,.0f}"})
-            with nb.section("交易指标"):
+            # 交易指标
+            if has_records and '交易' in grouped:
+                trade_m = []
+                for _, name, val, desc in grouped['交易']:
+                    trade_m.append({'指标': name, '数值': val})
+                avg_p = self.avg_profit(mode='amount')
+                avg_l = self.avg_loss(mode='amount')
+                if avg_p is not None:
+                    trade_m.append({'指标': '平均盈利', '数值': f"{avg_p:,.0f}"})
+                if avg_l is not None:
+                    trade_m.append({'指标': '平均亏损', '数值': f"{avg_l:,.0f}"})
                 nb.table(trade_m, columns=['指标', '数值'])
 
-        # ---- 3. 业绩图 ----
-        if has_bench:
-            d_strs = [d.strftime('%Y-%m-%d') for d in common_dates]
-            nb.chart('perf', {
-                'xAxis': d_strs,
-                'series': [
-                    {'name': '策略', 'data': strat_vals.tolist()},
-                    {'name': bench_label, 'data': bench_vals.tolist()},
-                ],
-            }, title='策略 vs 基准', height='500px',
-                series_opts={'is_smooth': True},
-                datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
-        elif nav_values:
-            nb.chart('perf', {
-                'xAxis': [d.strftime('%Y-%m-%d') for d in dates],
-                'series': [{'name': '策略', 'data': nav_values}],
-            }, title='业绩全景', height='500px',
-                series_opts={'is_smooth': True},
-                datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
+        # ═══════════════════════════════════════════
+        # 模块2：收益走势图
+        # ═══════════════════════════════════════════
+        with nb.section("收益走势图"):
+            if has_bench:
+                d_strs = [d.strftime('%Y-%m-%d') for d in common_dates]
+                nb.chart('perf', {
+                    'xAxis': d_strs,
+                    'series': [
+                        {'name': '策略', 'data': strat_vals.tolist()},
+                        {'name': bench_label, 'data': bench_vals.tolist()},
+                    ],
+                }, height='500px',
+                    series_opts={'is_smooth': True},
+                    datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
+            elif nav_values:
+                nb.chart('perf', {
+                    'xAxis': [d.strftime('%Y-%m-%d') for d in dates],
+                    'series': [{'name': '策略', 'data': nav_values}],
+                }, height='500px',
+                    series_opts={'is_smooth': True},
+                    datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
 
-        # ---- 4. 交易记录 ----
+        # ═══════════════════════════════════════════
+        # 模块3：交易记录
+        # ═══════════════════════════════════════════
         if has_records:
             trades = []
             has_notes = any(getattr(t, 'note', '') for t in self.account.trade_records)
