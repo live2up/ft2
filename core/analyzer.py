@@ -698,7 +698,7 @@ class AccountAnalyzer:
         
         return abs(avg_profit / avg_loss)
 
-    @metric(name='平均持仓时间', group='交易', fmt='.1f', desc='所有交易的平均持仓天数', order=42)
+    @metric(name='平均持仓天数', group='交易', fmt='.1f', desc='所有交易的平均持仓天数', order=42)
     def avg_holding_period(self) -> Optional[float]:
         """计算平均持仓时间"""
         if not self._trade_profits:
