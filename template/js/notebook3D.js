@@ -722,6 +722,200 @@ const StackedChart = {
     `
 };
 
+// ---------- PerfChart - 业绩全景（原始资产值 → 前端自动计算收益+回撤+超额）----------
+const PerfChart = {
+    name: 'PerfChart',
+    props: { cell: { type: Object, required: true } },
+    setup(props) {
+        const chartRef = ref(null);
+        let chartInstance = null;
+        const { isFullscreen, toggleFullscreen } = useFullscreen();
+
+        const hasBenchmark = computed(() => {
+            const series = props.cell.content?.charts?.series || [];
+            return series.length > 1;
+        });
+
+        // ---- 原子函数：从 return2.html 移植 ----
+        const calculateCumulativeReturns = (values, baseIndex) => {
+            if (!values || values.length === 0) return [];
+            if (baseIndex < 0) baseIndex = 0;
+            if (baseIndex >= values.length) baseIndex = values.length - 1;
+            const baseValue = values[baseIndex];
+            return values.map(v => baseValue !== 0 ? ((v - baseValue) / baseValue) * 100 : 0);
+        };
+
+        const calculateDrawdown = (values, baseIndex) => {
+            if (!values || values.length === 0) return [];
+            const drawdowns = [];
+            let maxValue = values[baseIndex] || values[0];
+            for (let i = 0; i < values.length; i++) {
+                if (i < baseIndex) {
+                    drawdowns.push(null);
+                } else {
+                    if (values[i] > maxValue) maxValue = values[i];
+                    drawdowns.push(maxValue !== 0 ? parseFloat(((values[i] - maxValue) / maxValue * 100).toFixed(2)) : 0);
+                }
+            }
+            return drawdowns;
+        };
+
+        // 生成唯一 ID（必须用 ref 才能在模板中访问）
+        const chartId = ref('perf-' + Math.random().toString(36).slice(2, 8));
+
+        // ---- 主渲染 ----
+        const renderChart = () => {
+            const charts = props.cell.content?.charts;
+            if (!charts || !chartRef.value) return;
+            if (chartInstance) chartInstance.dispose();
+
+            const series = charts.series || [];
+            const dates = charts.xAxis?.[0]?.data || [];
+            if (!series.length || !dates.length) return;
+
+            // 提取原始资产值（pyecharts 输出为 [[date, val], ...] 二维格式）
+            const to1D = (d) => {
+                if (!Array.isArray(d) || d.length === 0) return [];
+                return Array.isArray(d[0]) ? d.map(item => item[1]) : d;
+            };
+            const stratData = to1D(series[0]?.data || []);
+            const benchData = series.length > 1 ? to1D(series[1]?.data) : null;
+            const benchName = series.length > 1 ? (series[1]?.name || '基准') : '基准';
+
+            // 初始化
+            chartInstance = echarts.init(chartRef.value);
+            const updateChartData = (startPercent, endPercent) => {
+                const n = dates.length;
+                const startIdx = Math.floor(n * startPercent / 100);
+                const endIdx = Math.min(Math.ceil(n * endPercent / 100) - 1, n - 1);
+                const baseIdx = startIdx > 0 ? startIdx - 1 : 0;
+
+                // 策略收益 + 回撤
+                const stratRets = calculateCumulativeReturns(stratData, baseIdx);
+                const visibleStratRets = stratRets.slice(startIdx, endIdx + 1);
+                const stratDD = calculateDrawdown(stratData.slice(startIdx, endIdx + 1), 0);
+
+                const seriesData = [
+                    { name: series[0]?.name || '策略', type: 'line', smooth: true, symbol: 'none',
+                      xAxisIndex: 0, yAxisIndex: 0, data: visibleStratRets,
+                      lineStyle: { width: 2 }, areaStyle: { opacity: 0.05 } },
+                    { name: '回撤', type: 'line', smooth: true, symbol: 'none',
+                      xAxisIndex: 1, yAxisIndex: 1, data: stratDD,
+                      lineStyle: { width: 2, color: '#e74c3c' }, itemStyle: { color: '#e74c3c' } }
+                ];
+
+                if (benchData) {
+                    const benchRets = calculateCumulativeReturns(benchData, baseIdx);
+                    const visibleBenchRets = benchRets.slice(startIdx, endIdx + 1);
+                    const benchDD = calculateDrawdown(benchData.slice(startIdx, endIdx + 1), 0);
+
+                    seriesData.push(
+                        { name: benchName, type: 'line', smooth: true, symbol: 'none',
+                          xAxisIndex: 0, yAxisIndex: 0, data: visibleBenchRets,
+                          lineStyle: { width: 2 } },
+                        { name: benchName + '回撤', type: 'line', smooth: true, symbol: 'none',
+                          xAxisIndex: 1, yAxisIndex: 1, data: benchDD,
+                          lineStyle: { width: 2 } }
+                    );
+                }
+
+                // 更新统计面板
+                const periodRet = visibleStratRets.length > 0 ? visibleStratRets[visibleStratRets.length - 1].toFixed(2) + '%' : '—';
+                const benchPeriodRet = benchData && visibleStratRets.length > 0 ?
+                    calculateCumulativeReturns(benchData, baseIdx).slice(startIdx, endIdx + 1).pop().toFixed(2) + '%' : '—';
+                const maxDD = stratDD.length > 0 ? Math.min(...stratDD.filter(d => d !== null)).toFixed(2) + '%' : '—';
+                const benchMaxDD = benchData ? (() => {
+                    const bdd = calculateDrawdown(benchData.slice(startIdx, endIdx + 1), 0);
+                    return bdd.length > 0 ? Math.min(...bdd.filter(d => d !== null)).toFixed(2) + '%' : '—';
+                })() : '—';
+
+                const statsEl = document.getElementById('perf-stats-' + chartId.value);
+                if (statsEl) {
+                    statsEl.innerHTML = `
+                        <span class="perf-stat"><em>区间收益</em><strong>${periodRet}</strong></span>
+                        ${benchData ? `<span class="perf-stat"><em>${benchName}</em><strong>${benchPeriodRet}</strong></span>` : ''}
+                        <span class="perf-stat"><em>最大回撤</em><strong style="color:#e74c3c">${maxDD}</strong></span>
+                        ${benchData ? `<span class="perf-stat"><em>${benchName}回撤</em><strong style="color:#e74c3c">${benchMaxDD}</strong></span>` : ''}
+                    `;
+                }
+
+                chartInstance.setOption({
+                    grid: [
+                        { left: 60, right: 30, top: 60, bottom: '45%' },
+                        { left: 60, right: 30, top: '62%', bottom: 30 }
+                    ],
+                    xAxis: [
+                        { type: 'category', gridIndex: 0, data: dates.slice(startIdx, endIdx + 1), axisLabel: { show: false } },
+                        { type: 'category', gridIndex: 1, data: dates.slice(startIdx, endIdx + 1) }
+                    ],
+                    yAxis: [
+                        { gridIndex: 0, type: 'value', name: '收益率(%)', axisLabel: { formatter: '{value}%' } },
+                        { gridIndex: 1, type: 'value', name: '回撤(%)', axisLabel: { formatter: '{value}%' }, max: 0 }
+                    ],
+                    series: seriesData,
+                    tooltip: {
+                        trigger: 'axis',
+                        formatter: params => {
+                            let res = params[0].name + '<br/>';
+                            params.forEach(p => {
+                                if (p.data === null) return;
+                                res += p.marker + p.seriesName + ': ' + p.data.toFixed(2) + '%<br/>';
+                            });
+                            return res;
+                        }
+                    },
+                    legend: [
+                        { data: seriesData.filter(s => s.yAxisIndex === 0).map(s => s.name), top: 25 },
+                        { data: seriesData.filter(s => s.yAxisIndex === 1).map(s => s.name), top: '60%' }
+                    ],
+                    dataZoom: [
+                        { type: 'inside', xAxisIndex: [0, 1], start: startPercent, end: endPercent },
+                        { type: 'slider', xAxisIndex: [0, 1], start: startPercent, end: endPercent, height: 30, bottom: 0 }
+                    ],
+                    color: ['#e74c3c', '#1890ff', '#ffa500', '#52c41a', '#722ed1', '#13c2c2']
+                }, true);
+            };
+
+            updateChartData(0, 100);
+
+            // dataZoom 事件
+            chartInstance.on('datazoom', (params) => {
+                const opt = chartInstance.getOption();
+                const zoom = opt.dataZoom.find(z => z.type === 'slider') || opt.dataZoom[0];
+                if (zoom) updateChartData(zoom.start, zoom.end);
+            });
+        };
+
+        const handleResize = () => { if (chartInstance) chartInstance.resize(); };
+
+        onMounted(() => {
+            nextTick(() => {
+                renderChart();
+                window.__resizeManager?.register?.(handleResize);
+            });
+        });
+        onUnmounted(() => {
+            window.__resizeManager?.unregister?.(handleResize);
+            chartInstance?.dispose();
+        });
+
+        return { chartRef, chartId, isFullscreen, toggleFullscreen, hasBenchmark };
+    },
+    template: `
+        <div class="chart-wrapper" :class="{ 'chart-fullscreen': isFullscreen }">
+            <div class="chart-container chart-container-main"
+                 ref="chartRef" :id="'perf-chart-' + chartId"
+                 :style="{ width: '100%', height: (cell.content?.height || '500px') }"></div>
+            <div class="perf-stats-panel" :id="'perf-stats-' + chartId">
+                <span class="perf-stat"><em>拖拽选择区间查看统计</em></span>
+            </div>
+            <div class="chart-controls">
+                <button class="chart-control-btn" @click="toggleFullscreen" title="全屏">⛶</button>
+            </div>
+        </div>
+    `
+};
+
 // ---------- GridChart ----------
 const GridChart = {
     name: 'GridChart',
@@ -938,13 +1132,16 @@ const ChartRenderer = {
         GenericChart,
         PieChart,
         HeatmapChart,
-        StackedChart
+        StackedChart,
+        PerfChart
     },
     props: { cell: { type: Object, required: true } },
     setup(props) {
         const chartType = computed(() => {
             const charts = props.cell.content?.charts;
             if (!charts) return 'generic';
+            // [新增] 2026-06-02 perf 类型优先识别
+            if (props.cell.content?.chartType === 'perf') return 'perf';
             if (Array.isArray(charts.grid) && charts.grid.length > 1) return 'grid';
             const type = charts.series?.[0]?.type;
             if (charts.series?.some(s => s.stack)) return 'stacked';
@@ -953,7 +1150,8 @@ const ChartRenderer = {
         return { chartType };
     },
     template: `
-        <grid-chart v-if="chartType === 'grid'" :cell="cell" />
+        <perf-chart v-if="chartType === 'perf'" :cell="cell" />
+        <grid-chart v-else-if="chartType === 'grid'" :cell="cell" />
         <pie-chart v-else-if="chartType === 'pie'" :cell="cell" />
         <heatmap-chart v-else-if="chartType === 'heatmap'" :cell="cell" />
         <stacked-chart v-else-if="chartType === 'stacked'" :cell="cell" />

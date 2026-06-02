@@ -620,7 +620,7 @@ class CellBuilder:
         option_dict = json.loads(chart.dump_options())
         return Cell(
             CellType.CHART,
-            {"charts": option_dict, "width": width, "height": height}
+            {"charts": option_dict, "width": width, "height": height, "chartType": chart_type}
         )
     
     @staticmethod

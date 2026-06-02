@@ -472,14 +472,14 @@ class AccountAnalyzer:
         sliced_data = sliced_data_info['daily_assets']
         
         dates = sorted(sliced_data.keys())
-        days = (dates[-1] - dates[0]).days
+        trading_days = len(dates) - 1
         
-        if days == 0:
+        if trading_days <= 0:
             return 0
         if interval_return <= -1:
             return None
         
-        return ((1 + interval_return) ** (365 / days)) - 1
+        return ((1 + interval_return) ** (252 / trading_days)) - 1
 
     @metric(name='年化波动率', group='风险', fmt='.1%', desc='衡量资产价格的波动程度', order=20)
     def volatility(self) -> Optional[float]:
@@ -981,7 +981,7 @@ class AccountAnalyzer:
                 s_rets = (strat_vals[1:] - strat_vals[:-1]) / strat_vals[:-1]
                 b_rets = (bench_vals[1:] - bench_vals[:-1]) / bench_vals[:-1]
                 excess_daily = s_rets - b_rets
-                days_n = len(common_dates) - 1
+                days_n = len(common_dates) - 1  # 交易日，行业标准 252 口径
 
                 # 超额指标
                 s_total = strat_vals[-1] / strat_vals[0] - 1
@@ -990,7 +990,7 @@ class AccountAnalyzer:
                     (1 + s_total) / (1 + b_total) - 1
                 ) if b_total > -1 else None
                 ann_excess = (
-                    (1 + excess_total) ** (365 / days_n) - 1
+                    (1 + excess_total) ** (252 / days_n) - 1
                 ) if excess_total is not None and days_n > 0 else None
                 te = np.std(excess_daily) * np.sqrt(252) if len(excess_daily) > 0 else None
                 ir = ann_excess / te if ann_excess is not None and te and te > 0 else None
