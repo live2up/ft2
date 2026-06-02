@@ -730,11 +730,41 @@ const PerfChart = {
         const chartRef = ref(null);
         let chartInstance = null;
         const { isFullscreen, toggleFullscreen } = useFullscreen();
+        const datesRef = ref([]);            // [新增] 日期数组，供区间跳转使用
+        const selectedRange = ref('all');    // [新增] 当前选中区间
 
         const hasBenchmark = computed(() => {
             const series = props.cell.content?.charts?.series || [];
             return series.length > 1;
         });
+
+        // [新增] 2026-06-02 区间切换按钮
+        let _zoomJumping = false;
+        const jumpToRange = (range) => {
+            if (!chartInstance || !datesRef.value.length) return;
+            selectedRange.value = range;
+            const n = datesRef.value.length;
+            _zoomJumping = true;
+            if (range === 'all') {
+                chartInstance.dispatchAction({ type: 'dataZoom', start: 0, end: 100 });
+                return;
+            }
+            const lastDate = new Date(datesRef.value[n - 1]);
+            let target = new Date(lastDate);
+            switch (range) {
+                case '1y': target.setFullYear(target.getFullYear() - 1); break;
+                case '6m': target.setMonth(target.getMonth() - 6); break;
+                case '3m': target.setMonth(target.getMonth() - 3); break;
+                default: return;
+            }
+            const ts = target.toISOString().slice(0, 10);
+            let startIdx = 0;
+            for (let i = 0; i < n; i++) {
+                if (datesRef.value[i] >= ts) { startIdx = i; break; }
+            }
+            const pct = Math.max(0, (startIdx / n) * 100);
+            chartInstance.dispatchAction({ type: 'dataZoom', start: pct, end: 100 });
+        };
 
         // ---- 原子函数：从 return2.html 移植 ----
         const calculateCumulativeReturns = (values, baseIndex) => {
@@ -778,6 +808,7 @@ const PerfChart = {
 
             const series = charts.series || [];
             const dates = charts.xAxis?.[0]?.data || [];
+            datesRef.value = dates;  // [新增] 存储日期供区间跳转
             if (!series.length || !dates.length) return;
 
             // 提取原始资产值（pyecharts 输出为 [[date, val], ...] 二维格式）
@@ -792,45 +823,55 @@ const PerfChart = {
 
             // 初始化
             chartInstance = echarts.init(chartRef.value);
+            // [对齐] 2026-06-02 参考 return2.html：X轴始终全日期，dataZoom 控制可见区间，选区间重定基准
+            const fullDates = dates;
             const updateChartData = (startPercent, endPercent) => {
                 const n = dates.length;
                 const startIdx = Math.floor(n * startPercent / 100);
                 const endIdx = Math.min(Math.ceil(n * endPercent / 100) - 1, n - 1);
                 const baseIdx = startIdx > 0 ? startIdx - 1 : 0;
 
-                // 策略收益 + 回撤
+                // 策略收益：以 baseIdx 为基准，baseIdx 之前 null，之后显示累计收益
                 const stratRets = calculateCumulativeReturns(stratData, baseIdx);
+                const fullStratRets = new Array(baseIdx).fill(null).concat(stratRets.slice(baseIdx));
                 const visibleStratRets = stratRets.slice(startIdx, endIdx + 1);
+
+                // 策略回撤：仅可见区间净值计算，startIdx 之前 null
                 const stratDD = calculateDrawdown(stratData.slice(startIdx, endIdx + 1), 0);
+                const fullStratDD = new Array(startIdx).fill(null).concat(stratDD);
 
                 const seriesData = [
                     { name: stratName, type: 'line', smooth: true, symbol: 'none',
-                      xAxisIndex: 0, yAxisIndex: 0, data: visibleStratRets,
+                      xAxisIndex: 0, yAxisIndex: 0, data: fullStratRets,
                       lineStyle: { width: 2 }, areaStyle: { opacity: 0.05 } },
                     { name: '回撤', type: 'line', smooth: true, symbol: 'none',
-                      xAxisIndex: 1, yAxisIndex: 1, data: stratDD,
+                      xAxisIndex: 1, yAxisIndex: 1, data: fullStratDD,
                       lineStyle: { width: 2, color: '#e74c3c' }, itemStyle: { color: '#e74c3c' } }
                 ];
 
                 let visibleBenchRets = null;
                 let benchDD = null;
+                let fullBenchDD = null;
                 if (benchData) {
                     const benchRets = calculateCumulativeReturns(benchData, baseIdx);
+                    const fullBenchRets = new Array(baseIdx).fill(null).concat(benchRets.slice(baseIdx));
                     visibleBenchRets = benchRets.slice(startIdx, endIdx + 1);
                     benchDD = calculateDrawdown(benchData.slice(startIdx, endIdx + 1), 0);
+                    fullBenchDD = new Array(startIdx).fill(null).concat(benchDD);
 
-                    // [新增] 超额收益曲线
+                    // 超额收益：可见区间策略-基准差，startIdx 之前 null
                     const excessRets = calculateExcessReturns(visibleStratRets, visibleBenchRets);
+                    const fullExcessRets = new Array(startIdx).fill(null).concat(excessRets);
 
                     seriesData.push(
                         { name: benchName, type: 'line', smooth: true, symbol: 'none',
-                          xAxisIndex: 0, yAxisIndex: 0, data: visibleBenchRets,
+                          xAxisIndex: 0, yAxisIndex: 0, data: fullBenchRets,
                           lineStyle: { width: 2 } },
                         { name: '超额', type: 'line', smooth: true, symbol: 'none',
-                          xAxisIndex: 0, yAxisIndex: 0, data: excessRets,
+                          xAxisIndex: 0, yAxisIndex: 0, data: fullExcessRets,
                           lineStyle: { width: 2, type: 'dashed' } },
                         { name: benchName + '回撤', type: 'line', smooth: true, symbol: 'none',
-                          xAxisIndex: 1, yAxisIndex: 1, data: benchDD,
+                          xAxisIndex: 1, yAxisIndex: 1, data: fullBenchDD,
                           lineStyle: { width: 2, color: '#1890ff' }, itemStyle: { color: '#1890ff' } }
                     );
                 }
@@ -890,8 +931,8 @@ const PerfChart = {
                         { left: ECHART_PAD.left, right: ECHART_PAD.right, top: '75%', bottom: '8%' }
                     ],
                     xAxis: [
-                        { type: 'category', gridIndex: 0, data: dates.slice(startIdx, endIdx + 1), axisLabel: { show: false } },
-                        { type: 'category', gridIndex: 1, data: dates.slice(startIdx, endIdx + 1), axisLabel: { show: false } }
+                        { type: 'category', gridIndex: 0, data: fullDates, axisLabel: { show: false } },
+                        { type: 'category', gridIndex: 1, data: fullDates, axisLabel: { show: false } }
                     ],
                     yAxis: [
                         { gridIndex: 0, type: 'value', name: '收益率(%)', nameLocation: 'end', nameGap: 10,
@@ -948,6 +989,8 @@ const PerfChart = {
 
             // dataZoom 事件
             chartInstance.on('datazoom', (params) => {
+                if (_zoomJumping) { _zoomJumping = false; }
+                else selectedRange.value = null;  // 手动拖拽 → 取消按钮高亮
                 const opt = chartInstance.getOption();
                 const zoom = opt.dataZoom.find(z => z.type === 'slider') || opt.dataZoom[0];
                 if (zoom) updateChartData(zoom.start, zoom.end);
@@ -967,10 +1010,16 @@ const PerfChart = {
             chartInstance?.dispose();
         });
 
-        return { chartRef, chartId, isFullscreen, toggleFullscreen, hasBenchmark };
+        return { chartRef, chartId, isFullscreen, toggleFullscreen, hasBenchmark, selectedRange, jumpToRange };
     },
     template: `
         <div class="chart-wrapper" :class="{ 'chart-fullscreen': isFullscreen }">
+            <div class="perf-range-btns">
+                <button @click="jumpToRange('all')" :class="{ active: selectedRange === 'all' }">成立来</button>
+                <button @click="jumpToRange('1y')" :class="{ active: selectedRange === '1y' }">近一年</button>
+                <button @click="jumpToRange('6m')" :class="{ active: selectedRange === '6m' }">近半年</button>
+                <button @click="jumpToRange('3m')" :class="{ active: selectedRange === '3m' }">近三月</button>
+            </div>
             <div class="chart-container chart-container-main"
                  ref="chartRef" :id="'perf-chart-' + chartId"
                  :style="{ width: '100%', height: (cell.content?.height || '500px') }"></div>

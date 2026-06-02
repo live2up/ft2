@@ -510,6 +510,33 @@ body {
     color: #37352f;
 }
 
+/* PerfChart 区间切换按钮 */
+.perf-range-btns {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+.perf-range-btns button {
+    padding: 4px 12px;
+    border: 1px solid #e0e0e0;
+    background: #fff;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #666;
+    transition: all 0.15s;
+}
+.perf-range-btns button:hover {
+    border-color: #9b51e0;
+    color: #9b51e0;
+}
+.perf-range-btns button.active {
+    background: #9b51e0;
+    border-color: #9b51e0;
+    color: #fff;
+}
+
 /* 图表容器 */
 .chart-container,
 .pyecharts-container {
