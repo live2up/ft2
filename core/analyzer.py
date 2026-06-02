@@ -1077,12 +1077,13 @@ class AccountAnalyzer:
                 trade_m = []
                 for _, name, val, desc in grouped['交易']:
                     trade_m.append({'指标': name, '数值': val})
-                avg_p = self.avg_profit(mode='amount')
-                avg_l = self.avg_loss(mode='amount')
-                if avg_p is not None:
-                    trade_m.append({'指标': '平均盈利', '数值': f"{avg_p:,.0f}"})
-                if avg_l is not None:
-                    trade_m.append({'指标': '平均亏损', '数值': f"{avg_l:,.0f}"})
+                avg_p = self.avg_profit(mode='percentage')
+                avg_l = self.avg_loss(mode='percentage')
+                if avg_p is not None and avg_l is not None:
+                    for item in trade_m:
+                        if item['指标'] == '平均盈亏比':
+                            item['数值'] = f"{item['数值']}（盈 +{avg_p*100:.1f}% / 亏 {avg_l*100:.1f}%）"
+                            break
                 nb.table(trade_m, columns=['指标', '数值'])
 
         # ═══════════════════════════════════════════
@@ -1193,6 +1194,16 @@ class AccountAnalyzer:
                 })
         for items in groups.values():
             items.sort(key=lambda x: x['order'])
+
+        # 平均盈亏比附加盈亏百分比
+        if '交易' in groups:
+            avg_p = self.avg_profit(mode='percentage')
+            avg_l = self.avg_loss(mode='percentage')
+            if avg_p is not None and avg_l is not None:
+                for item in groups['交易']:
+                    if item['指标名称'] == '平均盈亏比':
+                        item['数值'] = f"{item['数值']}（盈 +{avg_p*100:.1f}% / 亏 {avg_l*100:.1f}%）"
+                        break
 
         # 基准对比（复用 to_notebook 逻辑）
         cmp_rows = []
