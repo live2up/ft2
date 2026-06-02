@@ -1,7 +1,12 @@
 /**
  * Notebook Vue3 - Vue 3 组合式 API 版本的 Notebook 应用逻辑
  * 组件模式 + Composable 复用逻辑
- * 
+ *
+ * v2.1 — 2026-06-02
+ *   新增: PerfChart 业绩全景组件(超额收益/回撤/图例联动/区间选择)
+ *   重构: 全屏统一 chart-zoomed、按钮统一 tool-btn
+ *   优化: 布局间距紧凑化
+ *
  * v2.0 — 2026-05-17
  *   新增: 滚动轴(line/area/bar/kline)、全屏(五个组件)
  *   重构: float → flex 统一布局
@@ -993,7 +998,8 @@ const PerfChart = {
                         { type: 'slider', xAxisIndex: [0, 1], start: startPercent, end: endPercent,
                           height: 40, bottom: 0, left: ECHART_PAD.left, right: ECHART_PAD.right }
                     ],
-                    color: ['#e74c3c', '#1890ff', '#ffa500', '#52c41a', '#722ed1', '#13c2c2']
+                    color: ['#e74c3c', '#1890ff', '#ffa500', '#52c41a', '#722ed1', '#13c2c2'],
+                    animation: false
                 }, true);
             };
 
@@ -1028,15 +1034,16 @@ const PerfChart = {
         };
 
         const handleResize = () => { if (chartInstance) chartInstance.resize(); };
+        let _unregResize = null;
 
         onMounted(() => {
             nextTick(() => {
                 renderChart();
-                window.__resizeManager?.register?.(handleResize);
+                _unregResize = window.__resizeManager?.register?.(handleResize);
             });
         });
         onUnmounted(() => {
-            window.__resizeManager?.unregister?.(handleResize);
+            if (_unregResize) _unregResize();
             chartInstance?.dispose();
         });
 
