@@ -1044,51 +1044,68 @@ class AccountAnalyzer:
                         {'指标': '日超额胜率', '策略': _fmt(day_win, '.1%'), bench_label: '—'})
 
         # ═══════════════════════════════════════════
-        # [重构] 2026-06-02 根据是否有基准分两路输出
-        #   无基准 → 原有三段式（回测指标 → 收益分析 → 交易明细）
-        #   有基准 → 对比前置（核心对比 → 策略详情[折叠] → 交易明细）
-        #   内联函数复用 section 构建逻辑，避免代码重复
+        # [重构] 2026-06-02 统一四段式：基础指标 → 交易指标 → 业绩图 → 交易记录
+        #   有/无基准共用模板，仅基础指标和业绩图内容不同
         # ═══════════════════════════════════════════
 
-        # 内联：回测指标 section
-        def _section_metrics(collapsed=False):
-            with nb.section("回测指标", collapsed=collapsed if collapsed else None):
-                nb.metrics(info_m, title="基础指标", columns=4)
-                for group_name in ('收益', '风险', '交易'):
-                    if group_name not in grouped:
-                        continue
-                    if group_name == '交易' and not has_records:
-                        continue
-                    metrics_list = []
-                    for _, name, val, desc in grouped[group_name]:
-                        item = {'name': name, 'value': val}
-                        if desc:
-                            item['desc'] = desc
-                        metrics_list.append(item)
-                    if group_name == '交易':
-                        avg_p = self.avg_profit(mode='amount')
-                        avg_l = self.avg_loss(mode='amount')
-                        if avg_p is not None:
-                            metrics_list.append({'name': '平均盈利', 'value': f"{avg_p:,.0f}"})
-                        if avg_l is not None:
-                            metrics_list.append({'name': '平均亏损', 'value': f"{avg_l:,.0f}"})
-                    nb.metrics(metrics_list, title=f"{group_name}指标", columns=4)
+        has_bench = self._bench_assets and has_bench_data
 
-        # 内联：收益分析 section（净值+回撤，前端自动计算）
-        def _section_nav(collapsed=False):
-            with nb.section("收益分析", collapsed=collapsed if collapsed else None):
-                if nav_values:
-                    nb.chart('perf', {
-                        'xAxis': [d.strftime('%Y-%m-%d') for d in dates],
-                        'series': [{'name': '策略', 'data': nav_values}],
-                    }, title='业绩全景', height='500px',
-                        series_opts={'is_smooth': True},
-                        datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
+        # ---- 1. 基础指标 ----
+        base_items = []
+        for k, v in info_m.items():
+            base_items.append({'name': k, 'value': v})
+        for group_name in ('收益', '风险'):
+            if group_name in grouped:
+                for _, name, val, desc in grouped[group_name]:
+                    item = {'name': name, 'value': val}
+                    if desc:
+                        item['desc'] = desc
+                    base_items.append(item)
 
-        # 内联：交易明细 section
-        def _section_trades():
-            if not has_records:
-                return
+        if has_bench:
+            with nb.section("基础指标"):
+                nb.table(cmp_rows, title=f"策略 vs {bench_label} 指标对比",
+                         columns=['指标', '策略', bench_label])
+        else:
+            with nb.section("基础指标"):
+                nb.metrics(base_items, columns=5)
+
+        # ---- 2. 交易指标 ----
+        if has_records and '交易' in grouped:
+            trade_m = []
+            for _, name, val, desc in grouped['交易']:
+                trade_m.append({'指标': name, '数值': val})
+            avg_p = self.avg_profit(mode='amount')
+            avg_l = self.avg_loss(mode='amount')
+            if avg_p is not None:
+                trade_m.append({'指标': '平均盈利', '数值': f"{avg_p:,.0f}"})
+            if avg_l is not None:
+                trade_m.append({'指标': '平均亏损', '数值': f"{avg_l:,.0f}"})
+            with nb.section("交易指标"):
+                nb.table(trade_m, columns=['指标', '数值'])
+
+        # ---- 3. 业绩图 ----
+        if has_bench:
+            d_strs = [d.strftime('%Y-%m-%d') for d in common_dates]
+            nb.chart('perf', {
+                'xAxis': d_strs,
+                'series': [
+                    {'name': '策略', 'data': strat_vals.tolist()},
+                    {'name': bench_label, 'data': bench_vals.tolist()},
+                ],
+            }, title='策略 vs 基准', height='500px',
+                series_opts={'is_smooth': True},
+                datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
+        elif nav_values:
+            nb.chart('perf', {
+                'xAxis': [d.strftime('%Y-%m-%d') for d in dates],
+                'series': [{'name': '策略', 'data': nav_values}],
+            }, title='业绩全景', height='500px',
+                series_opts={'is_smooth': True},
+                datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
+
+        # ---- 4. 交易记录 ----
+        if has_records:
             trades = []
             has_notes = any(getattr(t, 'note', '') for t in self.account.trade_records)
             for t in self.account.trade_records:
@@ -1104,42 +1121,8 @@ class AccountAnalyzer:
                 if has_notes:
                     row['备注'] = getattr(t, 'note', '')
                 trades.append(row)
-            with nb.section("交易明细", collapsed=True):
-                nb.table(trades, page={'size': 20})
-
-        # ═══════════════════════════════════════════
-        # 分支输出
-        # ═══════════════════════════════════════════
-        if self._bench_assets and has_bench_data:
-            # ===== 有基准：对比前置 =====
-
-            with nb.section("核心对比"):
-                # 对比 Table
-                nb.table(cmp_rows, title=f"策略 vs {bench_label} 指标对比",
-                         columns=['指标', '策略', bench_label])
-
-                # 净值叠加图（原始资产值，前端自动算收益+回撤+超额）
-                d_strs = [d.strftime('%Y-%m-%d') for d in common_dates]
-                nb.chart('perf', {
-                    'xAxis': d_strs,
-                    'series': [
-                        {'name': '策略', 'data': strat_vals.tolist()},
-                        {'name': bench_label, 'data': bench_vals.tolist()},
-                    ],
-                }, title='业绩对比', height='500px',
-                    series_opts={'is_smooth': True},
-                    datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
-
-            # 策略自身指标（折叠，已经在对比里看过主要信息）
-            _section_metrics(collapsed=True)
-            _section_nav(collapsed=True)
-            _section_trades()
-
-        else:
-            # ===== 无基准：原有三段式（不变）=====
-            _section_metrics()
-            _section_nav()
-            _section_trades()
+            with nb.section("交易记录"):
+                nb.table(trades, page={'size': 10})
 
         return nb.export_html()
 
