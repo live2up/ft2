@@ -860,6 +860,162 @@ class AccountAnalyzer:
         return sorted(self._trade_profits, key=lambda t: t['profit'])[:n]
 
     # ------------------------------------------------------------------------
+    # 统一数据准备层
+    # ------------------------------------------------------------------------
+    @staticmethod
+    def _fmt(val, t='.1%'):
+        """格式化指标值，Python format 规范 ('.1%', '.2%', '.2f')"""
+        if val is None: return 'N/A'
+        if isinstance(val, tuple): val = val[0]
+        if t.endswith('%'):
+            d = int(t[1:-1])
+            return f"{val*100:.{d}f}%"
+        if t.endswith('f'):
+            d = int(t[1:-1])
+            return f"{val:.{d}f}"
+        return str(val)
+
+    def _build_report_data(self):
+        """[重构] 2026-06-02 统一数据准备，消除 to_notebook/to_excel 重复逻辑
+        
+        Returns:
+            dict: {
+                'nav_values': list, 'dates': list, 'info_m': dict,
+                'grouped': dict, 'base_items': list, 'has_records': bool,
+                'has_bench': bool, 'cmp_rows': list, 'bench_label': str,
+                'common_dates': list, 'strat_vals': np.array, 'bench_vals': np.array,
+            }
+        """
+        dates = sorted(self._daily_assets.keys())
+        assets = self._daily_assets
+        nav_values = [assets[d] for d in dates] if len(dates) >= 2 else []
+        all_metrics = self.metrics()
+
+        # 基础信息
+        info_m = {}
+        if dates and len(dates) >= 2:
+            info_m['开始日期'] = dates[1].strftime('%Y-%m-%d')
+            info_m['结束日期'] = dates[-1].strftime('%Y-%m-%d')
+        initial_cash = self.account.snapshots[0].cash if self.account and self.account.snapshots else 0
+        final_nav = self.account.snapshots[-1].nav if self.account and self.account.snapshots else 0
+        if initial_cash > 0:
+            info_m['初始资金'] = f"{initial_cash:,.0f}"
+        if final_nav > 0:
+            info_m['最终资产'] = f"{final_nav:,.0f}"
+
+        # 指标分组
+        has_records = bool(self.account and self.account.trade_records)
+        grouped = {}
+        for m in all_metrics.values():
+            g = m.get('group', '')
+            if not g:
+                continue
+            val = m['value']
+            if isinstance(val, tuple):
+                val = val[0]
+            if val is not None and not (isinstance(val, float) and val == float('inf')):
+                grouped.setdefault(g, []).append(
+                    (m['order'], m['name'], self._fmt(val, m.get('fmt', '.1%')), m.get('desc', ''))
+                )
+        for items in grouped.values():
+            items.sort(key=lambda x: x[0])
+
+        # 基础指标（无基准时使用）
+        base_items = []
+        for k, v in info_m.items():
+            base_items.append({'name': k, 'value': v})
+        for group_name in ('收益', '风险'):
+            if group_name in grouped:
+                for _, name, val, desc in grouped[group_name]:
+                    item = {'name': name, 'value': val}
+                    if desc:
+                        item['desc'] = desc
+                    base_items.append(item)
+
+        # 交易指标：盈亏比附加百分比
+        if has_records and '交易' in grouped:
+            avg_p = self.avg_profit(mode='percentage')
+            avg_l = self.avg_loss(mode='percentage')
+            if avg_p is not None and avg_l is not None:
+                for items in grouped['交易']:
+                    if items[1] == '平均盈亏比':
+                        idx = grouped['交易'].index(items)
+                        grouped['交易'][idx] = (items[0], items[1],
+                            f"{items[2]}（盈 +{avg_p*100:.1f}% / 亏 {avg_l*100:.1f}%）", items[3])
+                        break
+
+        # 基准对比
+        cmp_rows = []
+        has_bench_data = False
+        common_dates = []
+        strat_vals = np.array([])
+        bench_vals = np.array([])
+        bench_label = self._bench_label or '基准'
+        if self._bench_assets:
+            bench_all = dict(self._bench_assets)
+            strat_dates = sorted(self._daily_assets.keys())
+            bench_dates = sorted(bench_all.keys())
+            for d in strat_dates:
+                if d < bench_dates[0]:
+                    bench_all[d] = bench_all[bench_dates[0]]
+            common_dates = sorted(set(self._daily_assets.keys()) & set(bench_all.keys()))
+            if len(common_dates) >= 2:
+                has_bench_data = True
+                strat_vals = np.array([self._daily_assets[d] for d in common_dates])
+                bench_vals = np.array([bench_all[d] for d in common_dates])
+                bench_aligned = {d: bench_all[d] for d in common_dates}
+                bench_temp = AccountAnalyzer(daily_assets=bench_aligned)
+                bench_all_m = bench_temp.metrics()
+
+                sorted_metrics = sorted(all_metrics.values(), key=lambda m: m.get('order', 99))
+                for s_m in sorted_metrics:
+                    name = s_m['name']
+                    if name not in bench_all_m:
+                        continue
+                    b_m = bench_all_m[name]
+                    if b_m.get('group') == '交易':
+                        continue
+                    s_v = s_m['value']
+                    b_v = b_m['value']
+                    if isinstance(s_v, tuple): s_v = s_v[0]
+                    if isinstance(b_v, tuple): b_v = b_v[0]
+                    fmt = s_m.get('fmt', '.1%')
+                    cmp_rows.append({
+                        '指标': s_m['name'],
+                        '策略': self._fmt(s_v, fmt),
+                        bench_label: self._fmt(b_v, fmt),
+                    })
+                # 超额指标
+                s_total = strat_vals[-1] / strat_vals[0] - 1
+                b_total = bench_vals[-1] / bench_vals[0] - 1
+                excess_total = (1 + s_total) / (1 + b_total) - 1 if b_total > -1 else None
+                days_n = len(common_dates) - 1
+                if excess_total is not None:
+                    cmp_rows.append({'指标': '超额收益', '策略': self._fmt(excess_total, '.1%'), bench_label: '—'})
+                    if days_n > 0:
+                        ann_excess = (1 + excess_total) ** (252 / days_n) - 1
+                        cmp_rows.append({'指标': '年化超额', '策略': self._fmt(ann_excess, '.1%'), bench_label: '—'})
+                        s_rets = (strat_vals[1:] - strat_vals[:-1]) / strat_vals[:-1]
+                        b_rets = (bench_vals[1:] - bench_vals[:-1]) / bench_vals[:-1]
+                        excess_daily = s_rets - b_rets
+                        te = np.std(excess_daily) * np.sqrt(252)
+                        ir = ann_excess / te if te > 0 else None
+                        if ir is not None:
+                            cmp_rows.append({'指标': '信息比率', '策略': f'{ir:.2f}', bench_label: '—'})
+                        cmp_rows.append({'指标': '跟踪误差', '策略': self._fmt(te, '.1%'), bench_label: '—'})
+                        day_win = np.mean(excess_daily > 0)
+                        cmp_rows.append({'指标': '日超额胜率', '策略': self._fmt(day_win, '.1%'), bench_label: '—'})
+
+        has_bench = bool(self._bench_assets and has_bench_data)
+
+        return {
+            'nav_values': nav_values, 'dates': dates, 'info_m': info_m,
+            'grouped': grouped, 'base_items': base_items, 'has_records': has_records,
+            'has_bench': has_bench, 'cmp_rows': cmp_rows, 'bench_label': bench_label,
+            'common_dates': common_dates, 'strat_vals': strat_vals, 'bench_vals': bench_vals,
+        }
+
+    # ------------------------------------------------------------------------
     # 导出方法
     # ------------------------------------------------------------------------
 
@@ -883,228 +1039,45 @@ class AccountAnalyzer:
         #   顶层KPI → 基础信息(日期/资金) → 指标汇总(收益+风险+交易) →
         #   收益分析(净值+回撤图表) → 交易明细(表格,折叠)
         from notebook import Notebook
-        import numpy as np
 
         nb = Notebook(title)
-        # [修复] 2026-05-30 Notebook 在 analyzer.py 内部创建，
-        #   base_dir 会指向 core/ 而非调用者目录，需手动纠正
         nb.base_dir = self.base_dir
-        assets = self._daily_assets
-        dates = sorted(assets.keys()) if assets else []
 
-        def _fmt(val, t='.1%'):
-            """格式化指标值，遵循 Python format 规范 ('.1%', '.2%', '.2f', '.1f')"""
-            if val is None:
-                return 'N/A'
-            if isinstance(val, tuple):
-                val = val[0]
-            if t.endswith('%'):
-                d = int(t[1:-1])
-                return f"{val*100:.{d}f}%"
-            if t.endswith('f'):
-                d = int(t[1:-1])
-                return f"{val:.{d}f}"
-            return str(val)
+        # 统一数据准备
+        d = self._build_report_data()
 
-
-
-        has_records = self.account and self.account.trade_records
-
-        # 预计算（供 section 内使用）
-        initial_cash = self.account.snapshots[0].cash if self.account and self.account.snapshots else 0
-        final_nav = self.account.snapshots[-1].nav if self.account and self.account.snapshots else 0
-
-        # 净值数据（图表共用）
-        nav_values = []
-        if dates and len(dates) >= 2:
-            nav_values = [assets[d] for d in dates]
-
-        # [重构] 2026-05-30 指标改为 @metric(group=...) 自动分组驱动
-        #   新增指标只需加 @metric(group='xxx')，无需修改此处
-        all_metrics = self.metrics()
-
-        # 基础信息（非 @metric，单独处理）
-        info_m = {}
-        if dates and len(dates) >= 2:
-            info_m['开始日期'] = dates[1].strftime('%Y-%m-%d')
-            info_m['结束日期'] = dates[-1].strftime('%Y-%m-%d')
-        if initial_cash > 0:
-            info_m['初始资金'] = f"{initial_cash:,.0f}"
-        if final_nav > 0:
-            info_m['最终资产'] = f"{final_nav:,.0f}"
-
-        # 按 group 分组指标（组内按 order 排序，附带 desc，根据指标类型判断格式）
-        grouped = {}
-        for m in all_metrics.values():
-            g = m.get('group', '')
-            if not g:
-                continue
-            val = m['value']
-            if isinstance(val, tuple):
-                val = val[0]
-            if val is not None and not (isinstance(val, float) and val == float('inf')):
-                # 使用 @metric 声明的 fmt 格式（默认 .1%）
-                fmt_val = _fmt(val, m.get('fmt', '.1%'))
-                grouped.setdefault(g, []).append(
-                    (m['order'], m['name'], fmt_val, m.get('desc', ''))
-                )
-        for items in grouped.values():
-            items.sort(key=lambda x: x[0])
-
-        # ═══════════════════════════════════════════
-        # [新增] 2026-06-02 基准对比数据预计算（懒加载）
-        #   指标通过临时 AccountAnalyzer 计算，与策略同构对齐
-        # ═══════════════════════════════════════════
-        has_bench_data = False
-        if self._bench_assets:
-            bench_label = self._bench_label or '基准'
-            strat_all = self._daily_assets
-            bench_all = dict(self._bench_assets)  # 拷贝，避免修改原始数据
-
-            # [修复] 2026-06-02 基准向前扩展到策略 init 日期
-            #   基准买入持有在前收盘价入场，策略可在盘中交易，
-            #   两者都应从同一基线日期起算。扩展部分填基准首日值。
-            strat_dates = sorted(strat_all.keys())
-            bench_dates = sorted(bench_all.keys())
-            for d in strat_dates:
-                if d < bench_dates[0]:
-                    bench_all[d] = bench_all[bench_dates[0]]
-
-            # 日期对齐：取交集
-            common_dates = sorted(set(strat_all.keys()) & set(bench_all.keys()))
-            if len(common_dates) >= 2:
-                has_bench_data = True
-                strat_vals = np.array([strat_all[d] for d in common_dates])
-                bench_vals = np.array([bench_all[d] for d in common_dates])
-
-                # 日收益率 & 超额
-                s_rets = (strat_vals[1:] - strat_vals[:-1]) / strat_vals[:-1]
-                b_rets = (bench_vals[1:] - bench_vals[:-1]) / bench_vals[:-1]
-                excess_daily = s_rets - b_rets
-                days_n = len(common_dates) - 1  # 交易日，行业标准 252 口径
-
-                # 超额指标
-                s_total = strat_vals[-1] / strat_vals[0] - 1
-                b_total = bench_vals[-1] / bench_vals[0] - 1
-                excess_total = (
-                    (1 + s_total) / (1 + b_total) - 1
-                ) if b_total > -1 else None
-                ann_excess = (
-                    (1 + excess_total) ** (252 / days_n) - 1
-                ) if excess_total is not None and days_n > 0 else None
-                te = np.std(excess_daily) * np.sqrt(252) if len(excess_daily) > 0 else None
-                ir = ann_excess / te if ann_excess is not None and te and te > 0 else None
-                day_win = np.mean(excess_daily > 0) if len(excess_daily) > 0 else None
-
-                # [新增] 懒计算基准指标：用策略日期对齐后的净值创建临时 AccountAnalyzer
-                bench_aligned = {d: bench_all[d] for d in common_dates}
-                bench_temp = AccountAnalyzer(daily_assets=bench_aligned)
-                bench_all_m = bench_temp.metrics()
-
-                # 构建对比表（按 @metric order 排序，跳过交易组）
-                cmp_rows = []
-                sorted_metrics = sorted(
-                    all_metrics.values(),
-                    key=lambda m: m.get('order', 99)
-                )
-                for s_m in sorted_metrics:
-                    name = s_m['name']
-                    if name not in bench_all_m:
-                        continue
-                    b_m = bench_all_m[name]
-                    if b_m.get('group') == '交易':
-                        continue  # 基准无交易记录，跳过
-                    s_v = s_m['value']
-                    b_v = b_m['value']
-                    if isinstance(s_v, tuple):
-                        s_v = s_v[0]
-                    if isinstance(b_v, tuple):
-                        b_v = b_v[0]
-                    fmt = s_m.get('fmt', '.1%')
-                    cmp_rows.append({
-                        '指标': s_m['name'],
-                        '策略': _fmt(s_v, fmt),
-                        bench_label: _fmt(b_v, fmt),
-                    })
-                # 追加超额指标（属于策略属性，列在策略侧，基准侧显示 '—'）
-                if excess_total is not None:
-                    cmp_rows.append(
-                        {'指标': '超额收益', '策略': _fmt(excess_total, '.1%'), bench_label: '—'})
-                if ann_excess is not None:
-                    cmp_rows.append(
-                        {'指标': '年化超额', '策略': _fmt(ann_excess, '.1%'), bench_label: '—'})
-                if ir is not None:
-                    cmp_rows.append(
-                        {'指标': '信息比率', '策略': f'{ir:.2f}', bench_label: '—'})
-                if te is not None:
-                    cmp_rows.append(
-                        {'指标': '跟踪误差', '策略': _fmt(te, '.1%'), bench_label: '—'})
-                if day_win is not None:
-                    cmp_rows.append(
-                        {'指标': '日超额胜率', '策略': _fmt(day_win, '.1%'), bench_label: '—'})
-
-        # ═══════════════════════════════════════════
-        # [重构] 2026-06-02 统一四段式：基础指标 → 交易指标 → 业绩图 → 交易记录
-        #   有/无基准共用模板，仅基础指标和业绩图内容不同
-        # ═══════════════════════════════════════════
-
-        has_bench = self._bench_assets and has_bench_data
-
-        # ═══════════════════════════════════════════
+        # ═══════════════════════════
         # 模块1：指标分析
-        # ═══════════════════════════════════════════
+        # ═══════════════════════════
         with nb.section("指标分析"):
-            # 基础指标
-            base_items = []
-            for k, v in info_m.items():
-                base_items.append({'name': k, 'value': v})
-            for group_name in ('收益', '风险'):
-                if group_name in grouped:
-                    for _, name, val, desc in grouped[group_name]:
-                        item = {'name': name, 'value': val}
-                        if desc:
-                            item['desc'] = desc
-                        base_items.append(item)
-
-            if has_bench:
-                nb.table(cmp_rows, title=f"策略 vs {bench_label} 指标对比",
-                         columns=['指标', '策略', bench_label])
+            if d['has_bench']:
+                nb.table(d['cmp_rows'], title=f"策略 vs {d['bench_label']} 指标对比",
+                         columns=['指标', '策略', d['bench_label']])
             else:
-                nb.metrics(base_items, columns=5)
+                nb.metrics(d['base_items'], columns=5)
 
-            # 交易指标
-            if has_records and '交易' in grouped:
-                trade_m = []
-                for _, name, val, desc in grouped['交易']:
-                    trade_m.append({'指标': name, '数值': val})
-                avg_p = self.avg_profit(mode='percentage')
-                avg_l = self.avg_loss(mode='percentage')
-                if avg_p is not None and avg_l is not None:
-                    for item in trade_m:
-                        if item['指标'] == '平均盈亏比':
-                            item['数值'] = f"{item['数值']}（盈 +{avg_p*100:.1f}% / 亏 {avg_l*100:.1f}%）"
-                            break
+            if d['has_records'] and '交易' in d['grouped']:
+                trade_m = [{'指标': n, '数值': v} for _, n, v, _ in d['grouped']['交易']]
                 nb.table(trade_m, columns=['指标', '数值'])
 
-        # ═══════════════════════════════════════════
+        # ═══════════════════════════
         # 模块2：收益走势图
-        # ═══════════════════════════════════════════
+        # ═══════════════════════════
         with nb.section("收益走势图"):
-            if has_bench:
-                d_strs = [d.strftime('%Y-%m-%d') for d in common_dates]
+            if d['has_bench']:
                 nb.chart('perf', {
-                    'xAxis': d_strs,
+                    'xAxis': [dt.strftime('%Y-%m-%d') for dt in d['common_dates']],
                     'series': [
-                        {'name': '策略', 'data': strat_vals.tolist()},
-                        {'name': bench_label, 'data': bench_vals.tolist()},
+                        {'name': '策略', 'data': d['strat_vals'].tolist()},
+                        {'name': d['bench_label'], 'data': d['bench_vals'].tolist()},
                     ],
                 }, height='500px',
                     series_opts={'is_smooth': True},
                     datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
-            elif nav_values:
+            elif d['nav_values']:
                 nb.chart('perf', {
-                    'xAxis': [d.strftime('%Y-%m-%d') for d in dates],
-                    'series': [{'name': '策略', 'data': nav_values}],
+                    'xAxis': [dt.strftime('%Y-%m-%d') for dt in d['dates']],
+                    'series': [{'name': '策略', 'data': d['nav_values']}],
                 }, height='500px',
                     series_opts={'is_smooth': True},
                     datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
@@ -1112,7 +1085,7 @@ class AccountAnalyzer:
         # ═══════════════════════════════════════════
         # 模块3：交易记录
         # ═══════════════════════════════════════════
-        if has_records:
+        if d['has_records']:
             trades = []
             has_notes = any(getattr(t, 'note', '') for t in self.account.trade_records)
             for t in self.account.trade_records:
@@ -1149,114 +1122,26 @@ class AccountAnalyzer:
         import openpyxl
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-        # ---------- 数据准备 ----------
-        all_m = self.metrics()
+        # 统一数据准备
+        d = self._build_report_data()
 
-        # 基础信息
-        base_rows = []
-        initial_cash = self.account.snapshots[0].cash if self.account and self.account.snapshots else 0
-        final_nav = self.account.snapshots[-1].nav if self.account and self.account.snapshots else 0
-        dates = sorted(self._daily_assets.keys())
-        if len(dates) >= 2:
-            base_rows.append({'指标名称': '开始日期', '数值': dates[1].strftime('%Y-%m-%d')})
-            base_rows.append({'指标名称': '结束日期', '数值': dates[-1].strftime('%Y-%m-%d')})
-        if initial_cash > 0:
-            base_rows.append({'指标名称': '初始资金', '数值': f"{initial_cash:,.0f}"})
-        if final_nav > 0:
-            base_rows.append({'指标名称': '最终资产', '数值': f"{final_nav:,.0f}"})
-
-        # 指标分组
-        has_records = self.account and self.account.trade_records
+        # 转换为 Excel 格式（key: notebook 格式 → Excel 格式）
+        base_rows = [{'指标名称': it['name'], '数值': it['value']} for it in d['base_items']]
         groups = {}
-        for m in all_m.values():
-            g = m.get('group', '')
-            if not g:
-                continue
-            val = m['value']
-            if isinstance(val, tuple):
-                val = val[0]
-            if val is not None and not (isinstance(val, float) and val == float('inf')):
-                fmt = m.get('fmt', '.2f')
-                if isinstance(val, (int, float)):
-                    if fmt.endswith('%'):
-                        d = int(fmt[1:-1])
-                        val_str = f"{val*100:.{d}f}%"
-                    elif fmt.endswith('f'):
-                        d = int(fmt[1:-1])
-                        val_str = f"{val:.{d}f}"
-                    else:
-                        val_str = val
-                else:
-                    val_str = val
-                groups.setdefault(g, []).append({
-                    '指标名称': m['name'], '数值': val_str, '说明': m.get('desc', ''),
-                    'order': m.get('order', 99)
-                })
-        for items in groups.values():
-            items.sort(key=lambda x: x['order'])
+        for g_name, items in d['grouped'].items():
+            groups[g_name] = [{'指标名称': n, '数值': v, '说明': desc, 'order': o}
+                              for o, n, v, desc in items]
 
-        # 平均盈亏比附加盈亏百分比
-        if '交易' in groups:
-            avg_p = self.avg_profit(mode='percentage')
-            avg_l = self.avg_loss(mode='percentage')
-            if avg_p is not None and avg_l is not None:
-                for item in groups['交易']:
-                    if item['指标名称'] == '平均盈亏比':
-                        item['数值'] = f"{item['数值']}（盈 +{avg_p*100:.1f}% / 亏 {avg_l*100:.1f}%）"
-                        break
-
-        # 基准对比（复用 to_notebook 逻辑）
+        # 基准对比转为 Excel 格式
         cmp_rows = []
-        has_bench = False
-        bench_label = self._bench_label or '基准'
-        if self._bench_assets:
-            bench_all = dict(self._bench_assets)
-            strat_dates = sorted(self._daily_assets.keys())
-            bench_dates = sorted(bench_all.keys())
-            for d in strat_dates:
-                if d < bench_dates[0]:
-                    bench_all[d] = bench_all[bench_dates[0]]
-            common_dates = sorted(set(self._daily_assets.keys()) & set(bench_all.keys()))
-            if len(common_dates) >= 2:
-                has_bench = True
-                bench_aligned = {d: bench_all[d] for d in common_dates}
-                bench_temp = AccountAnalyzer(daily_assets=bench_aligned)
-                bench_all_m = bench_temp.metrics()
-                sorted_metrics = sorted(all_m.values(), key=lambda m: m.get('order', 99))
-                for s_m in sorted_metrics:
-                    name = s_m['name']
-                    if name not in bench_all_m:
-                        continue
-                    b_m = bench_all_m[name]
-                    if b_m.get('group') == '交易':
-                        continue
-                    s_v = s_m['value']
-                    b_v = b_m['value']
-                    if isinstance(s_v, tuple): s_v = s_v[0]
-                    if isinstance(b_v, tuple): b_v = b_v[0]
-                    fmt = s_m.get('fmt', '.2f')
-                    def _fmt_excel(v):
-                        if isinstance(v, (int, float)):
-                            if fmt.endswith('%'): return f"{v*100:.{int(fmt[1:-1])}f}%"
-                            elif fmt.endswith('f'): return f"{v:.{int(fmt[1:-1])}f}"
-                        return v
-                    cmp_rows.append({'指标名称': name, '策略': _fmt_excel(s_v), bench_label: _fmt_excel(b_v)})
-                # 超额指标
-                s_vals = np.array([self._daily_assets[d] for d in common_dates])
-                b_vals = np.array([bench_all[d] for d in common_dates])
-                s_total = s_vals[-1] / s_vals[0] - 1
-                b_total = b_vals[-1] / b_vals[0] - 1
-                excess_total = (1 + s_total) / (1 + b_total) - 1 if b_total > -1 else None
-                if excess_total is not None:
-                    cmp_rows.append({'指标名称': '超额收益', '策略': f"{excess_total*100:.1f}%", bench_label: '—'})
-                days_n = len(common_dates) - 1
-                if days_n > 0 and excess_total is not None:
-                    ann_excess = (1 + excess_total) ** (252 / days_n) - 1
-                    cmp_rows.append({'指标名称': '年化超额', '策略': f"{ann_excess*100:.1f}%", bench_label: '—'})
-                    excess_daily = (s_vals[1:] - s_vals[:-1]) / s_vals[:-1] - (b_vals[1:] - b_vals[:-1]) / b_vals[:-1]
-                    te = np.std(excess_daily) * np.sqrt(252)
-                    cmp_rows.append({'指标名称': '信息比率', '策略': f"{(ann_excess/te):.2f}" if te > 0 else '—', bench_label: '—'})
-                    cmp_rows.append({'指标名称': '跟踪误差', '策略': f"{te*100:.1f}%", bench_label: '—'})
+        bench_label = d['bench_label']
+        has_bench = d['has_bench']
+        has_records = d['has_records']
+        if has_bench:
+            for row in d['cmp_rows']:
+                excel_row = {'指标名称': row['指标'], '策略': row['策略']}
+                excel_row[d['bench_label']] = row[d['bench_label']]
+                cmp_rows.append(excel_row)
 
         # ---------- Sheet 2: 每日资产 ----------
         assets = self._daily_assets
