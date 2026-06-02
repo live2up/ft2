@@ -59,9 +59,13 @@ class Engine:
         
         _add_bar = context._add_bar2bar_data_cache
         _snapshot = account.take_snapshot
-        
-        begin_snapshot=0
-        last_time=None
+
+        # [重构] 2026-06-02 初始盘前快照：独立于循环，语义固定为 snapshots[0]
+        #   时间锚定在首根 bar 前一天，确保基准日期始终在交易日之前
+        sorted_times = sorted(self.timeline.keys())
+        if sorted_times:
+            from datetime import timedelta
+            account.init_snapshot(sorted_times[0] - timedelta(days=1))
         
         for current_time, bars in sorted(self.timeline.items()):
             context._current_time = current_time
@@ -70,13 +74,7 @@ class Engine:
                 _add_bar(bar)
                 
             if start_time <= current_time <= end_time:
-                if begin_snapshot==0 and last_time is not None:
-                    _snapshot(last_time)
-                    begin_snapshot=1
-                    
-                strategy.on_bar(context,bars)
+                strategy.on_bar(context, bars)
                 _snapshot()
-                
-            last_time=current_time
 
 engine=Engine()

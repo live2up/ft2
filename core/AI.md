@@ -104,9 +104,8 @@ analyzer.metrics()  # → Dict[name → {name, value, group, desc, fmt, order}]
 ### 3.3 输出
 
 ```python
-# Notebook 交互式报告（推荐）
-nb = analyzer.to_notebook("策略回测")
-nb.export_html()
+# Notebook 交互式报告（推荐，自动保存 HTML）
+analyzer.to_notebook("策略回测")
 
 # Excel 报告
 analyzer.to_excel("策略回测")
