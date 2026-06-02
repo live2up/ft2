@@ -1063,7 +1063,7 @@ const PerfChart = {
                         <span class="perf-stat"><em>拖拽选择区间查看统计</em></span>
                     </div>
                     <div class="chart-toolbar">
-                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" title="全屏">⛶</button>
+                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
                     </div>
                 </div>
             </div>
