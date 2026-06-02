@@ -61,11 +61,9 @@ class Engine:
         _snapshot = account.take_snapshot
 
         # [重构] 2026-06-02 初始盘前快照：独立于循环，语义固定为 snapshots[0]
-        #   时间锚定在首根 bar 前一天，确保基准日期始终在交易日之前
-        sorted_times = sorted(self.timeline.keys())
-        if sorted_times:
-            from datetime import timedelta
-            account.init_snapshot(sorted_times[0] - timedelta(days=1))
+        #   时间锚定在回测区间开始前一天，避免大量预热数据导致基准日过远、年化被压低
+        from datetime import timedelta
+        account.init_snapshot(start_time - timedelta(days=1))
         
         for current_time, bars in sorted(self.timeline.items()):
             context._current_time = current_time

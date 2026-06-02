@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import pandas as pd
 from .storage import context
+from .symbol_classifier import classify_symbol
 
 
 # ============================================================================
@@ -117,7 +118,8 @@ class AccountManager:
     │   └── get_orders()        #  查询成交记录（支持时间区间过滤）
     │
     └── [底层支撑]
-        └── _get_price()        #  [私有] 从 context 缓存获取当前价格（多频率逐次查找）
+        ├── _get_lot_size()    #  [私有] 品种自动识别交易单位 (stock/etf→100, index→1, 其他→0.1)
+        └── _get_price()       #  [私有] 从 context 缓存获取当前价格（多频率逐次查找）
     """
     
     FREQ_ORDER = ['1m', '60s', '5m', '300s', '15m', '900s', '30m', '1800s', '60m', '3600s', '1d']
@@ -141,7 +143,7 @@ class AccountManager:
         self.fee_config = fee_config or {
             'commission_rate': 0.0003,
             'stamp_tax_rate': 0.001,
-            'min_commission': 5.0
+            'min_commission': 5.0,
         }
 
     # ------------------------------------------------------------------------
@@ -267,6 +269,8 @@ class AccountManager:
         if price <= 0:
             raise ValueError(f"Invalid price {price} for {symbol}")
 
+        lot_size = self._get_lot_size(symbol)  # [新增] 2026-06-02 品种自动识别交易单位
+
         if side == OrderSide.Buy:
             commission = max(
                 round(order_amount * self.fee_config['commission_rate'], 2),
@@ -274,9 +278,11 @@ class AccountManager:
             )
             available_amount = order_amount - commission
             volume = int(available_amount / price)
+            volume = int(volume / lot_size) * lot_size     # 对齐交易单位
         else:
             current_pos = self.positions.get(symbol, {'volume': 0})
             volume = int(current_pos['volume'] * abs(percent))
+            volume = int(volume / lot_size) * lot_size     # 对齐交易单位
 
         if volume == 0:
             raise ValueError("Calculated order volume is zero")
@@ -312,6 +318,12 @@ class AccountManager:
         """
         if volume == 0:
             raise ValueError("Order volume cannot be zero")
+
+        # [新增] 2026-06-02 品种自动识别交易单位
+        lot_size = self._get_lot_size(symbol)
+        volume = int(volume / lot_size) * lot_size
+        if volume == 0:
+            raise ValueError("Volume rounded to zero by lot_size")
 
         if side not in (OrderSide.Buy, OrderSide.Sell):
             raise ValueError(f"Invalid side value: {side}, must be OrderSide.Buy or OrderSide.Sell")
@@ -516,6 +528,24 @@ class AccountManager:
     # 私有方法
     # ------------------------------------------------------------------------
 
+    def _get_lot_size(self, symbol: str) -> float:
+        """
+        根据品种类型返回默认交易单位
+
+        fee_config.lot_size 显式配置优先，否则自动识别：
+            stock/etf → 100（整手）
+            index     → 1（无约束）
+            其他       → 0.1（保留一位小数）
+        """
+        if self.fee_config.get('lot_size') is not None:
+            return self.fee_config['lot_size']
+        sec_type = classify_symbol(symbol)
+        if sec_type in ('stock', 'etf'):
+            return 100
+        if sec_type == 'index':
+            return 1
+        return 0.1
+
     def _get_price(self, symbol: str) -> float:
         """
         获取品种当前价格
@@ -562,6 +592,26 @@ class AccountManager:
                 continue
 
         raise ValueError(f"No valid price found for {symbol} at {action_time}")
+
+
+# ============================================================================
+# 内置基准策略
+# ============================================================================
+
+class BenchHolder:
+    """
+    买入持有基准策略 — 首 bar 全仓买入第一只标的，后续持有不动
+    
+    用法:
+        bench_engine.run(BenchHolder, start_time, end_time)
+        bench_analyzer = AccountAnalyzer(account)
+        strategy_analyzer.set_benchmark(bench_analyzer.daily_assets, '买入持有')
+    """
+    
+    def on_bar(self, context, bars):
+        if account.get_position():
+            return
+        account.order_percent(bars[0]['symbol'], 1.0, OrderSide.Buy, note='基准买入持有')
 
 
 # ============================================================================

@@ -2,7 +2,7 @@
 
 > 回测引擎核心
 >
-> **版本：v2.0 | 更新日期：2026-05-30**
+> **版本：v2.1 | 更新日期：2026-06-02**
 
 ---
 
@@ -60,7 +60,8 @@ account.snapshots            # List[AccountSnapshot]
 ```
 
 - 费用计算：佣金 0.03% + 印花税 0.1%（卖）+ 最低 5 元
-- 策略层可覆盖：`account.fee_config = {...}`
+- 交易单位：默认自动识别（stock/etf→100股，index→1，其他→0.1）
+- 策略层可覆盖：`account.fee_config = {'lot_size': 1, ...}` 或 `account.fee_config['lot_size'] = 100`
 - `TradeRecord.note`：追溯每笔交易触发原因
 
 ---
@@ -140,6 +141,46 @@ analyzer.get_largest_profit_trades(5)
 analyzer.get_largest_loss_trades(5)
 ```
 
+### 3.7 基准对比（2026-06-02 新增）
+
+```python
+from core import BenchHolder
+
+# 推荐：同一份 bars 跑两个策略，共享 init_snapshot(start_time-1天)，日期天然对齐
+bench_engine = Engine()
+# ... 加载相同数据到 bench_engine ...
+bench_engine.run(BenchHolder, start_time, end_time)  # 买入持有
+bench_analyzer = AccountAnalyzer(account)
+
+engine.run(MyStrategy, start_time, end_time)          # 择时策略
+strategy_analyzer = AccountAnalyzer(account)
+
+# 注入基准 → to_notebook() 自动生成对比 section
+strategy_analyzer.set_benchmark(bench_analyzer.daily_assets, '买入持有')
+strategy_analyzer.to_notebook("策略 vs 基准")
+```
+
+**set_benchmark 接受的格式：**
+
+| 格式 | 示例 |
+|------|------|
+| `Dict[date, float]` | `{date(2024,1,3): 100000.0, ...}` — 每日净值 |
+| `List[Dict]` | `[{'date': date(2024,1,3), 'assets': 100000.0}, ...]` |
+
+**对比输出内容：**
+
+| Section | 内容 |
+|---------|------|
+| 对比 Table | 策略 vs 基准同构指标（收益/风险类，交易类跳过） |
+| 净值叠加图 | 归一化至 1.0 的双线对比 |
+| 超额累计曲线 | 每日超额累计乘积，起点=1.0 |
+| 超额指标 | 超额收益、年化超额、信息比率、跟踪误差、日超额胜率 |
+
+**对齐机制：**
+- 双方共用引擎 `init_snapshot(start_time - 1 day)` → `dates[0]` 恒为初始资金
+- 策略盘中交易 vs 基准前收盘价入场 → 超额 metric 在交集日期计算，严格对齐
+- 外部基准数据缺少 init 日期时，自动向前扩展首日值补齐
+
 ---
 
 ## 关键设计原则
@@ -148,3 +189,4 @@ analyzer.get_largest_loss_trades(5)
 2. **`@metric` 声明式驱动** — 指标元数据集中管理，输出层零硬编码
 3. **引擎天然防未来** — `eob` 时间线 + `context.now` 保证每时刻只能看到 ≤当前的数据
 4. **频率无限制** — `freq` 是纯字符串 key，支持 `'1d'`/`'m10'`/`'my_signal'` 等任意自定义频率
+5. **初始快照独立** — `init_snapshot(start_time-1天)` 作为 `snapshots[0]`，分析层零推断、零补偿

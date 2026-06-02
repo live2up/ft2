@@ -89,7 +89,64 @@ def metric(name: str = None, group: str = '', desc: str = '',
 # ============================================================================
 
 class AccountAnalyzer:
-    """账户分析器，负责计算各类风险收益指标和生成分析报告"""
+    """
+    账户分析器 — 基于快照的绩效分析、指标计算与报告输出
+
+    核心原则：计算层返回纯数字，呈现层通过 @metric.fmt 控制格式。
+    新增指标只需加 @metric(group='收益/风险/交易')，to_notebook/to_excel 自动拾取。
+
+    AccountAnalyzer
+    ├── __init__()                      # 三种数据源: account / daily_assets(dict) / daily_assets(list)
+    │
+    ├── [属性]                          # 对外只读 copy
+    │   ├── daily_assets                #  Dict[date, float] 每日净值
+    │   └── trade_profits               #  List[Dict] 逐笔盈亏 (symbol/profit/open_time/...)
+    │
+    ├── [基准对比]                      # 2026-06-02 新增
+    │   └── set_benchmark()             #  注入基准日净值 → to_notebook() 懒计算对比 Table + 净值叠加 + 超额曲线
+    │
+    ├── [时间区间切片]                  # 缓存 sliced_data，各指标共享预计算结果
+    │   ├── getTimeRange()              #  设置区间: 默认/'all'/'3m'/'1y'/自定义起止 → 预计算 values/returns
+    │   └── _ensure_sliced_data()       #  惰性初始化，首次调用指标时自动 fallback 到全区间
+    │
+    ├── [指标计算 @metric]              # 声明式驱动，按 group 分组 (收益/风险/交易)
+    │   ├── [收益] return_rate          #  累计收益率
+    │   ├── [收益] annualized_return    #  年化收益率
+    │   ├── [风险] volatility           #  年化波动率
+    │   ├── [风险] max_drawdown         #  最大回撤 (返回 Tuple[rate, peak_date, trough_date])
+    │   ├── [风险] sharpe_ratio         #  夏普比率
+    │   ├── [风险] sortino_ratio        #  索提诺比率 (仅下行风险)
+    │   ├── [风险] upi                  #  溃疡绩效指数 (Ulcer Performance Index)
+    │   ├── [风险] ulcer_index          #  溃疡指数
+    │   ├── [风险] var                  #  VaR(95%)
+    │   ├── [风险] cvar                 #  CVaR(95%)
+    │   ├── [交易] win_rate             #  胜率
+    │   ├── [交易] avg_profit_loss_ratio #  平均盈亏比
+    │   ├── [交易] avg_holding_period   #  平均持仓天数
+    │   ├── [交易] kelly_criterion      #  凯利最优仓位
+    │   ├── [交易] kelly_fraction       #  半凯利仓位
+    │   ├── avg_profit()                #  (辅助) 平均盈利, 支持 amount/percentage 模式
+    │   └── avg_loss()                  #  (辅助) 平均亏损
+    │
+    ├── [指标收集]                      # _collect_metrics() 遍历 @metric → to_notebook/to_excel 自动拾取
+    │   ├── _collect_metrics()          #  收集所有 @metric 方法 → {name: {value, group, fmt, desc}}
+    │   ├── metrics()                   #  公开入口
+    │   └── returns()                   #  批量多区间收益率 ('1m,3m,1y')
+    │
+    ├── [查询]
+    │   ├── get_daily_total_assets()    #  返回内部 _daily_assets
+    │   ├── get_largest_profit_trades() #  盈利 Top N
+    │   └── get_largest_loss_trades()   #  亏损 Top N
+    │
+    ├── [导出]
+    │   ├── to_notebook()               #  HTML 交互式报告 (无基准→三段式 / 有基准→对比前置)
+    │   └── to_excel()                  #  Excel (Sheet: 回测指标/每日资产/交易记录)
+    │
+    └── [底层]
+        ├── _aggregate_daily_assets()   #  快照列表 → Dict[date, nav] (同日期取最后)
+        ├── _calculate_profit()         #  FIFO 匹配计算逐笔盈亏
+        └── _get_caller_dir()           #  调用者目录 (报告输出路径基准)
+    """
 
     def __init__(self, account=None, daily_assets=None):
         """
@@ -907,7 +964,16 @@ class AccountAnalyzer:
         if self._bench_assets:
             bench_label = self._bench_label or '基准'
             strat_all = self._daily_assets
-            bench_all = self._bench_assets
+            bench_all = dict(self._bench_assets)  # 拷贝，避免修改原始数据
+
+            # [修复] 2026-06-02 基准向前扩展到策略 init 日期
+            #   基准买入持有在前收盘价入场，策略可在盘中交易，
+            #   两者都应从同一基线日期起算。扩展部分填基准首日值。
+            strat_dates = sorted(strat_all.keys())
+            bench_dates = sorted(bench_all.keys())
+            for d in strat_dates:
+                if d < bench_dates[0]:
+                    bench_all[d] = bench_all[bench_dates[0]]
 
             # 日期对齐：取交集
             common_dates = sorted(set(strat_all.keys()) & set(bench_all.keys()))

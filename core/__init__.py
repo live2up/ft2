@@ -12,7 +12,8 @@ from .engine import engine, Engine
 from .storage import context
 from .account import (
     account, AccountManager,
-    OrderSide, PositionEffect, PositionSide, OrderType
+    OrderSide, PositionEffect, PositionSide, OrderType,
+    BenchHolder,
 )
 from .analyzer import AccountAnalyzer
 
@@ -24,5 +25,6 @@ __all__ = [
     'PositionEffect',  # 开平标志: PositionEffect.Open, PositionEffect.Close
     'PositionSide',    # 持仓方向: PositionSide.Long, PositionSide.Short
     'OrderType',       # 委托类型: OrderType.Limit, OrderType.Market
+    'BenchHolder',     # 内置买入持有基准策略
     'AccountAnalyzer',
 ]
