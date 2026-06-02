@@ -151,6 +151,10 @@ def _init_chart_registry():
             'class': MinLine,
             'builder': lambda data, opts: _build_xy_chart(MinLine, data, opts)
         },
+        'perf': {
+            'class': MinLine,
+            'builder': lambda data, opts: _build_xy_chart(MinLine, data, opts)
+        },
         'bar': {
             'class': MinBar,
             'builder': lambda data, opts: _build_xy_chart(MinBar, data, opts)
