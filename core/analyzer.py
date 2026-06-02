@@ -1148,10 +1148,10 @@ class AccountAnalyzer:
         import openpyxl
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-        # ---------- Sheet 1: 回测指标（按 group 分组） ----------
+        # ---------- 数据准备 ----------
         all_m = self.metrics()
 
-        # 基础信息（非 @metric）
+        # 基础信息
         base_rows = []
         initial_cash = self.account.snapshots[0].cash if self.account and self.account.snapshots else 0
         final_nav = self.account.snapshots[-1].nav if self.account and self.account.snapshots else 0
@@ -1164,7 +1164,7 @@ class AccountAnalyzer:
         if final_nav > 0:
             base_rows.append({'指标名称': '最终资产', '数值': f"{final_nav:,.0f}"})
 
-        # 按 group 分组（同 to_notebook 逻辑）
+        # 指标分组
         has_records = self.account and self.account.trade_records
         groups = {}
         for m in all_m.values():
@@ -1193,6 +1193,59 @@ class AccountAnalyzer:
                 })
         for items in groups.values():
             items.sort(key=lambda x: x['order'])
+
+        # 基准对比（复用 to_notebook 逻辑）
+        cmp_rows = []
+        has_bench = False
+        bench_label = self._bench_label or '基准'
+        if self._bench_assets:
+            bench_all = dict(self._bench_assets)
+            strat_dates = sorted(self._daily_assets.keys())
+            bench_dates = sorted(bench_all.keys())
+            for d in strat_dates:
+                if d < bench_dates[0]:
+                    bench_all[d] = bench_all[bench_dates[0]]
+            common_dates = sorted(set(self._daily_assets.keys()) & set(bench_all.keys()))
+            if len(common_dates) >= 2:
+                has_bench = True
+                bench_aligned = {d: bench_all[d] for d in common_dates}
+                bench_temp = AccountAnalyzer(daily_assets=bench_aligned)
+                bench_all_m = bench_temp.metrics()
+                sorted_metrics = sorted(all_m.values(), key=lambda m: m.get('order', 99))
+                for s_m in sorted_metrics:
+                    name = s_m['name']
+                    if name not in bench_all_m:
+                        continue
+                    b_m = bench_all_m[name]
+                    if b_m.get('group') == '交易':
+                        continue
+                    s_v = s_m['value']
+                    b_v = b_m['value']
+                    if isinstance(s_v, tuple): s_v = s_v[0]
+                    if isinstance(b_v, tuple): b_v = b_v[0]
+                    fmt = s_m.get('fmt', '.2f')
+                    def _fmt_excel(v):
+                        if isinstance(v, (int, float)):
+                            if fmt.endswith('%'): return f"{v*100:.{int(fmt[1:-1])}f}%"
+                            elif fmt.endswith('f'): return f"{v:.{int(fmt[1:-1])}f}"
+                        return v
+                    cmp_rows.append({'指标名称': name, '策略': _fmt_excel(s_v), bench_label: _fmt_excel(b_v)})
+                # 超额指标
+                s_vals = np.array([self._daily_assets[d] for d in common_dates])
+                b_vals = np.array([bench_all[d] for d in common_dates])
+                s_total = s_vals[-1] / s_vals[0] - 1
+                b_total = b_vals[-1] / b_vals[0] - 1
+                excess_total = (1 + s_total) / (1 + b_total) - 1 if b_total > -1 else None
+                if excess_total is not None:
+                    cmp_rows.append({'指标名称': '超额收益', '策略': f"{excess_total*100:.1f}%", bench_label: '—'})
+                days_n = len(common_dates) - 1
+                if days_n > 0 and excess_total is not None:
+                    ann_excess = (1 + excess_total) ** (252 / days_n) - 1
+                    cmp_rows.append({'指标名称': '年化超额', '策略': f"{ann_excess*100:.1f}%", bench_label: '—'})
+                    excess_daily = (s_vals[1:] - s_vals[:-1]) / s_vals[:-1] - (b_vals[1:] - b_vals[:-1]) / b_vals[:-1]
+                    te = np.std(excess_daily) * np.sqrt(252)
+                    cmp_rows.append({'指标名称': '信息比率', '策略': f"{(ann_excess/te):.2f}" if te > 0 else '—', bench_label: '—'})
+                    cmp_rows.append({'指标名称': '跟踪误差', '策略': f"{te*100:.1f}%", bench_label: '—'})
 
         # ---------- Sheet 2: 每日资产 ----------
         assets = self._daily_assets
@@ -1275,13 +1328,21 @@ class AccountAnalyzer:
                 ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = min(max_len, 30)
             return start_row + 2 + len(rows) + 1  # 返回下一组的起始行（留空行）
 
-        # Sheet 1: 回测指标（按 group 分组，留空行分隔）
+        # Sheet 1: 指标分析（基础信息 / 基准对比 / 收益 / 风险 / 交易）
         ws1 = wb.active
-        ws1.title = '回测指标'
+        ws1.title = '指标分析'
         m_headers = ['指标名称', '数值', '说明']
         row = 1
-        for group_title, rows in [('基础信息', base_rows), ('收益指标', groups.get('收益', [])),
-                                  ('风险指标', groups.get('风险', [])), ('交易指标', groups.get('交易', []))]:
+        # 基础信息
+        row = write_sheet(ws1, '基础信息', m_headers, base_rows, start_row=row)
+        # 基准对比
+        if has_bench:
+            c_headers = ['指标名称', '策略', bench_label]
+            row = write_sheet(ws1, f'策略 vs {bench_label}', c_headers, cmp_rows, start_row=row)
+        # 收益 / 风险 / 交易
+        for group_title, rows in [('收益指标', groups.get('收益', [])),
+                                  ('风险指标', groups.get('风险', [])),
+                                  ('交易指标', groups.get('交易', []))]:
             if not rows:
                 continue
             if group_title == '交易指标' and not has_records:
