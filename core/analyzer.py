@@ -914,15 +914,10 @@ class AccountAnalyzer:
         initial_cash = self.account.snapshots[0].cash if self.account and self.account.snapshots else 0
         final_nav = self.account.snapshots[-1].nav if self.account and self.account.snapshots else 0
 
-        # 净值 + 回撤数据（图表共用）
+        # 净值数据（图表共用）
         nav_values = []
-        dd_pct = []
         if dates and len(dates) >= 2:
             nav_values = [assets[d] for d in dates]
-            vals = np.array(nav_values)
-            cumulative = vals / vals[0]
-            running_max = np.maximum.accumulate(cumulative)
-            dd_pct = (-(running_max - cumulative) / running_max * 100).tolist()
 
         # [重构] 2026-05-30 指标改为 @metric(group=...) 自动分组驱动
         #   新增指标只需加 @metric(group='xxx')，无需修改此处
@@ -1000,19 +995,22 @@ class AccountAnalyzer:
                 te = np.std(excess_daily) * np.sqrt(252) if len(excess_daily) > 0 else None
                 ir = ann_excess / te if ann_excess is not None and te and te > 0 else None
                 day_win = np.mean(excess_daily > 0) if len(excess_daily) > 0 else None
-                excess_cum = np.cumprod(1 + excess_daily)
 
                 # [新增] 懒计算基准指标：用策略日期对齐后的净值创建临时 AccountAnalyzer
                 bench_aligned = {d: bench_all[d] for d in common_dates}
                 bench_temp = AccountAnalyzer(daily_assets=bench_aligned)
                 bench_all_m = bench_temp.metrics()
 
-                # 构建对比表（按 strategy metrics 的 name 对齐，跳过交易组）
+                # 构建对比表（按 @metric order 排序，跳过交易组）
                 cmp_rows = []
-                for name in sorted(all_metrics.keys()):
+                sorted_metrics = sorted(
+                    all_metrics.values(),
+                    key=lambda m: m.get('order', 99)
+                )
+                for s_m in sorted_metrics:
+                    name = s_m['name']
                     if name not in bench_all_m:
                         continue
-                    s_m = all_metrics[name]
                     b_m = bench_all_m[name]
                     if b_m.get('group') == '交易':
                         continue  # 基准无交易记录，跳过
@@ -1028,22 +1026,22 @@ class AccountAnalyzer:
                         '策略': _fmt(s_v, fmt),
                         bench_label: _fmt(b_v, fmt),
                     })
-                # 追加超额指标
+                # 追加超额指标（属于策略属性，列在策略侧，基准侧显示 '—'）
                 if excess_total is not None:
                     cmp_rows.append(
-                        {'指标': '超额收益', '策略': '—', bench_label: _fmt(excess_total, '.1%')})
+                        {'指标': '超额收益', '策略': _fmt(excess_total, '.1%'), bench_label: '—'})
                 if ann_excess is not None:
                     cmp_rows.append(
-                        {'指标': '年化超额', '策略': '—', bench_label: _fmt(ann_excess, '.1%')})
+                        {'指标': '年化超额', '策略': _fmt(ann_excess, '.1%'), bench_label: '—'})
                 if ir is not None:
                     cmp_rows.append(
-                        {'指标': '信息比率', '策略': '—', bench_label: f'{ir:.2f}'})
+                        {'指标': '信息比率', '策略': f'{ir:.2f}', bench_label: '—'})
                 if te is not None:
                     cmp_rows.append(
-                        {'指标': '跟踪误差', '策略': '—', bench_label: _fmt(te, '.1%')})
+                        {'指标': '跟踪误差', '策略': _fmt(te, '.1%'), bench_label: '—'})
                 if day_win is not None:
                     cmp_rows.append(
-                        {'指标': '日超额胜率', '策略': '—', bench_label: _fmt(day_win, '.1%')})
+                        {'指标': '日超额胜率', '策略': _fmt(day_win, '.1%'), bench_label: '—'})
 
         # ═══════════════════════════════════════════
         # [重构] 2026-06-02 根据是否有基准分两路输出
@@ -1076,25 +1074,16 @@ class AccountAnalyzer:
                             metrics_list.append({'name': '平均亏损', 'value': f"{avg_l:,.0f}"})
                     nb.metrics(metrics_list, title=f"{group_name}指标", columns=4)
 
-        # 内联：收益分析 section（净值+回撤）
+        # 内联：收益分析 section（净值+回撤，前端自动计算）
         def _section_nav(collapsed=False):
             with nb.section("收益分析", collapsed=collapsed if collapsed else None):
                 if nav_values:
-                    nb.chart('line', {
+                    nb.chart('perf', {
                         'xAxis': [d.strftime('%Y-%m-%d') for d in dates],
-                        'series': [{'name': '策略净值', 'data': nav_values}],
-                    }, title='净值曲线', height='350px',
+                        'series': [{'name': '策略', 'data': nav_values}],
+                    }, title='业绩全景', height='500px',
                         series_opts={'is_smooth': True},
-                        yaxis_opts={'min_': nav_values[0] * 0.85},
                         datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
-                if dd_pct:
-                    max_dd_val = float(min(dd_pct))
-                    y_min = min(max_dd_val * 1.2, -5)
-                    nb.chart('area', {
-                        'xAxis': [d.strftime('%Y-%m-%d') for d in dates],
-                        'series': [{'name': '回撤%', 'data': dd_pct}],
-                    }, title='回撤序列', height='250px',
-                        yaxis_opts={'min_': y_min, 'max_': 0})
 
         # 内联：交易明细 section
         def _section_trades():
@@ -1129,25 +1118,17 @@ class AccountAnalyzer:
                 nb.table(cmp_rows, title=f"策略 vs {bench_label} 指标对比",
                          columns=['指标', '策略', bench_label])
 
-                # 净值叠加图
+                # 净值叠加图（原始资产值，前端自动算收益+回撤+超额）
                 d_strs = [d.strftime('%Y-%m-%d') for d in common_dates]
-                nb.chart('line', {
+                nb.chart('perf', {
                     'xAxis': d_strs,
                     'series': [
-                        {'name': '策略净值', 'data': (strat_vals / strat_vals[0]).tolist()},
-                        {'name': bench_label, 'data': (bench_vals / bench_vals[0]).tolist()},
+                        {'name': '策略', 'data': strat_vals.tolist()},
+                        {'name': bench_label, 'data': bench_vals.tolist()},
                     ],
-                }, title='净值对比（归一化至 1.0）', height='350px',
+                }, title='业绩对比', height='500px',
                     series_opts={'is_smooth': True},
                     datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
-
-                # 超额累计曲线
-                exc_d = [d.strftime('%Y-%m-%d') for d in common_dates[1:]]
-                nb.chart('line', {
-                    'xAxis': exc_d,
-                    'series': [{'name': '超额累计', 'data': excess_cum.tolist()}],
-                }, title='超额收益累计曲线（起点=1.0）', height='250px',
-                    series_opts={'is_smooth': True})
 
             # 策略自身指标（折叠，已经在对比里看过主要信息）
             _section_metrics(collapsed=True)

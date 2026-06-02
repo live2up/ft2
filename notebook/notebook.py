@@ -299,8 +299,9 @@ class Notebook:
                 - 'pie': 饼图
                 - 'heatmap': 热力图
                 - 'kline': K线图
+                - 'perf': 业绩全景（传入原始资产值，前端自动计算收益/回撤/超额）
             data: 图表数据（格式因类型而异）
-                - line/area/bar/kline: {'xAxis': [...], 'series': [{'name': '', 'data': []}, ...]}
+                - line/area/bar/kline/perf: {'xAxis': [...], 'series': [{'name': '', 'data': []}, ...]}
                 - pie: [{'name': '', 'value': 0}, ...]
                 - heatmap: {'2024': {'01': 0.05, ...}, ...} 或 DataFrame
             title: Cell 标题（推荐填写）
