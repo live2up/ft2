@@ -1043,24 +1043,29 @@ const PerfChart = {
         return { chartRef, chartId, isFullscreen, toggleFullscreen, hasBenchmark, selectedRange, jumpToRange, jumpToDateRange, dateStart, dateEnd };
     },
     template: `
-        <div class="chart-wrapper" :class="{ 'chart-fullscreen': isFullscreen }">
-            <div class="perf-range-btns">
-                <button @click="jumpToRange('all')" :class="{ active: selectedRange === 'all' }">成立以来</button>
-                <button @click="jumpToRange('3m')" :class="{ active: selectedRange === '3m' }">近3个月</button>
-                <button @click="jumpToRange('6m')" :class="{ active: selectedRange === '6m' }">半年</button>
-                <button @click="jumpToRange('1y')" :class="{ active: selectedRange === '1y' }">1年</button>
-                <input type="date" class="perf-date-input" v-model="dateStart" @change="jumpToDateRange" title="起始日期">
-                <span class="perf-date-sep">至</span>
-                <input type="date" class="perf-date-input" v-model="dateEnd" @change="jumpToDateRange" title="结束日期">
-            </div>
-            <div class="chart-container chart-container-main"
-                 ref="chartRef" :id="'perf-chart-' + chartId"
-                 :style="{ width: '100%', height: (cell.content?.height || '500px') }"></div>
-            <div class="perf-stats-panel" :id="'perf-stats-' + chartId">
-                <span class="perf-stat"><em>拖拽选择区间查看统计</em></span>
-            </div>
-            <div class="chart-controls">
-                <button class="chart-control-btn" @click="toggleFullscreen" title="全屏">⛶</button>
+        <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
+            <h3 v-if="cell.title">{{ cell.title }}</h3>
+            <div class="cell-chart-body">
+                <div class="chart-wrapper chart-wrapper-perf">
+                    <div class="perf-range-btns">
+                        <button @click="jumpToRange('all')" :class="{ active: selectedRange === 'all' }">成立以来</button>
+                        <button @click="jumpToRange('3m')" :class="{ active: selectedRange === '3m' }">近3个月</button>
+                        <button @click="jumpToRange('6m')" :class="{ active: selectedRange === '6m' }">半年</button>
+                        <button @click="jumpToRange('1y')" :class="{ active: selectedRange === '1y' }">1年</button>
+                        <input type="date" class="perf-date-input" v-model="dateStart" @change="jumpToDateRange" title="起始日期">
+                        <span class="perf-date-sep">至</span>
+                        <input type="date" class="perf-date-input" v-model="dateEnd" @change="jumpToDateRange" title="结束日期">
+                    </div>
+                    <div class="chart-container chart-container-main"
+                         ref="chartRef" :id="'perf-chart-' + chartId"
+                         :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '500px' }"></div>
+                    <div class="perf-stats-panel" :id="'perf-stats-' + chartId">
+                        <span class="perf-stat"><em>拖拽选择区间查看统计</em></span>
+                    </div>
+                    <div class="chart-toolbar">
+                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" title="全屏">⛶</button>
+                    </div>
+                </div>
             </div>
         </div>
     `

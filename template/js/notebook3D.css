@@ -689,40 +689,6 @@ body {
     margin-top: 8px;
 }
 
-/* PerfChart 全屏按钮 */
-.chart-controls {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    z-index: 10;
-    opacity: 0.6;
-    transition: opacity 0.2s;
-}
-.chart-wrapper:hover .chart-controls {
-    opacity: 1;
-}
-.chart-control-btn {
-    width: 28px;
-    height: 28px;
-    border: 1px solid #e0e0e0;
-    background: rgba(255, 255, 255, 0.9);
-    border-radius: 5px;
-    cursor: pointer;
-    font-size: 13px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #888;
-    transition: all 0.15s;
-    padding: 0;
-}
-.chart-control-btn:hover {
-    background: #fff;
-    border-color: #bbb;
-    color: #333;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-}
-
 /* 工具按钮 */
 .tool-btn {
     width: 28px;
@@ -806,34 +772,19 @@ body {
     height: 100% !important;
 }
 
-/* PerfChart 全屏样式 */
-.chart-fullscreen {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 9999;
-    background: #fff;
+/* PerfChart fullscreen: wrapper 内有多余元素，改用 flex 列避免溢出 */
+.chart-zoomed .chart-wrapper-perf {
+    height: auto;
     display: flex;
     flex-direction: column;
-    padding: 16px;
-    box-sizing: border-box;
 }
-.chart-fullscreen .chart-container-main {
-    flex: 1;
+.chart-zoomed .chart-wrapper-perf .chart-container {
+    flex: 1 !important;
     min-height: 0;
     height: auto !important;
 }
-.chart-fullscreen .perf-stats-panel {
-    flex-shrink: 0;
-    max-height: 120px;
-    overflow-x: auto;
-}
-.chart-fullscreen .chart-control-btn {
-    opacity: 1;
-    border-color: #999;
-}
+.chart-zoomed .chart-wrapper-perf .perf-range-btns { flex-shrink: 0; }
+.chart-zoomed .chart-wrapper-perf .perf-stats-panel { flex-shrink: 0; max-height: 100px; overflow-x: auto; }
 
 /* ========== 7. FT Table 样式（Notion 风格）========== */
 
