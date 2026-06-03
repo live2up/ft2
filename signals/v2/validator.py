@@ -611,6 +611,129 @@ def compare(*expressions: Any, data: pd.DataFrame,
     return pd.DataFrame(results)
 
 
+# [新增] 2026-06-03 signals/v2.1: 用 core 引擎替代简化回测
+#   信号预先嵌入 bar._signal → Engine 时间线递进 → on_bar 读信号调仓
+#   返回 AccountAnalyzer，享受完整分析能力（费率/备注/基准/HTML报告）
+def run_backtest_with_core(
+    expr_or_signals,
+    data: 'pd.DataFrame',
+    symbol: str = '399317.SZ',
+    freq: str = '1d',
+    initial_capital: float = 1_000_000,
+    long_only: bool = True,
+    note_fields: List[str] = None,
+) -> 'AccountAnalyzer':
+    """
+    用 core 引擎回测择时信号，替代简化版 run_backtest()。
+
+    信号时序：signal[t] → bar[t] 调仓（引擎逐 bar 递进天然等价 T+1）
+    首日收益由 bar[t+1] 的快照捕获。
+
+    Args:
+        expr_or_signals: Expression / callable / pd.Series / np.ndarray / list
+        data: OHLCV DataFrame（index=DatetimeIndex）
+        symbol: 交易标的代码
+        freq: 数据频率（'1d' 等）
+        initial_capital: 初始资金
+        long_only: True=仅做多（信号>0买入，信号<=0卖出）
+        note_fields: 附加 bar 字段写入 TradeRecord.note（如 ['rsi']）
+
+    Returns:
+        AccountAnalyzer: 含完整指标/交易记录的链式分析器
+            analyzer.set_benchmark(...).to_notebook(...)
+
+    Example:
+        >>> from signals.v2 import Expression, FeatureSpace, run_backtest_with_core
+        >>> fs = FeatureSpace()
+        >>> expr = Expression("thr_mean(ATR{7})", fs)
+        >>> analyzer = run_backtest_with_core(expr, df, symbol='399317.SZ')
+        >>> analyzer.set_benchmark(bench_nav, '买入持有').to_notebook("ATR突破")
+    """
+    from core.engine import Engine
+    from core.account import account, OrderSide
+    from core.storage import context
+    from core.analyzer import AccountAnalyzer
+
+    # ── 1. 信号标准化 ──
+    if hasattr(expr_or_signals, 'generate'):
+        signal_values = expr_or_signals.generate(data)
+    elif callable(expr_or_signals):
+        signal_values = expr_or_signals(data)
+    elif isinstance(expr_or_signals, np.ndarray):
+        signal_values = pd.Series(
+            expr_or_signals.ravel(), index=data.index[:len(expr_or_signals)])
+    elif isinstance(expr_or_signals, pd.Series):
+        signal_values = expr_or_signals
+    else:
+        signal_values = pd.Series(
+            list(expr_or_signals), index=data.index[:len(expr_or_signals)])
+
+    # ── 2. 信号嵌入 data ──
+    df = data.copy()
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    if 'eob' not in df.columns:
+        df['eob'] = df.index
+
+    # 对齐信号日期
+    common_idx = df.index.intersection(signal_values.index)
+    if len(common_idx) < 2:
+        import warnings
+        warnings.warn("run_backtest_with_core: 有效数据不足")
+        return AccountAnalyzer(account=None)
+    df = df.loc[common_idx]
+    df['_signal'] = signal_values.reindex(common_idx).fillna(0).values
+
+    # ── 3. 引擎 + 策略 ──
+    engine = Engine()
+    context.mode = 'backtest'
+    context.bar_data_set.clear()       # 清理前次回测的bar去重缓存
+    context.unsubscribe(symbol, freq)
+    context.subscribe(symbol, freq, count=300)
+    engine.add_data(symbol, freq, df)
+
+    account.reset(init_cash=initial_capital)
+
+    note_fields = note_fields or []
+
+    class _SignalStrategy:
+        def on_bar(self, ctx, bars):
+            bar = bars[0]
+            sig = bar.get('_signal', 0)
+            pos = account.get_position(symbol)   # 必须传 symbol 获取单品种持仓
+            has_pos = bool(pos.get('volume', 0))
+
+            target_long = sig > 0 if long_only else sig > 0
+
+            note_parts = [f"signal={sig:.4f}"]
+            for f in note_fields:
+                if f in bar:
+                    note_parts.append(f"{f}={bar[f]}")
+            note = ', '.join(note_parts)
+
+            if target_long and not has_pos:
+                try:
+                    account.order_percent(symbol, 1.0, OrderSide.Buy, note=note)
+                except ValueError:
+                    pass
+            elif not target_long and has_pos:
+                try:
+                    account.order_percent(symbol, 1.0, OrderSide.Sell, note=note)
+                except ValueError:
+                    pass
+
+    start_time = df['eob'].iloc[0]
+    end_time = df['eob'].iloc[-1]
+
+    try:
+        engine.run(_SignalStrategy, start_time, end_time)
+    except Exception as e:
+        import warnings
+        warnings.warn(f"Core engine 回测异常: {e}")
+
+    return AccountAnalyzer(account)
+
+
 class Validator:
     """验证器 — 统一入口"""
 
@@ -621,6 +744,13 @@ class Validator:
     @staticmethod
     def run_backtest_from_signal(signals, prices, data=None, initial_capital=1_000_000, long_only=True):
         return run_backtest_from_signal(signals, prices, data, initial_capital, long_only)
+
+    @staticmethod
+    def run_backtest_with_core(expr_or_signals, data, symbol='399317.SZ',
+                                freq='1d', initial_capital=1_000_000,
+                                long_only=True, note_fields=None):
+        return run_backtest_with_core(expr_or_signals, data, symbol, freq,
+                                       initial_capital, long_only, note_fields)
 
     @staticmethod
     def walk_forward(expr_or_gen, data, train_size='2Y', test_size='1Y', step='6M',

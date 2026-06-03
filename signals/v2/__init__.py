@@ -145,8 +145,14 @@ from .validator import (
     Validator,
     run_backtest,
     run_backtest_from_signal,
+    run_backtest_with_core,
     walk_forward,
     WalkForwardResult,
+)
+
+from .walk_forward_v2 import (
+    walk_forward_with_core,
+    WalkForwardCoreResult,
 )
 
 from .pipeline import (
@@ -238,8 +244,11 @@ __all__ = [
     # Expression
     'NodeType', 'TreeNode', 'Expression', 'parse_expression',
     'parse_and_build', 'persist', 'regime_switch', 'np_persist',
-    # Validator
-    'Validator', 'run_backtest', 'run_backtest_from_signal', 'walk_forward', 'WalkForwardResult',
+    # Validator (v2.1 新增 run_backtest_with_core)
+    'Validator', 'run_backtest', 'run_backtest_from_signal',
+    'run_backtest_with_core', 'walk_forward', 'WalkForwardResult',
+    # Walk-Forward v2.1
+    'walk_forward_with_core', 'WalkForwardCoreResult',
     # Pipeline
     'SignalPipeline', 'pipe_and', 'pipe_or', 'pipe_vote', 'pipe_weighted',
     # Registry

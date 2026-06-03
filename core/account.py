@@ -593,6 +593,20 @@ class AccountManager:
 
         raise ValueError(f"No valid price found for {symbol} at {action_time}")
 
+    # [新增] 2026-06-03 重置账户状态，支持连续多次回测（walk-forward 等场景）
+    def reset(self, init_cash: float = None):
+        """
+        重置账户到初始状态
+        
+        Args:
+            init_cash: 可选，重置后的初始资金。不传则保持当前现金不变。
+        """
+        if init_cash is not None:
+            self.cash = round(init_cash, 2)
+        self.positions.clear()
+        self.trade_records.clear()
+        self.snapshots.clear()
+
 
 # ============================================================================
 # 内置基准策略
