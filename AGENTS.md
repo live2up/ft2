@@ -17,8 +17,7 @@ from signals.v2 import Expression, FeatureSpace, run_backtest
 
 | 模块 | Skill | 用途 |
 |------|-------|------|
-| notebook | ft2-notebook | HTML 报告 |
-| core | ft2-core | 回测引擎 |
+| core | ft2-core | 回测引擎 + HTML 报告（已融合 notebook） |
 | factor | ft2-factor | 因子发现 (v3: GP符号回归+可插拔适应度) |
 | signals | ft2-signals | 择时信号 |
 

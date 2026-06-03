@@ -30,8 +30,6 @@ signals/v2/walk_forward_v2.py — 滚动窗口验证 (core 引擎版)
 ============================================================================
 """
 
-import sys
-import os
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Any, Union
@@ -254,7 +252,6 @@ def walk_forward_with_core(
         train_mask = (dates >= train_start) & (dates < train_end)
         test_mask = (dates >= train_end) & (dates <= test_end)
         train_data = data_sorted.loc[train_mask]
-        test_data = data_sorted.loc[test_mask]
         all_data = data_sorted.loc[train_mask | test_mask]
 
         if len(train_data) < 30 or len(test_data) < 10:
