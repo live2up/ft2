@@ -1054,11 +1054,12 @@ class AccountAnalyzer:
                 nb.table(d['cmp_rows'], title=f"策略 vs {d['bench_label']} 指标对比",
                          columns=['指标', '策略', d['bench_label']])
             else:
-                nb.metrics(d['base_items'], columns=5)
+                base_rows = [{'指标': it['name'], '数值': it['value']} for it in d['base_items']]
+                nb.table(base_rows,title="基础指标", columns=['指标', '数值'])
 
             if d['has_records'] and '交易' in d['grouped']:
                 trade_m = [{'指标': n, '数值': v} for _, n, v, _ in d['grouped']['交易']]
-                nb.table(trade_m, columns=['指标', '数值'])
+                nb.table(trade_m,title="交易指标", columns=['指标', '数值'])
 
         # ═══════════════════════════
         # 模块2：收益走势图
