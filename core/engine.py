@@ -39,7 +39,13 @@ class Engine:
             eob = bar.get('eob')
             if eob is None:
                 continue
-                
+
+            # [新增] 2026-06-03 规范化 eob 时间
+            #   纯日期(00:00:00) → 15:00，日/周/月线通用
+            #   已有具体时间的（如盘中多周期）保持不动
+            eob = self._normalize_eob(eob)
+            bar['eob'] = eob
+
             if eob in self.timeline:
                 for b in self.timeline[eob]:
                     if b['symbol'] == symbol and b['frequency'] == freq:
@@ -49,6 +55,14 @@ class Engine:
                     self.timeline[eob].append(bar)
             else:
                 self.timeline[eob] = [bar]
+
+    @staticmethod
+    def _normalize_eob(eob):
+        """规范化 bar 结束时间：纯日期(00:00:00) → 15:00，已有时间的不动"""
+        ts = pd.Timestamp(eob)
+        if ts.hour == 0 and ts.minute == 0 and ts.second == 0:
+            return ts.replace(hour=15, minute=0, second=0)
+        return ts
 
     def run(self, strategy, start_time, end_time):
         # [修复] 2026-05-30 hasattr(类, 'on_bar') 对类也返回 True，

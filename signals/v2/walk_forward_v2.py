@@ -260,7 +260,7 @@ def walk_forward_with_core(
         if len(train_data) < 30 or len(test_data) < 10:
             break
 
-        # ── 训练集回测 ──
+        # ── 训练集回测（仅用 train_data，防前瞻偏差）──
         try:
             if hasattr(expr_or_gen, '_feature_df'):
                 expr_or_gen._feature_df = None
@@ -268,7 +268,7 @@ def walk_forward_with_core(
                 expr_or_gen._feature_space = None
 
             train_analyzer = run_backtest_with_core(
-                expr_or_gen, all_data, symbol=symbol, freq=freq,
+                expr_or_gen, train_data, symbol=symbol, freq=freq,
                 initial_capital=initial_capital, long_only=long_only,
                 note_fields=note_fields,
             )
@@ -276,7 +276,7 @@ def walk_forward_with_core(
         except Exception as e:
             train_metrics = {'error': str(e)}
 
-        # ── 测试集回测（重置特征，防止训练集数据泄漏） ──
+        # ── 测试集回测（all_data=train+test，train作lookback，test执行） ──
         try:
             if hasattr(expr_or_gen, '_feature_df'):
                 expr_or_gen._feature_df = None

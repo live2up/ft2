@@ -700,10 +700,9 @@ def run_backtest_with_core(
         def on_bar(self, ctx, bars):
             bar = bars[0]
             sig = bar.get('_signal', 0)
-            pos = account.get_position(symbol)   # 必须传 symbol 获取单品种持仓
-            has_pos = bool(pos.get('volume', 0))
+            has_pos = bool(account.get_position())  # 利用 get_position() 无参返回 dict 的灵活性
 
-            target_long = sig > 0 if long_only else sig > 0
+            target_long = sig > 0  # 当前仅支持做多（long_only=True）
 
             note_parts = [f"signal={sig:.4f}"]
             for f in note_fields:
