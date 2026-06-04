@@ -2,24 +2,27 @@
 
 > 因子挖掘体系
 
-> **版本：v3.0.0 | 更新日期：2026-06-01**
+> **版本：v3.1.0 | 更新日期：2026-06-04**
 >
 > **AI 助手注意：** 如果发现实际 API 与本文档不一致，说明源码已更新但 AI.md 未同步，请提醒用户更新。
 
 ---
 
 ## 版本说明
-- **v3/** — 推荐使用版本（GP 发现引擎 + 可插拔适应度 + 迭代探索 + 自增长因子库）
-- **v2/** — 稳定版本，不再新增功能
-- **v1/** — 已废弃
+
+- **v3/** — 维护中，**推荐使用**。GP 发现引擎 + 可插拔适应度 + 迭代探索 + 自增长因子库 + 持久化存档
+- **v2/** — 不再更新。保留 GP 挖掘、表达式引擎、回测管线，但无持久化
+- **v1/** — 已归档，仅作历史参考
 
 ---
 
 ## 核心 API (v3)
 
-> v3 的中心不是"合并文件"，而是构建一个**因子发现流水线**：
+> v3 构建一个**可持续的因子发现流水线**：
 > ```
-> 种子注入(formulas) → 多策略GP并行(IC/Sharpe/多频率) → Pipeline验证 → 入库 → 扩大的种子池 → 下一轮
+> 种子注入(formulas) → 多策略GP并行(IC/Sharpe/多频率) → Pipeline验证 → 入库 → 持久化(discovered/)
+>                                                                   ↓
+>                                                          扩大的种子池 → 下一轮
 > ```
 
 ### 1. 因子表达式引擎
@@ -103,6 +106,7 @@ engine = FactorDiscoveryEngine(
     seed_formulas=ALPHA101,      # 注入公式库作初始种子
     cost_rate=0.0,
     seed_n=50,
+    save_dir='./discovered',     # [新增] GP 结果持久化目录
 )
 
 # 多轮迭代 — 每轮可配置不同的适应度策略、调仓频率、持仓数
@@ -118,10 +122,11 @@ report = engine.run_pipeline(rounds=[
      'freq': '10D', 'val_top_n': 10},
 ])
 
-# 因子库自增长：每轮验证通过的因子自动入库
+# 每轮结束后自动保存到 save_dir/gp_round_001.json
 print(f"发现 {engine.library.size()} 个因子")
 # engine.library.seed_expressions(50)  → 下一轮种子
 # engine.library.by_source('gp')       → GP 发现的因子
+# engine.library.by_time('2026-06-01') → 按时间筛选
 # engine.library.to_dataframe()        → 导出表格
 ```
 
@@ -237,34 +242,62 @@ icw = ExpandingICCombiner(min_periods=60)
 combined_dyn = icw.combine([('f1', fv1), ('f2', fv2)], returns=returns_df)
 ```
 
-### 10. 自增长因子库
+### 10. 自增长因子库 + 持久化
 
 ```python
 from factor.v3 import FactorLibrary, LibraryEntry
 
 lib = FactorLibrary()
-# 入库
+
+# 入库 — created_at 自动打时间戳
 lib.register(LibraryEntry('alpha001', formula, fitness=1.5, source='gp'))
-# 批量
 lib.register_batch(entries)
+
 # 查询
-lib.by_source('gp')           # GP 发现的因子
+lib.by_source('gp')              # GP 发现的因子
 lib.by_category(FactorCategory.MOMENTUM)
-lib.seed_expressions(50)      # 取 Top 50 作下一轮种子
-lib.top(10, sort_by='sharpe') # 按指标排名
-lib.to_dataframe()            # 导出
+lib.by_round(3)                  # 第3轮发现的
+lib.by_time('2026-06-01', '2026-06-04')  # [新增] 按时间范围筛选
+lib.seed_expressions(50)         # 取 Top 50 作下一轮种子
+lib.top(10, sort_by='sharpe')    # 按指标排名
+lib.to_dataframe()               # 导出（含 created_at 列）
+
+# [新增] 持久化：保存到磁盘
+lib.save('./discovered/gp_round_001.json')
+
+# [新增] 持久化：从磁盘加载
+lib2 = FactorLibrary.load('./discovered/gp_round_001.json')
 ```
 
-### 11. 公式库
+### 11. 发现结果存档
+
+```python
+from factor.v3 import load_discovered, merge_discovered
+
+# [新增] 加载 discovered/ 目录下所有 .json 文件
+lib = load_discovered('./discovered')
+# 自动扫描 gp_round_001.json, gp_round_002.json, ...
+
+# [新增] 合并到已有因子库
+existing_lib = FactorLibrary()
+n = merge_discovered(existing_lib, './discovered')
+print(f"合并了 {n} 个新因子")
+
+# 继续探索：用合并后的因子库做种子
+seeds = existing_lib.seed_expressions(100, sort_by='sharpe')
+```
+
+### 12. 公式库
 
 ```python
 from factor.v3 import ALPHA101, ALPHA191, BASIC_FACTORS
 
-len(ALPHA101)       # 101   WorldQuant 101 Alpha
-len(ALPHA191)       # 171   国泰安 191 Alpha（含20个预留基本面缺口）
-len(BASIC_FACTORS)  # 20    因子原子基元（动量/反转/波动率/量价/截面/均线）
+len(ALPHA101)       # 101   WorldQuant 101 Alpha → formulas/wq101.py
+len(ALPHA191)       # 171   国泰安 191 Alpha（含20个预留基本面缺口）→ formulas/gt191.py
+len(BASIC_FACTORS)  # 20    因子原子基元 → formulas/basic.py
 
 # 总计: 292 条公式，全部可解析求值
+# 旧 import from factor.v3.formulas 仍兼容
 ```
 
 ---
@@ -272,23 +305,34 @@ len(BASIC_FACTORS)  # 20    因子原子基元（动量/反转/波动率/量价/
 ## v3 架构速查
 
 ```
-factor/v3/  (10 文件)
+factor/v3/
 ├── __init__.py         统一导出
-├── base.py             FactorCategory / FactorMetadata / FactorLibrary
-├── primitives.py       26 个原语（时序19 + 截面4 + 健壮1 + 语法糖3）
+├── base.py             FactorCategory / FactorMetadata / FactorLibrary (save/load)
+├── primitives.py       23 个原语（时序+截面+健壮+语法糖）
 ├── engine.py           表达式引擎：Tokenizer → Parser → AST → FactorExpression
-├── backtest.py         回测：Scheduler + Allocator + Combiner + Pipeline
-├── formulas.py         WQ101(101) + GT191(171) + BASIC(20) = 292公式
+├── backtest.py         回测一体化：Scheduler + Allocator + Combiner + Pipeline
+├── formulas/           公式数据库（拆分为子文件）
+│   ├── __init__.py     兼容 from factor.v3.formulas import ...
+│   ├── wq101.py        WorldQuant 101 Alpha (101条)
+│   ├── gt191.py        国泰安 191 Alpha (171条)
+│   └── basic.py        因子原子基元 (20条)
+├── discovered/         GP/ML 发现因子存档
+│   ├── __init__.py     load_discovered / merge_discovered
+│   └── gp_round_*.json 运行时自动生成（持久化）
+├── discover.py【核心】 GPEngine + 可插拔适应度 + FactorDiscoveryEngine + 自动落盘
 ├── validator.py        IC/IR/Bootstrap/换手率 检验
 ├── search.py           网格搜索 + 贝叶斯优化
-├── discover.py【核心】 GPEngine + 可插拔适应度 + FactorDiscoveryEngine
 └── cache.py            因子值 Parquet 缓存
 ```
 
-## GP 发现链路
+## GP 发现链路（含持久化）
 
 ```
-formulas → engine(编译) → primitives(原语) → fitness(适应度) → gp(进化) → pipeline(验证) → library(入库)
+formulas/ → engine(编译) → primitives(原语) → fitness(适应度) → gp(进化)
+                                                                     ↓
+                                             save_dir/gp_round_N.json ←── 入库
+                                                                     ↓
+                                             下次会话 load_discovered() → 扩大的种子池 → 持续探索
 ```
 
 ---
@@ -302,7 +346,7 @@ formulas → engine(编译) → primitives(原语) → fitness(适应度) → gp
 
 ---
 
-## v3 vs v2 关键默认值差异
+## v3 vs v2 关键差异
 
 | 参数 | v2 | v3 |
 |------|----|----|
@@ -311,6 +355,9 @@ formulas → engine(编译) → primitives(原语) → fitness(适应度) → gp
 | GP 适应度 | 固定 ICIR | **可插拔** |
 | 调度器/分配器 | 硬编码 | **构造注入** |
 | 因子库 | 无 | **自增长 FactorLibrary** |
+| 持久化 | 无 | **save_dir 自动落盘 + load_discovered 恢复** |
+| 时间戳 | 无 | **created_at + by_time() 按时间查询** |
+| 公式组织 | 单文件 formulas.py | **formulas/ 子包 (wq101/gt191/basic)** |
 
 ---
 
@@ -323,10 +370,12 @@ formulas → engine(编译) → primitives(原语) → fitness(适应度) → gp
 ---
 
 ## 注意事项
-- v1 已废弃，v2 不再新增功能，**新开发全部走 v3**
+
+- v1 已归档，v2 不再更新，**新开发全部走 v3**
 - `from factor.v3 import ...` 是推荐实践
 - `GPEngine` 替代了 v2 的 `FactorGPMiner`，API 不兼容
-- `FactorDiscoveryEngine.run_pipeline()` 是迭代探索的推荐入口
+- `FactorDiscoveryEngine.run_pipeline()` 是迭代探索的推荐入口，传入 `save_dir` 启用自动持久化
 - 调度器和分配器全部支持构造注入，无硬编码
 - 种子表达式注入仍然是 GP 搜索的关键质量保障
 - cost_rate=0.0 是 v3 默认值，如需计入交易成本请显式传入
+- `discovered/` 目录的 .json 文件可跨会话复用，重启不丢失
