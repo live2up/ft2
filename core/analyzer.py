@@ -139,7 +139,7 @@ class AccountAnalyzer:
     │   └── get_largest_loss_trades()   #  亏损 Top N
     │
     ├── [导出]
-    │   ├── to_notebook()               #  HTML 交互式报告 (无基准→三段式 / 有基准→对比前置)
+    │   ├── to_notebook()               #  HTML 交互式报告，header/footer 回调可选插入自定义内容
     │   └── to_excel()                  #  Excel (Sheet: 回测指标/每日资产/交易记录)
     │
     └── [底层]
@@ -1019,51 +1019,30 @@ class AccountAnalyzer:
     # 导出方法
     # ------------------------------------------------------------------------
 
-    def to_notebook(self, title: str = "回测报告"):
-        """导出为 Notebook 交互式报告，自动保存 HTML 文件
+    # --------------------------------------------------------------------
+    # Notebook 输出
+    # --------------------------------------------------------------------
+    # [重构] 2026-06-04 _build_sections 提取为独立方法，to_notebook 通过
+    #   header/footer 回调支持可选前后插入，保持一行导出向后兼容
 
-        遵循 notebook 推荐的 section 层次结构：
-        - 顶层 KPI 卡片（无 section 包裹，一眼掌握全局）
-        - 基础信息 / 指标汇总 / 收益分析(图表) / 交易明细 四大章节
-
-        Args:
-            title: 报告标题
-
-        Returns:
-            str: 输出的 HTML 文件路径
-
-        Example:
-            analyzer.to_notebook("动量策略")
-        """
+    def _build_sections(self, nb):
+        """将标准分析内容追加到 Notebook（指标/走势图/交易记录）"""
         # [重构] 2026-05-30 按 notebook 推荐层次结构重组：
-        #   顶层KPI → 基础信息(日期/资金) → 指标汇总(收益+风险+交易) →
-        #   收益分析(净值+回撤图表) → 交易明细(表格,折叠)
-        from notebook import Notebook
-
-        nb = Notebook(title)
-        nb.base_dir = self.base_dir
-
-        # 统一数据准备
+        #   指标汇总(收益+风险+交易) → 收益分析(净值+回撤图表) → 交易明细(表格,折叠)
         d = self._build_report_data()
 
-        # ═══════════════════════════
-        # 模块1：指标分析
-        # ═══════════════════════════
         with nb.section("指标分析"):
             if d['has_bench']:
                 nb.table(d['cmp_rows'], title=f"策略 vs {d['bench_label']} 指标对比",
                          columns=['指标', '策略', d['bench_label']])
             else:
                 base_rows = [{'指标': it['name'], '数值': it['value']} for it in d['base_items']]
-                nb.table(base_rows,title="基础指标", columns=['指标', '数值'])
+                nb.table(base_rows, title="基础指标", columns=['指标', '数值'])
 
             if d['has_records'] and '交易' in d['grouped']:
                 trade_m = [{'指标': n, '数值': v} for _, n, v, _ in d['grouped']['交易']]
-                nb.table(trade_m,title="交易指标", columns=['指标', '数值'])
+                nb.table(trade_m, title="交易指标", columns=['指标', '数值'])
 
-        # ═══════════════════════════
-        # 模块2：收益走势图
-        # ═══════════════════════════
         with nb.section("收益走势图"):
             if d['has_bench']:
                 nb.chart('perf', {
@@ -1083,9 +1062,6 @@ class AccountAnalyzer:
                     series_opts={'is_smooth': True},
                     datazoom_opts=[{'type_': 'slider', 'range_start': 0, 'range_end': 100}])
 
-        # ═══════════════════════════════════════════
-        # 模块3：交易记录
-        # ═══════════════════════════════════════════
         if d['has_records']:
             trades = []
             has_notes = any(getattr(t, 'note', '') for t in self.account.trade_records)
@@ -1104,6 +1080,62 @@ class AccountAnalyzer:
                 trades.append(row)
             with nb.section("交易记录"):
                 nb.table(trades, page={'size': 10})
+
+    def to_notebook(self, title: str = "回测报告", header=None, footer=None):
+        """导出为 Notebook 交互式报告
+
+        标准报告 = 指标分析 → 收益走势图 → 交易记录
+        header/footer 回调可在标准内容前后插入自定义模块
+
+        Args:
+            title: 报告标题
+            header: 可选的 header 回调，签名为 header(nb: Notebook) -> None
+                    回调内容置于标题下、标准分析段之前
+            footer: 可选的 footer 回调，签名为 footer(nb: Notebook) -> None
+                    回调内容置于标准分析段之后
+
+        Returns:
+            str: HTML 文件路径
+
+        Example:
+            # 简单导出（向后兼容）
+            analyzer.to_notebook("策略分析")
+
+            # 添加前置说明
+            analyzer.to_notebook("策略分析",
+                header=lambda nb: nb.text("## 策略设计思路"))
+
+            # 添加后置总结
+            analyzer.to_notebook("策略分析",
+                footer=lambda nb: nb.text("## 总结与展望"))
+
+            # 前后都加
+            def add_header(nb):
+                nb.text("## 策略逻辑")
+                nb.markdown("动量因子选股...")
+
+            def add_footer(nb):
+                with nb.section("归因分析"):
+                    nb.table(factor_data)
+
+            analyzer.to_notebook("策略分析",
+                header=add_header, footer=add_footer)
+        """
+        # [新增] 2026-06-04 header/footer 回调参数
+        #   用户可通过回调在标准报告前后插入任意 notebook 内容
+        #   不影响 to_notebook() 的一行导出行为
+        from notebook import Notebook
+
+        nb = Notebook(title)
+        nb.base_dir = self.base_dir
+
+        if header:
+            header(nb)
+
+        self._build_sections(nb)
+
+        if footer:
+            footer(nb)
 
         return nb.export_html()
 
