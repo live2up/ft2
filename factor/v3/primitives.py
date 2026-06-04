@@ -221,15 +221,31 @@ def winsorize(x: np.ndarray, n: float = 3.0) -> np.ndarray:
     """Winsorize 截尾：clamp 到 ±n 倍标准差
 
     抑制离群值（如行业单日暴涨 10%），提高因子稳健性。
+    逐截面（逐行）计算阈值，避免全局统计导致的前瞻偏差。
 
     [新增] 2026-06-01 v3
+    [修复] 2026-06-03 改为逐截面 winsorize，消除全局统计前瞻偏差
     """
     x = np.asarray(x, dtype=float)
-    mu = float(np.nanmean(x))
-    sig = float(np.nanstd(x))
-    if sig < 1e-10:
-        return np.full_like(x, mu)
-    return np.clip(x, mu - n * sig, mu + n * sig)
+    result = np.full_like(x, np.nan)
+    if x.ndim == 1:
+        mu = float(np.nanmean(x))
+        sig = float(np.nanstd(x))
+        if sig < 1e-10:
+            return np.full_like(x, mu)
+        return np.clip(x, mu - n * sig, mu + n * sig)
+    for i in range(x.shape[0]):
+        row = x[i, :]
+        valid = row[~np.isnan(row)]
+        if len(valid) < 2:
+            continue
+        mu = float(np.nanmean(valid))
+        sig = float(np.nanstd(valid))
+        if sig < 1e-10:
+            result[i, :] = mu
+        else:
+            result[i, :] = np.clip(row, mu - n * sig, mu + n * sig)
+    return result
 
 
 def cs_mean(x: np.ndarray) -> np.ndarray:
