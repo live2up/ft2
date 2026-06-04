@@ -639,7 +639,8 @@ class FactorDiscoveryEngine:
                  seed_formulas: Dict[str, str] = None,
                  cost_rate: float = 0.0,
                  seed_n: int = 100,
-                 random_seed: int = None):
+                 random_seed: int = None,
+                 save_dir: str = None):
         self.data = data
         self.returns = returns
         if not isinstance(self.returns.index, pd.DatetimeIndex):
@@ -649,6 +650,7 @@ class FactorDiscoveryEngine:
         self.cost_rate = cost_rate
         self.seed_n = seed_n
         self.random_seed = random_seed
+        self.save_dir = save_dir  # [新增] 2026-06-04 GP 结果自动持久化目录
 
         # Seed formulas
         self.seed_formulas = seed_formulas or {}
@@ -806,6 +808,16 @@ class FactorDiscoveryEngine:
             }
             self.report.rounds.append(round_stats)
             self.report.total_discovered += new_count
+
+            # [新增] 2026-06-04 每轮结束后自动持久化到 discovered/ 目录
+            if self.save_dir and new_count > 0:
+                import os as _os
+                _os.makedirs(self.save_dir, exist_ok=True)
+                save_path = _os.path.join(self.save_dir, f'gp_round_{round_idx+1:03d}.json')
+                self.library.save(save_path)
+                logger.info(f"因子库自动保存: {save_path} ({self.library.size()} 条)")
+                if verbose:
+                    print(f"已保存到: {save_path}")
 
             if verbose:
                 print(f"入库: {new_count} 个新因子, 因子库总量: {self.library.size()}")

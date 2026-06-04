@@ -13,8 +13,10 @@ factor/v3/base.py — 因子基类 + 因子库
 =============================================================================
 """
 
+import json
+import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime, date
 from typing import Dict, List, Optional, Any, Callable, Type
 from enum import Enum
@@ -165,13 +167,14 @@ class LibraryEntry:
     记录一个已验证因子的完整信息，支持按多种维度查询。
 
     Attributes:
-        alpha_id: 因子唯一标识 (如 'gtja_001', 'gp_round1_003')
+        alpha_id: 因子唯一标识 (如 'gtja_001', 'gp_20260604_001')
         expression: 表达式字符串
         category: 因子分类
         fitness: 适应度值 (发现时的最优值)
         ic_mean: IC 均值 (选填)
         sharpe: Pipeline 回测 Sharpe (选填)
         discovered_at: 发现轮次 (0=种子公式, 1+=GP 轮次)
+        created_at: 入库时间戳 ISO 字符串 (用于按时间筛选/排序)
         source: 来源 ('formula' | 'gp' | 'manual')
     """
     alpha_id: str
@@ -181,11 +184,12 @@ class LibraryEntry:
     ic_mean: float = 0.0
     sharpe: float = 0.0
     discovered_at: int = 0
+    created_at: str = field(default_factory=lambda: datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     source: str = 'manual'
 
     def __repr__(self) -> str:
         return (f"LibraryEntry({self.alpha_id}, fitness={self.fitness:.3f}, "
-                f"source={self.source})")
+                f"created={self.created_at[:10]}, source={self.source})")
 
 
 class FactorLibrary:
@@ -262,6 +266,60 @@ class FactorLibrary:
         """按发现轮次查询"""
         return [e for e in self._entries.values() if e.discovered_at == round_num]
 
+    def by_time(self, date_from: str = None, date_to: str = None) -> List[LibraryEntry]:
+        """按入库时间范围查询
+
+        Args:
+            date_from: 起始日期 '2026-06-01' (含)
+            date_to: 截止日期 '2026-06-04' (含)
+        """
+        result = list(self._entries.values())
+        if date_from:
+            result = [e for e in result if e.created_at >= date_from]
+        if date_to:
+            result = [e for e in result if e.created_at <= date_to + ' 23:59:59']
+        return result
+
+    def save(self, path: str):
+        """持久化为 JSON 文件"""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data = []
+        for e in self._entries.values():
+            d = asdict(e)
+            d['category'] = d['category'].value if isinstance(d['category'], FactorCategory) else d['category']
+            data.append(d)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def load(cls, path: str) -> 'FactorLibrary':
+        """从 JSON 文件加载"""
+        lib = cls()
+        if not os.path.exists(path):
+            return lib
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        for d in data:
+            cat = d.get('category', 'custom')
+            if isinstance(cat, str):
+                try:
+                    cat = FactorCategory(cat)
+                except ValueError:
+                    cat = FactorCategory.CUSTOM
+            entry = LibraryEntry(
+                alpha_id=d['alpha_id'],
+                expression=d.get('expression', ''),
+                category=cat,
+                fitness=d.get('fitness', 0.0),
+                ic_mean=d.get('ic_mean', 0.0),
+                sharpe=d.get('sharpe', 0.0),
+                discovered_at=d.get('discovered_at', 0),
+                created_at=d.get('created_at', ''),
+                source=d.get('source', 'manual'),
+            )
+            lib.register(entry)
+        return lib
+
     def size(self) -> int:
         """当前库存因子数"""
         return len(self._entries)
@@ -282,6 +340,7 @@ class FactorLibrary:
                 'ic_mean': round(e.ic_mean, 4),
                 'sharpe': round(e.sharpe, 2),
                 'round': e.discovered_at,
+                'created_at': e.created_at,
                 'source': e.source,
             })
         return pd.DataFrame(rows)
@@ -290,5 +349,9 @@ class FactorLibrary:
         n_formula = len(self.by_source('formula'))
         n_gp = len(self.by_source('gp'))
         n_manual = len(self.by_source('manual'))
+        entries = list(self._entries.values())
+        times = sorted(set(e.created_at[:10] for e in entries if e.created_at))
+        time_range = f"{times[0]}~{times[-1]}" if times else "empty"
         return (f"FactorLibrary(total={self.size()}, "
-                f"formula={n_formula}, gp={n_gp}, manual={n_manual})")
+                f"formula={n_formula}, gp={n_gp}, manual={n_manual}, "
+                f"time={time_range})")

@@ -4,12 +4,13 @@ factor/v3 — 因子发现引擎
 以机器因子探索为核心，构建可插拔 GP 适应度、迭代发现循环、
 统一公式库的因子引擎。
 
-模块结构 (9 文件):
-  base.py         — FactorCategory / FactorMetadata / FactorLibrary
-  primitives.py   — 19 个时序/截面原语
+模块结构:
+  base.py         — FactorCategory / FactorMetadata / FactorLibrary (含 save/load)
+  primitives.py   — 23 个时序/截面原语
   engine.py       — 表达式引擎 (Tokenizer + Parser + AST + ExpressionFactor + AlphaExplorer)
   backtest.py     — 回测一体化 (Scheduler + Allocator + Combiner + Pipeline)
-  formulas.py     — WQ101 + GT191 公式字典
+  formulas/       — 公式数据库 (wq101.py / gt191.py / basic.py)
+  discovered/     — GP 发现因子存档 (json 持久化 + 时间戳查询)
   validator.py    — IC/IR/Bootstrap/换手率 检验
   search.py       — 网格搜索 + BO 搜索
   discover.py     — GP引擎 + 可插拔适应度 + 迭代发现流水线
@@ -22,7 +23,7 @@ Quick Start:
   ...     ALPHA101, ALPHA191,                                 # formulas
   ...     FactorLibrary, FactorDiscoveryEngine,               # discover
   ... )
-[重构] 2026-06-01 v3 创建
+[重构] 2026-06-04 v3 重组 formulas/ + discovered/ 子目录
 """
 
 # ── base ──
@@ -90,6 +91,9 @@ from .discover import (
 
 # ── cache ──
 from .cache import FactorCacheStore
+
+# ── discovered ──
+from .discovered import load_discovered, merge_discovered
 
 
 __all__ = [
