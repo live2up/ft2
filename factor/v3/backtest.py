@@ -119,6 +119,33 @@ def recommend_scheduler_from_decay(half_life: float) -> RebalanceScheduler:
         return FixedScheduler('ME')
 
 
+def parse_scheduler(freq: str) -> RebalanceScheduler:
+    """字符串频率 → Scheduler 对象
+
+    统一入口，消除各处重复的 freq 字符串解析逻辑。
+
+    Args:
+        freq: 频率字符串，支持 'ME'(月末)/'W'(周末)/'M'(月初)/'ND'(每N天)/纯数字N
+
+    Returns:
+        RebalanceScheduler 对象
+
+    [新增] 2026-06-05 统一 freq 解析，消除 4 处重复代码
+    """
+    f = freq.upper()
+    if f in ('ME', 'W', 'M'):
+        return FixedScheduler(f)
+    if f.endswith('D'):
+        days = int(f.replace('D', ''))
+        if days < 1:
+            raise ValueError(f"间隔天数必须 >= 1，当前: {freq}")
+        return IntervalScheduler(days)
+    try:
+        return IntervalScheduler(int(freq))
+    except ValueError:
+        raise ValueError(f"无法解析频率 '{freq}'，支持: 'ME'/'W'/'M'/'5D'/'10' 等")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Part 2: 权重分配器
 # ═══════════════════════════════════════════════════════════════════════════
@@ -526,17 +553,8 @@ class FactorPipeline:
             freqs = ['ME', 'W', '5D']
         results = {}
         for freq in freqs:
-            freq_upper = freq.upper()
-            if freq_upper in ('ME', 'W', 'M'):
-                scheduler = FixedScheduler(freq_upper)
-            elif freq.endswith('D') or freq.endswith('d'):
-                days = int(freq.replace('D', '').replace('d', ''))
-                scheduler = IntervalScheduler(days)
-            else:
-                try:
-                    scheduler = IntervalScheduler(int(freq))
-                except ValueError:
-                    raise ValueError(f"无法解析频率 '{freq}'")
+            # [重构] 2026-06-05 使用 parse_scheduler 统一入口
+            scheduler = parse_scheduler(freq)
             original = self.scheduler
             self.scheduler = scheduler
             try:

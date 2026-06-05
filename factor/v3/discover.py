@@ -31,6 +31,7 @@ from .engine import (
     FactorExpression, ASTNode, NodeType, evaluate_node,
 )
 from .base import FactorCategory, LibraryEntry, FactorLibrary
+from .backtest import FixedScheduler, IntervalScheduler, TopNEqualWeight
 
 logger = logging.getLogger(__name__)
 
@@ -97,29 +98,30 @@ class FitnessMode(Enum):
     ICIR = 'icir'            # RankIC × ICIR（快速，适合大规模种群）
     SHARPE = 'sharpe'        # Pipeline 回测 Sharpe（真实绩效）
     MULTI_FREQ = 'multi_freq'  # ME/W/5D 取最优 Sharpe
-    WQB = 'wqb'              # [新增] WQB 五维漏斗：ICIR→HR→QuickBacktest
+    WQB = 'wqb'              # WQB 五维漏斗：ICIR→HR→QuickBacktest
+    INDUSTRY = 'industry'    # [新增] 行业轮动自适应：N<50跳过IC, N≥50逐步启用IC门控
 
 
 class FitnessCalculator:
     """适应度计算器基类
 
     所有配置参数通过构造注入，避免子类硬编码。
-    scheduler / allocator 仅 SHARPE / MULTI_FREQ 模式使用，ICIR 模式忽略。
 
-    [重构] 2026-06-01 支持 scheduler/allocator/freq_list 构造注入
+    [重构] 2026-06-05 统一参数规范:
+      scheduler:  调度器对象(FixedScheduler/IntervalScheduler)，所有模式统一
+      allocator:  分配器对象(TopNEqualWeight等)，所有模式统一
+      不再使用 freq_list/quick_freq 等字符串简写
     """
 
     def __init__(self, data: Dict[str, np.ndarray], future_returns: pd.DataFrame,
                  returns: pd.DataFrame = None, cost_rate: float = 0.0,
-                 scheduler=None, allocator=None, freq_list: List[str] = None):
+                 scheduler=None, allocator=None):
         self.data = data
         self.future_returns = future_returns
         self.returns = returns
         self.cost_rate = cost_rate
-        # [重构] 2026-06-01 构造注入，外部可自定义调度器和分配器
         self.scheduler = scheduler
         self.allocator = allocator
-        self.freq_list = freq_list or ['ME', 'W', '5D']
         self._shape = self._infer_shape(data)
 
     @staticmethod
@@ -226,13 +228,30 @@ class SharpeFitness(FitnessCalculator):
 
 
 class MultiFreqFitness(FitnessCalculator):
-    """多频率适应度：取 self.freq_list 中最优 Sharpe
+    """多频率适应度：取多调度器中最优 Sharpe
 
     兼顾多周期稳健性，适合最终筛选阶段。
-    self.freq_list 可通过构造注入自定义。
 
-    [重构] 2026-06-01 用注入参数替代硬编码
+    参数:
+      scheduler_list: 调度器列表, 默认 [FixedScheduler('ME'), FixedScheduler('W'), IntervalScheduler(5)]
+      如果只传了 scheduler(单个), 则退化为单频率模式
+
+    [重构] 2026-06-05 freq_list → scheduler_list, 统一用调度器对象
     """
+
+    def __init__(self, data: Dict[str, np.ndarray], future_returns: pd.DataFrame,
+                 returns: pd.DataFrame = None, cost_rate: float = 0.0,
+                 scheduler=None, allocator=None,
+                 scheduler_list: list = None):
+        super().__init__(data, future_returns, returns, cost_rate,
+                         scheduler, allocator)
+        # 默认三频率: 月末 / 周末 / 5天
+        if scheduler_list is not None:
+            self.scheduler_list = scheduler_list
+        elif scheduler is not None:
+            self.scheduler_list = [scheduler]
+        else:
+            self.scheduler_list = [FixedScheduler('ME'), FixedScheduler('W'), IntervalScheduler(5)]
 
     def compute(self, factor_values: np.ndarray) -> float:
         if not self._validate(factor_values):
@@ -240,16 +259,16 @@ class MultiFreqFitness(FitnessCalculator):
         if self.returns is None:
             return -999.0
         try:
-            from .backtest import FactorPipeline, FixedScheduler, TopNEqualWeight
+            from .backtest import FactorPipeline, TopNEqualWeight
             T, N = self._shape
             fv_df = pd.DataFrame(factor_values, index=self.returns.index[:T],
                                  columns=self.returns.columns[:N])
-            # [重构] 2026-06-01 使用注入参数，否则用安全默认值
-            scheduler = self.scheduler if self.scheduler is not None else FixedScheduler('ME')
             allocator = self.allocator if self.allocator is not None else TopNEqualWeight(3)
-            pipeline = FactorPipeline(self.returns, scheduler, allocator, self.cost_rate)
-            results = pipeline.compare_frequencies(fv_df, self.freq_list)
-            sharpes = [r.sharpe_ratio for r in results.values()]
+            sharpes = []
+            for sched in self.scheduler_list:
+                pipeline = FactorPipeline(self.returns, sched, allocator, self.cost_rate)
+                result = pipeline.evaluate(fv_df)
+                sharpes.append(result.sharpe_ratio)
             return float(max(sharpes)) if sharpes else -999.0
         except Exception as e:
             logger.debug(f"MultiFreqFitness 计算失败: {e}")
@@ -269,23 +288,22 @@ class WQBFitness(FitnessCalculator):
       最终 fitness 是 Sharpe 而非 IC 复合值
 
     参数:
+      scheduler:       Stage2回测调度器, 默认FixedScheduler('ME')
       min_hr:          Stage1 HR阈值，默认0.5
       min_yearly_stability: Stage1 分年度稳定性阈值，默认0.6
-      quick_freq:      Stage2 回测频率，默认freq_list[0]（通常ME）
 
     [新增] 2026-06-05 WQB方法论
+    [重构] 2026-06-05 quick_freq/freq_list → scheduler, 统一参数规范
     """
 
     def __init__(self, data: Dict[str, np.ndarray], future_returns: pd.DataFrame,
                  returns: pd.DataFrame = None, cost_rate: float = 0.0,
-                 scheduler=None, allocator=None, freq_list: List[str] = None,
-                 min_hr: float = 0.5, min_yearly_stability: float = 0.6,
-                 quick_freq: str = None):
+                 scheduler=None, allocator=None,
+                 min_hr: float = 0.5, min_yearly_stability: float = 0.6):
         super().__init__(data, future_returns, returns, cost_rate,
-                         scheduler, allocator, freq_list)
+                         scheduler, allocator)
         self.min_hr = min_hr
         self.min_yearly_stability = min_yearly_stability
-        self.quick_freq = quick_freq or (self.freq_list[0] if self.freq_list else 'ME')
 
     def _compute_wqb_ic(self, factor_values: np.ndarray) -> Dict[str, float]:
         """Stage 1: ICIR + HR + 分年度方向一致性
@@ -326,13 +344,13 @@ class WQBFitness(FitnessCalculator):
                 'yearly_stability': yearly_stability, 'pass': pass_stage1}
 
     def _quick_backtest(self, factor_values: np.ndarray) -> float:
-        """Stage 2: 单频率快速回测"""
+        """Stage 2: 单频率Pipeline回测"""
         from .backtest import FactorPipeline, FixedScheduler, TopNEqualWeight
         T, N = self._shape
         fv_df = pd.DataFrame(factor_values,
                              index=self.returns.index[:T],
                              columns=self.returns.columns[:N])
-        scheduler = FixedScheduler(self.quick_freq)
+        scheduler = self.scheduler if self.scheduler is not None else FixedScheduler('ME')
         allocator = self.allocator if self.allocator is not None else TopNEqualWeight(3)
         pipeline = FactorPipeline(self.returns, scheduler, allocator, self.cost_rate)
         result = pipeline.evaluate(fv_df)
@@ -360,15 +378,14 @@ def make_fitness_calculator(mode: FitnessMode, data: Dict[str, np.ndarray],
                             future_returns: pd.DataFrame, returns: pd.DataFrame = None,
                             cost_rate: float = 0.0,
                             scheduler=None, allocator=None,
-                            freq_list: List[str] = None,
-                            # [新增] 2026-06-05 WQB 特有参数透传
+                            # WQB 特有参数
                             min_hr: float = 0.5,
-                            min_yearly_stability: float = 0.6,
-                            quick_freq: str = None) -> FitnessCalculator:
+                            min_yearly_stability: float = 0.6) -> FitnessCalculator:
     """工厂函数：根据模式创建适应度计算器
 
-    [重构] 2026-06-01 支持 scheduler/allocator/freq_list 透传
-    [新增]  2026-06-05 支持 WQB 五维漏斗参数透传
+    统一参数规范 (2026-06-05):
+      scheduler:  调度器对象, 所有模式通用, 默认FixedScheduler('ME')
+      allocator:  分配器对象, 所有模式通用, 默认TopNEqualWeight(3)
     """
     if mode == FitnessMode.ICIR:
         return ICIRFitness(data, future_returns)
@@ -377,14 +394,15 @@ def make_fitness_calculator(mode: FitnessMode, data: Dict[str, np.ndarray],
                              scheduler=scheduler, allocator=allocator)
     elif mode == FitnessMode.MULTI_FREQ:
         return MultiFreqFitness(data, future_returns, returns, cost_rate,
-                                scheduler=scheduler, allocator=allocator,
-                                freq_list=freq_list)
+                                scheduler=scheduler, allocator=allocator)
     elif mode == FitnessMode.WQB:
         return WQBFitness(data, future_returns, returns, cost_rate,
                           scheduler=scheduler, allocator=allocator,
-                          freq_list=freq_list,
-                          min_hr=min_hr, min_yearly_stability=min_yearly_stability,
-                          quick_freq=quick_freq)
+                          min_hr=min_hr, min_yearly_stability=min_yearly_stability)
+    elif mode == FitnessMode.INDUSTRY:
+        from .industry_fitness import IndustryFitness
+        return IndustryFitness(data, future_returns, returns, cost_rate,
+                               scheduler=scheduler, allocator=allocator)
     else:
         raise ValueError(f"未知适应度模式: {mode}")
 
@@ -431,8 +449,8 @@ class GPEngine:
                  custom_primitives: List[tuple] = None,
                  seed_expressions: List[str] = None,
                  random_seed: int = None,
-                 # [重构] 2026-06-01 调度参数，仅 fitness_mode 模式使用
-                 scheduler=None, allocator=None, freq_list: List[str] = None,
+                 # [重构] 2026-06-05 统一调度参数: 去掉freq_list, 只用scheduler
+                 scheduler=None, allocator=None,
                  cost_rate: float = 0.0):
         self.data = data
         self.future_returns = future_returns
@@ -476,7 +494,7 @@ class GPEngine:
         elif fitness_mode is not None:
             self.fitness_calc = make_fitness_calculator(
                 fitness_mode, data, future_returns, returns, self.cost_rate,
-                scheduler=scheduler, allocator=allocator, freq_list=freq_list)
+                scheduler=scheduler, allocator=allocator)
         else:
             self.fitness_calc = ICIRFitness(data, future_returns)
 
@@ -850,16 +868,7 @@ class FactorDiscoveryEngine:
         self.report.rounds = []
         self.report.total_discovered = 0
 
-        from .backtest import FactorPipeline, FixedScheduler, IntervalScheduler, TopNEqualWeight
-
-        def _make_scheduler(freq_str: str):
-            """将频率字符串转为 Scheduler 对象"""
-            f = freq_str.upper()
-            if f in ('ME', 'W', 'M'):
-                return FixedScheduler(f)
-            if freq_str.upper().endswith('D'):
-                return IntervalScheduler(int(freq_str.upper().replace('D', '')))
-            return IntervalScheduler(int(freq_str))
+        from .backtest import FactorPipeline, TopNEqualWeight, parse_scheduler
 
         for round_idx, config in enumerate(rounds):
             mode_str = config.get('mode', 'icir')
@@ -871,7 +880,7 @@ class FactorDiscoveryEngine:
             # [重构] 2026-06-01 调度参数可配置，不再硬编码
             val_freq = config.get('freq', 'ME')
             val_top_n = config.get('val_top_n', 3)
-            val_scheduler = _make_scheduler(val_freq)
+            val_scheduler = parse_scheduler(val_freq)
             val_allocator = TopNEqualWeight(val_top_n)
 
             if verbose:

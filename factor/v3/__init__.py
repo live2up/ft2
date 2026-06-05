@@ -56,7 +56,7 @@ from .engine import (
 # ── backtest ──
 from .backtest import (
     RebalanceScheduler, FixedScheduler, IntervalScheduler,
-    recommend_scheduler_from_decay,
+    recommend_scheduler_from_decay, parse_scheduler,
     WeightAllocator, TopNEqualWeight, ScoreProportional, RiskParity,
     FactorCombiner, EqualWeightCombiner, FixedWeightCombiner, ExpandingICCombiner,
     cross_section_zscore,
@@ -90,6 +90,9 @@ from .discover import (
     DEFAULT_GP_CONFIG, TERMINALS, SAFE_GP_TERMINALS, PRIMITIVE_WITH_PARAMS,
 )
 
+# ── industry_fitness ──
+from .industry_fitness import IndustryFitness
+
 # ── cache ──
 from .cache import FactorCacheStore
 
@@ -118,7 +121,7 @@ __all__ = [
     'register_terminal', 'registered_terminals',  # [新增] 2026-06-05
     # backtest
     'RebalanceScheduler', 'FixedScheduler', 'IntervalScheduler',
-    'recommend_scheduler_from_decay',
+    'recommend_scheduler_from_decay', 'parse_scheduler',
     'WeightAllocator', 'TopNEqualWeight', 'ScoreProportional', 'RiskParity',
     'FactorCombiner', 'EqualWeightCombiner', 'FixedWeightCombiner', 'ExpandingICCombiner',
     'cross_section_zscore',

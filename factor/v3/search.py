@@ -82,7 +82,7 @@ class FactorGridSearch:
             List[GridSearchResult]: 按 Sharpe 降序排列的结果
         """
         from .validator import FactorValidator
-        from .backtest import FactorPipeline, FixedScheduler, IntervalScheduler, TopNEqualWeight
+        from .backtest import FactorPipeline, TopNEqualWeight, parse_scheduler
 
         if freqs is None:
             freqs = ['ME', 'W']
@@ -94,15 +94,8 @@ class FactorGridSearch:
 
         param_combos = list(itertools.product(lookbacks, freqs, top_ns))
         for i, (lookback, freq, top_n) in enumerate(param_combos):
-            # Build scheduler
-            freq_upper = freq.upper()
-            if freq_upper in ('ME', 'W', 'M'):
-                scheduler = FixedScheduler(freq_upper)
-            elif freq.endswith('D'):
-                days = int(freq.replace('D', ''))
-                scheduler = IntervalScheduler(days)
-            else:
-                scheduler = IntervalScheduler(int(freq))
+            # [重构] 2026-06-05 使用 parse_scheduler 统一入口
+            scheduler = parse_scheduler(freq)
 
             # Check cache
             start_date = str(self.returns.index[0].date())
@@ -216,15 +209,10 @@ class FactorBOSearch:
             Dict: {'best_params', 'best_score', 'all_results'}
         """
         from .validator import FactorValidator
-        from .backtest import FactorPipeline, FixedScheduler, IntervalScheduler, TopNEqualWeight
+        from .backtest import FactorPipeline, TopNEqualWeight, parse_scheduler
 
-        freq_upper = freq.upper()
-        if freq_upper in ('ME', 'W', 'M'):
-            scheduler = FixedScheduler(freq_upper)
-        elif freq.endswith('D'):
-            scheduler = IntervalScheduler(int(freq.replace('D', '')))
-        else:
-            scheduler = IntervalScheduler(int(freq))
+        # [重构] 2026-06-05 使用 parse_scheduler 统一入口
+        scheduler = parse_scheduler(freq)
         allocator = TopNEqualWeight(top_n)
 
         # [修复] 2026-06-01 失败值从 1e10 改为 999.0 与 FitnessCalculator 一致
