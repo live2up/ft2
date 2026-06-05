@@ -20,17 +20,15 @@ factor/v3/discover.py — 因子发现引擎（v3 核心创新）
 
 import random
 import logging
-import warnings
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional, Tuple, Set, Any
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 
 from .engine import (
     FactorExpression, ASTNode, NodeType, evaluate_node,
-    UNARY_FUNCTIONS, BINARY_FUNCTIONS, PRIMITIVE_FUNCTIONS,
 )
 from .base import FactorCategory, LibraryEntry, FactorLibrary
 
@@ -42,6 +40,12 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════
 
 TERMINALS = ['close', 'volume', 'open', 'high', 'low', 'amount']
+# [新增] 2026-06-05 白名单：仅允许已知安全的终端变量参与 GP 随机树生成
+# 排除 change/changeRatio/preclose/pe_ttm_index 等前视偏差源或噪声源
+SAFE_GP_TERMINALS = {
+    'open', 'high', 'low', 'close', 'volume', 'amount',
+    'rel_close', 'share', 'downside_vol', 'rel_volume', 'rel_amount',
+}
 UNARY_OPS = ['abs', 'sqrt', 'log', 'neg', 'exp', 'tanh']  # [新增] 2026-06-01 exp/tanh
 BINARY_OPS = ['add', 'sub', 'mul', 'div', 'max', 'min']
 CONSTANTS = [0.0, -1.0, 1.0, 0.5, 2.0]
@@ -93,6 +97,7 @@ class FitnessMode(Enum):
     ICIR = 'icir'            # RankIC × ICIR（快速，适合大规模种群）
     SHARPE = 'sharpe'        # Pipeline 回测 Sharpe（真实绩效）
     MULTI_FREQ = 'multi_freq'  # ME/W/5D 取最优 Sharpe
+    WQB = 'wqb'              # [新增] WQB 五维漏斗：ICIR→HR→QuickBacktest
 
 
 class FitnessCalculator:
@@ -141,23 +146,16 @@ class ICIRFitness(FitnessCalculator):
     """RankIC 适应度：|IC_mean| × ICIR × 100
 
     适合 GP 初期快速筛选。每日一个 IC 值，统计量更稳定。
+
+    注意：纯 IC 方向容易被高 IC 低 Sharpe 的因子欺骗（如 streak²、body_mean）。
+    推荐优先使用 WQBFitness 替代。
     """
 
     def compute(self, factor_values: np.ndarray) -> float:
         if not self._validate(factor_values):
             return -999.0
-        T, N = self._shape
-        daily_ics = []
-        for t in range(T):
-            fv = factor_values[t, :]
-            rv = self.future_returns.iloc[t].values
-            mask = ~np.isnan(fv) & ~np.isnan(rv)
-            if mask.sum() < 5:
-                continue
-            corr = np.corrcoef(fv[mask], rv[mask])[0, 1]
-            if not np.isnan(corr):
-                daily_ics.append(corr)
-        if len(daily_ics) < 30:
+        daily_ics, _ = _compute_daily_ics(factor_values, self.future_returns)
+        if daily_ics is None:
             return -999.0
         ic_mean = float(np.mean(daily_ics))
         ic_std = float(np.std(daily_ics, ddof=1))
@@ -165,6 +163,37 @@ class ICIRFitness(FitnessCalculator):
             return -999.0
         icir = ic_mean / ic_std
         return abs(ic_mean) * icir * 100.0
+
+
+def _compute_daily_ics(factor_values: np.ndarray, future_returns: pd.DataFrame
+                       ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """计算日频 IC 序列 + 有效日索引（供各 FitnessCalculator 复用）
+
+    Args:
+        factor_values: (T, N) 因子值数组
+        future_returns: T 行收益 DataFrame
+
+    Returns:
+        (daily_ics, valid_indices):
+          daily_ics:    长度为 n 的 IC 数组，n < 30 时返回 (None, None)
+          valid_indices: 长度为 n 的整数数组，记录每个 IC 对应的原始 t 索引
+    """
+    T = factor_values.shape[0]
+    daily_ics = []
+    valid_indices = []
+    for t in range(T):
+        fv = factor_values[t, :]
+        rv = future_returns.iloc[t].values
+        mask = ~np.isnan(fv) & ~np.isnan(rv)
+        if mask.sum() < 5:
+            continue
+        corr = np.corrcoef(fv[mask], rv[mask])[0, 1]
+        if not np.isnan(corr):
+            daily_ics.append(corr)
+            valid_indices.append(t)
+    if len(daily_ics) < 30:
+        return None, None
+    return np.array(daily_ics), np.array(valid_indices, dtype=int)
 
 
 class SharpeFitness(FitnessCalculator):
@@ -227,14 +256,119 @@ class MultiFreqFitness(FitnessCalculator):
             return -999.0
 
 
+class WQBFitness(FitnessCalculator):
+    """WQB 漏斗适应度 — 防高IC低Sharpe陷阱
+
+    两阶段级联（GP每代内嵌）:
+      Stage 1: WQB版IC过滤器 ← ICIR + HR(胜率) + 分年度稳定性，秒级
+      Stage 2: 快速回测       ← 单频率Pipeline Sharpe，~0.05秒
+
+    与 ICIRFitness 相比:
+      HR<50% 直接淘汰（方向不稳定，无策略价值 → 淘汰 STR_20d 型陷阱）
+      分年度IC方向不一致直接淘汰（只有特定年份有效的因子不要）
+      最终 fitness 是 Sharpe 而非 IC 复合值
+
+    参数:
+      min_hr:          Stage1 HR阈值，默认0.5
+      min_yearly_stability: Stage1 分年度稳定性阈值，默认0.6
+      quick_freq:      Stage2 回测频率，默认freq_list[0]（通常ME）
+
+    [新增] 2026-06-05 WQB方法论
+    """
+
+    def __init__(self, data: Dict[str, np.ndarray], future_returns: pd.DataFrame,
+                 returns: pd.DataFrame = None, cost_rate: float = 0.0,
+                 scheduler=None, allocator=None, freq_list: List[str] = None,
+                 min_hr: float = 0.5, min_yearly_stability: float = 0.6,
+                 quick_freq: str = None):
+        super().__init__(data, future_returns, returns, cost_rate,
+                         scheduler, allocator, freq_list)
+        self.min_hr = min_hr
+        self.min_yearly_stability = min_yearly_stability
+        self.quick_freq = quick_freq or (self.freq_list[0] if self.freq_list else 'ME')
+
+    def _compute_wqb_ic(self, factor_values: np.ndarray) -> Dict[str, float]:
+        """Stage 1: ICIR + HR + 分年度方向一致性
+
+        [修复] 2026-06-05 使用 _compute_daily_ics 公共函数 + valid_indices 修正年对齐
+        """
+        daily_ics, valid_indices = _compute_daily_ics(factor_values, self.future_returns)
+        if daily_ics is None:
+            return {'ic_mean': 0.0, 'icir': 0.0, 'hr': 0.0,
+                    'yearly_stability': 0.0, 'pass': False}
+
+        ic_mean = float(np.mean(daily_ics))
+        ic_std = float(np.std(daily_ics, ddof=1))
+        icir = ic_mean / ic_std if ic_std > 1e-10 else 0.0
+        hr = float(np.mean(daily_ics > 0))
+
+        # 分年度: 用 valid_indices 取对应年份，消除索引不对齐问题
+        yearly_stability = 0.5
+        if (self.future_returns is not None and
+                hasattr(self.future_returns, 'index') and
+                hasattr(self.future_returns.index, 'year')):
+            # 只取有 IC 值那几天的年份
+            valid_years = np.asarray(self.future_returns.index[valid_indices].year)
+            yearly_means = []
+            for yr in sorted(set(valid_years)):
+                yr_ics = daily_ics[valid_years == yr]
+                if len(yr_ics) > 0:
+                    yearly_means.append(float(np.mean(yr_ics)))
+            if yearly_means:
+                main_dir = np.sign(ic_mean)
+                yearly_stability = float(np.mean(
+                    [1.0 for ym in yearly_means if np.sign(ym) == main_dir]))
+
+        pass_stage1 = (hr >= self.min_hr and
+                       yearly_stability >= self.min_yearly_stability)
+
+        return {'ic_mean': ic_mean, 'icir': icir, 'hr': hr,
+                'yearly_stability': yearly_stability, 'pass': pass_stage1}
+
+    def _quick_backtest(self, factor_values: np.ndarray) -> float:
+        """Stage 2: 单频率快速回测"""
+        from .backtest import FactorPipeline, FixedScheduler, TopNEqualWeight
+        T, N = self._shape
+        fv_df = pd.DataFrame(factor_values,
+                             index=self.returns.index[:T],
+                             columns=self.returns.columns[:N])
+        scheduler = FixedScheduler(self.quick_freq)
+        allocator = self.allocator if self.allocator is not None else TopNEqualWeight(3)
+        pipeline = FactorPipeline(self.returns, scheduler, allocator, self.cost_rate)
+        result = pipeline.evaluate(fv_df)
+        return float(result.sharpe_ratio)
+
+    def compute(self, factor_values: np.ndarray) -> float:
+        """主入口: IC过滤器 → 快速回测 → 返回Sharpe"""
+        if not self._validate(factor_values):
+            return -999.0
+
+        stats = self._compute_wqb_ic(factor_values)
+        if not stats['pass']:
+            return -999.0
+
+        if self.returns is None:
+            return -999.0
+        try:
+            return self._quick_backtest(factor_values)
+        except Exception as e:
+            logger.debug(f"WQBFitness 计算失败: {e}")
+            return -999.0
+
+
 def make_fitness_calculator(mode: FitnessMode, data: Dict[str, np.ndarray],
                             future_returns: pd.DataFrame, returns: pd.DataFrame = None,
                             cost_rate: float = 0.0,
                             scheduler=None, allocator=None,
-                            freq_list: List[str] = None) -> FitnessCalculator:
+                            freq_list: List[str] = None,
+                            # [新增] 2026-06-05 WQB 特有参数透传
+                            min_hr: float = 0.5,
+                            min_yearly_stability: float = 0.6,
+                            quick_freq: str = None) -> FitnessCalculator:
     """工厂函数：根据模式创建适应度计算器
 
     [重构] 2026-06-01 支持 scheduler/allocator/freq_list 透传
+    [新增]  2026-06-05 支持 WQB 五维漏斗参数透传
     """
     if mode == FitnessMode.ICIR:
         return ICIRFitness(data, future_returns)
@@ -245,6 +379,12 @@ def make_fitness_calculator(mode: FitnessMode, data: Dict[str, np.ndarray],
         return MultiFreqFitness(data, future_returns, returns, cost_rate,
                                 scheduler=scheduler, allocator=allocator,
                                 freq_list=freq_list)
+    elif mode == FitnessMode.WQB:
+        return WQBFitness(data, future_returns, returns, cost_rate,
+                          scheduler=scheduler, allocator=allocator,
+                          freq_list=freq_list,
+                          min_hr=min_hr, min_yearly_stability=min_yearly_stability,
+                          quick_freq=quick_freq)
     else:
         raise ValueError(f"未知适应度模式: {mode}")
 
@@ -315,19 +455,16 @@ class GPEngine:
         # Customizable primitives
         # [新增] 2026-06-05 自动检测 data 中的自定义终端
         # 如果用户传了 custom_terminals，以它为准；否则自动从 data 字典中
-        # 提取非标准字段（如 rel_close/share/downside_vol）合并到 TERMINALS
+        # 提取白名单字段（如 rel_close/share/downside_vol）合并到 TERMINALS
+        # [修复] 2026-06-05 黑名单→白名单：防止 change/pe_ttm 等前视偏差源渗入 GP
         if custom_terminals is not None:
             self.terminals = custom_terminals
         else:
-            # 自动检测：data 中存在但不在标准 TERMINALS 中的字段
-            standard_set = set(TERMINALS)
             auto_terminals = list(TERMINALS)
             for key in sorted(data.keys()):
                 key_lower = key.lower()
-                if key_lower not in standard_set and key_lower not in auto_terminals:
-                    # 排除内部辅助字段（以 bench_ 开头、returns/vwap）
-                    if not key_lower.startswith('bench_') and key_lower not in ('returns', 'vwap'):
-                        auto_terminals.append(key_lower)
+                if key_lower not in auto_terminals and key_lower in SAFE_GP_TERMINALS:
+                    auto_terminals.append(key_lower)
             self.terminals = auto_terminals
         self.primitives = custom_primitives or PRIMITIVE_WITH_PARAMS
         self.seed_expressions = seed_expressions or []
@@ -872,9 +1009,10 @@ class FactorDiscoveryEngine:
 
 
 __all__ = [
-    'FitnessMode', 'FitnessCalculator', 'ICIRFitness', 'SharpeFitness', 'MultiFreqFitness',
+    'FitnessMode', 'FitnessCalculator',
+    'ICIRFitness', 'SharpeFitness', 'MultiFreqFitness', 'WQBFitness',
     'make_fitness_calculator',
     'Individual', 'GPEngine',
     'DiscoveryReport', 'FactorDiscoveryEngine',
-    'DEFAULT_GP_CONFIG', 'TERMINALS', 'PRIMITIVE_WITH_PARAMS',
+    'DEFAULT_GP_CONFIG', 'TERMINALS', 'SAFE_GP_TERMINALS', 'PRIMITIVE_WITH_PARAMS',
 ]

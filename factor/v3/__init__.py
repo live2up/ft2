@@ -83,11 +83,11 @@ from .search import (
 # ── discover ──
 from .discover import (
     FitnessMode, FitnessCalculator,
-    ICIRFitness, SharpeFitness, MultiFreqFitness,
+    ICIRFitness, SharpeFitness, MultiFreqFitness, WQBFitness,
     make_fitness_calculator,
     Individual, GPEngine,
     DiscoveryReport, FactorDiscoveryEngine,
-    DEFAULT_GP_CONFIG, TERMINALS, PRIMITIVE_WITH_PARAMS,
+    DEFAULT_GP_CONFIG, TERMINALS, SAFE_GP_TERMINALS, PRIMITIVE_WITH_PARAMS,
 )
 
 # ── cache ──
@@ -133,11 +133,11 @@ __all__ = [
     'GridSearchResult', 'FactorGridSearch', 'FactorBOSearch',
     # discover
     'FitnessMode', 'FitnessCalculator',
-    'ICIRFitness', 'SharpeFitness', 'MultiFreqFitness',
+    'ICIRFitness', 'SharpeFitness', 'MultiFreqFitness', 'WQBFitness',
     'make_fitness_calculator',
     'Individual', 'GPEngine',
     'DiscoveryReport', 'FactorDiscoveryEngine',
-    'DEFAULT_GP_CONFIG', 'TERMINALS', 'PRIMITIVE_WITH_PARAMS',
+    'DEFAULT_GP_CONFIG', 'TERMINALS', 'SAFE_GP_TERMINALS', 'PRIMITIVE_WITH_PARAMS',
     # cache
     'FactorCacheStore',
 ]
