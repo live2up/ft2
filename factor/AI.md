@@ -2,7 +2,7 @@
 
 > 因子挖掘体系
 
-> **版本：v3.1.0 | 更新日期：2026-06-04**
+> **版本：v3.2.0 | 更新日期：2026-06-05**
 >
 > **AI 助手注意：** 如果发现实际 API 与本文档不一致，说明源码已更新但 AI.md 未同步，请提醒用户更新。
 
@@ -41,6 +41,8 @@ panel = expr.evaluate(data_dict)  # → ndarray(T, N)
 **表达式语法速查：**
 ```
 终端变量:   open, high, low, close, volume, amount
+            ★ 自定义变量: 任何在 data 字典中的字段都可作为终端变量
+               (如 rel_close, share, downside_vol, rel_volume, rel_amount)
 一元函数:   abs(x), sqrt(x), log(x), exp(x), neg(x), sign(x), tanh(x)
 二元函数:   add(x,y), sub(x,y), mul(x,y), div(x,y), max(x,y), min(x,y)
 时序原语:   ts_rank(x, period)      ts_zscore(x, period)
@@ -57,6 +59,7 @@ panel = expr.evaluate(data_dict)  # → ndarray(T, N)
 条件分支:   ifelse(cond, a, b)
 
 示例: ts_rank(winsorize(mul(delta(close, 20), adv(10)), 3), 10)
+自定义: ts_rank(rel_close, 20)      # rel_close 预计算后注入 panel_dict
 ```
 
 ### 2. GP 符号回归引擎（核心升级）
@@ -379,3 +382,22 @@ formulas/ → engine(编译) → primitives(原语) → fitness(适应度) → g
 - 种子表达式注入仍然是 GP 搜索的关键质量保障
 - cost_rate=0.0 是 v3 默认值，如需计入交易成本请显式传入
 - `discovered/` 目录的 .json 文件可跨会话复用，重启不丢失
+
+## [新增 v3.2] 自定义终端变量
+
+表达式引擎现在支持任意预计算变量作为终端。只需将变量以 `(T,N)` ndarray 形式放入 `data` 字典，即可在表达式中按名引用。
+
+```python
+# 在 data 字典中注入自定义变量
+panel_dict['rel_close'] = close_arr / bench_close_arr   # 相对基准价格
+panel_dict['share'] = amount_arr / amount_arr.sum(axis=1, keepdims=True)  # 资金占比
+panel_dict['downside_vol'] = rolling_std(neg_ret, 20)    # 下行波动率
+
+# 表达式直接引用（无需 register_terminal）
+expr = FactorExpression("ts_rank(rel_close, 20)")
+values = expr.evaluate(panel_dict)  # ✅ 自动从 data 中查找 rel_close
+```
+
+**GP 自动发现层面：** `GPEngine` 会自动检测 `data` 中的非标准字段，将其作为终端变量纳入随机树生成。`FactorDiscoveryEngine` 通过 `custom_terminals` 参数可显式控制。
+
+**无需手动注册：** 变量查找优先级为 `VARIABLE_MAP` → `data` 字典直接查找，即放即用。

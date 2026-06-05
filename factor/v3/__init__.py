@@ -50,6 +50,7 @@ from .engine import (
     AlphaExplorer, AlphaResult,
     VARIABLE_MAP, UNARY_FUNCTIONS, BINARY_FUNCTIONS, PRIMITIVE_FUNCTIONS,
     evaluate_node, Parser, tokenize,
+    register_terminal, registered_terminals,  # [新增] 2026-06-05 自定义终端
 )
 
 # ── backtest ──
@@ -114,6 +115,7 @@ __all__ = [
     'AlphaExplorer', 'AlphaResult',
     'VARIABLE_MAP', 'UNARY_FUNCTIONS', 'BINARY_FUNCTIONS', 'PRIMITIVE_FUNCTIONS',
     'evaluate_node', 'Parser', 'tokenize',
+    'register_terminal', 'registered_terminals',  # [新增] 2026-06-05
     # backtest
     'RebalanceScheduler', 'FixedScheduler', 'IntervalScheduler',
     'recommend_scheduler_from_decay',

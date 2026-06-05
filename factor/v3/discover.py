@@ -313,7 +313,22 @@ class GPEngine:
         self.parsimony_penalty = cfg['parsimony_penalty']
 
         # Customizable primitives
-        self.terminals = custom_terminals or TERMINALS
+        # [新增] 2026-06-05 自动检测 data 中的自定义终端
+        # 如果用户传了 custom_terminals，以它为准；否则自动从 data 字典中
+        # 提取非标准字段（如 rel_close/share/downside_vol）合并到 TERMINALS
+        if custom_terminals is not None:
+            self.terminals = custom_terminals
+        else:
+            # 自动检测：data 中存在但不在标准 TERMINALS 中的字段
+            standard_set = set(TERMINALS)
+            auto_terminals = list(TERMINALS)
+            for key in sorted(data.keys()):
+                key_lower = key.lower()
+                if key_lower not in standard_set and key_lower not in auto_terminals:
+                    # 排除内部辅助字段（以 bench_ 开头、returns/vwap）
+                    if not key_lower.startswith('bench_') and key_lower not in ('returns', 'vwap'):
+                        auto_terminals.append(key_lower)
+            self.terminals = auto_terminals
         self.primitives = custom_primitives or PRIMITIVE_WITH_PARAMS
         self.seed_expressions = seed_expressions or []
 
@@ -640,7 +655,8 @@ class FactorDiscoveryEngine:
                  cost_rate: float = 0.0,
                  seed_n: int = 100,
                  random_seed: int = None,
-                 save_dir: str = None):
+                 save_dir: str = None,
+                 custom_terminals: List[str] = None):  # [新增] 2026-06-05
         self.data = data
         self.returns = returns
         if not isinstance(self.returns.index, pd.DatetimeIndex):
@@ -651,6 +667,7 @@ class FactorDiscoveryEngine:
         self.seed_n = seed_n
         self.random_seed = random_seed
         self.save_dir = save_dir  # [新增] 2026-06-04 GP 结果自动持久化目录
+        self.custom_terminals = custom_terminals  # [新增] 2026-06-05
 
         # Seed formulas
         self.seed_formulas = seed_formulas or {}
@@ -738,6 +755,7 @@ class FactorDiscoveryEngine:
                 scheduler=val_scheduler, allocator=val_allocator)
 
             # 3. Run GP
+            # [新增] 2026-06-05 透传 custom_terminals，使 GP 能探索自定义变量
             gp = GPEngine(
                 self.data, self.future_returns,
                 fitness_calculator=fitness_calc,
@@ -746,6 +764,7 @@ class FactorDiscoveryEngine:
                         'max_depth': max_depth},
                 seed_expressions=seeds,
                 random_seed=self.random_seed,
+                custom_terminals=self.custom_terminals,
             )
             gp.run(verbose=verbose)
 

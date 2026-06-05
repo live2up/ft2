@@ -92,6 +92,29 @@ VARIABLE_MAP = {
     'returns': 'returns', 'vwap': 'vwap',
 }
 
+
+def register_terminal(name: str, data_key: str = None):
+    """动态注册自定义终端变量
+
+    使表达式引擎可以引用预计算的自定义变量（如 rel_close、share 等），
+    这些变量需要预先通过 Python 计算后注入 data 字典。
+
+    Args:
+        name: 表达式中的变量名 (如 'rel_close')
+        data_key: data 字典中的 key，默认与 name 相同
+
+    Example:
+        >>> register_terminal('rel_close')
+        >>> register_terminal('share')
+        >>> # 现在表达式可以写: ts_rank(rel_close, 20)
+    """
+    VARIABLE_MAP[name.lower()] = data_key or name.lower()
+
+
+def registered_terminals() -> list:
+    """返回当前所有已注册的终端变量名"""
+    return list(VARIABLE_MAP.keys())
+
 # 一元函数
 UNARY_FUNCTIONS = {
     'abs': lambda x: np.abs(x),
@@ -137,7 +160,16 @@ def evaluate_node(node: ASTNode, data: Dict[str, np.ndarray]) -> np.ndarray:
             close, opn = data['close'], data['open']
             diff = close - opn
             return np.where(np.abs(opn) > 1e-10, diff / opn, 0.0)
-        col = VARIABLE_MAP.get(node.value.lower())
+        name_lower = node.value.lower()
+        # [新增] 2026-06-05 自定义变量 fallback:
+        # 先查 VARIABLE_MAP（标准映射），未命中时直接在 data 中按原名查找。
+        # 这使得 rel_close/share/downside_vol 等预计算变量可被表达式直接引用。
+        col = VARIABLE_MAP.get(name_lower)
+        if col is None:
+            if name_lower in data:
+                col = name_lower
+            elif node.value in data:
+                col = node.value
         if col is None or col not in data:
             raise KeyError(f"字段 '{node.value}' 未提供，当前可用: {list(data.keys())}")
         return np.asarray(data[col], dtype=float)
@@ -382,10 +414,23 @@ class ExpressionFactor(Factor):
 
     def calculate(self, data: Dict[str, pd.DataFrame],
                   symbols: List[str], dates: List[Any]) -> pd.DataFrame:
+        # [重构] 2026-06-05 保留 data 中的自定义字段，不仅限于 6 个 OHLCV
         ndarray_data = {}
-        for field in ['open', 'high', 'low', 'close', 'volume', 'amount']:
+        standard_fields = ['open', 'high', 'low', 'close', 'volume', 'amount']
+        # 先转换标准 OHLCV 字段
+        for field in standard_fields:
             if field in data:
                 ndarray_data[field] = np.asarray(data[field].values, dtype=float)
+        # 再保留所有自定义字段（如 rel_close, share, downside_vol 等）
+        for field in data:
+            if field not in ndarray_data:
+                arr = data[field]
+                if isinstance(arr, np.ndarray):
+                    ndarray_data[field] = np.asarray(arr, dtype=float)
+                elif isinstance(arr, pd.DataFrame):
+                    ndarray_data[field] = np.asarray(arr.values, dtype=float)
+                elif isinstance(arr, pd.Series):
+                    ndarray_data[field] = np.asarray(arr.values, dtype=float)
         if not ndarray_data:
             raise ValueError("数据字典为空，至少需要 close")
 
