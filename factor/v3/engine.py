@@ -326,11 +326,11 @@ def evaluate_node(node: ASTNode, data: Dict[str, np.ndarray]) -> np.ndarray:
         fn_name = node.value
         # [新增] 2026-06-01 零参数语法糖，省 1 层 AST 深度
         if fn_name == 'ret':
-            period = int(node.params.get('period', 1))
-            return delta(data.get('close'), period)
+            window = int(node.params.get('window', 1))
+            return delta(data.get('close'), window)
         if fn_name == 'adv':
-            period = int(node.params.get('period', 10))
-            return ts_mean(data.get('volume'), period)
+            window = int(node.params.get('window', 10))
+            return ts_mean(data.get('volume'), window)
         if fn_name == 'intra_ret':
             close, opn = data['close'], data['open']
             return np.where(np.abs(opn) > 1e-10, (close - opn) / opn, 0.0)
@@ -464,9 +464,9 @@ class Parser:
 class FactorExpression:
     """因子表达式 — 字符串公式 → AST → (T,N) ndarray"""
 
-    def __init__(self, expression_str: str):
-        self.source = expression_str
-        tokens = tokenize(expression_str)
+    def __init__(self, expression: str):
+        self.source = expression
+        tokens = tokenize(expression)
         parser = Parser(tokens)
         self.ast = parser.parse()
         self.terminals = self._collect_terminals(self.ast)
@@ -538,19 +538,19 @@ class ExpressionFactor(Factor):
         >>> fv = ef.calculate({'close': close_df}, symbols, dates)
     """
 
-    def __init__(self, expression_str: str, name: str = 'expr_factor',
+    def __init__(self, expression: str, name: str = 'expr_factor',
                  category: FactorCategory = FactorCategory.CUSTOM,
                  description: str = ''):
         metadata = FactorMetadata(
             name=name,
-            description=description or f'表达式因子: {expression_str[:60]}',
+            description=description or f'表达式因子: {expression[:60]}',
             category=category,
             frequency=FactorFrequency.DAILY,
-            parameters={'expression': expression_str},
+            parameters={'expression': expression},
         )
         super().__init__(metadata)
-        self.expression_str = expression_str
-        self.expr = FactorExpression(expression_str)
+        self.expression = expression
+        self.expr = FactorExpression(expression)
 
     def calculate(self, data: Dict[str, pd.DataFrame],
                   symbols: List[str], dates: List[Any]) -> pd.DataFrame:
@@ -591,7 +591,7 @@ class ExpressionFactor(Factor):
         return result
 
     def __repr__(self):
-        return f"ExpressionFactor({self.expression_str[:60]}...)"
+        return f"ExpressionFactor({self.expression[:60]}...)"
 
 
 def expression_factor(alpha_id: str, formulas: Dict[str, str] = None, **kwargs) -> ExpressionFactor:

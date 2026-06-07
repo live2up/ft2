@@ -48,12 +48,12 @@ class RebalanceScheduler(ABC):
 class FixedScheduler(RebalanceScheduler):
     """固定频率调度器：支持 'ME'(月末) / 'W'(周末) / 'M'(月初)"""
 
-    VALID_MODES = {'ME', 'W', 'M'}
+    VALID_FREQS = {'ME', 'W', 'M'}
 
-    def __init__(self, mode: str = 'ME'):
-        if mode not in self.VALID_MODES:
-            raise ValueError(f"不支持的模式 '{mode}'，可选: {self.VALID_MODES}")
-        self.mode = mode
+    def __init__(self, freq: str = 'ME'):
+        if freq not in self.VALID_FREQS:
+            raise ValueError(f"不支持的模式 '{freq}'，可选: {self.VALID_FREQS}")
+        self.freq = freq
 
     def generate(self, dates: pd.DatetimeIndex) -> List[pd.Timestamp]:
         if len(dates) == 0:
@@ -62,16 +62,16 @@ class FixedScheduler(RebalanceScheduler):
         df['year'] = dates.year
         df['month'] = dates.month
 
-        if self.mode == 'W':
+        if self.freq == 'W':
             iso = dates.isocalendar()
             iso_year = iso['year'].to_numpy(dtype=int)
             iso_week = iso['week'].to_numpy(dtype=int)
             df['year_week'] = [f"{y}-{w:02d}" for y, w in zip(iso_year, iso_week)]
             rebalance = df.groupby('year_week')['date'].last()
-        elif self.mode == 'ME':
+        elif self.freq == 'ME':
             df['year_month'] = df['year'].astype(str) + '-' + df['month'].astype(str).str.zfill(2)
             rebalance = df.groupby('year_month')['date'].last()
-        elif self.mode == 'M':
+        elif self.freq == 'M':
             df['year_month'] = df['year'].astype(str) + '-' + df['month'].astype(str).str.zfill(2)
             rebalance = df.groupby('year_month')['date'].first()
 
@@ -81,7 +81,7 @@ class FixedScheduler(RebalanceScheduler):
         return result
 
     def __repr__(self) -> str:
-        return f"FixedScheduler(mode='{self.mode}')"
+        return f"FixedScheduler(freq='{self.freq}')"
 
 
 class IntervalScheduler(RebalanceScheduler):
@@ -211,10 +211,10 @@ class ScoreProportional(WeightAllocator):
 class RiskParity(WeightAllocator):
     """风险平价权重（需要 scipy.optimize）"""
 
-    def __init__(self, lookback: int = 60):
-        if lookback < 10:
-            raise ValueError(f"lookback 必须 >= 10，当前值: {lookback}")
-        self.lookback = lookback
+    def __init__(self, window: int = 60):
+        if window < 10:
+            raise ValueError(f"window 必须 >= 10，当前值: {window}")
+        self.window = window
 
     def allocate(self, scores: np.ndarray,
                  returns_history: Optional[np.ndarray] = None) -> np.ndarray:
@@ -289,7 +289,7 @@ class RiskParity(WeightAllocator):
             return weights
 
     def __repr__(self) -> str:
-        return f"RiskParity(lookback={self.lookback})"
+        return f"RiskParity(window={self.window})"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

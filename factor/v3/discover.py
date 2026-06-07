@@ -53,30 +53,30 @@ BINARY_OPS = ['add', 'sub', 'mul', 'div', 'max', 'min',
 CONSTANTS = [0.0, -1.0, 1.0, 0.5, 2.0]
 
 PRIMITIVE_WITH_PARAMS = [
-    ('ts_rank',       'period', [5, 10, 15, 20, 30, 60]),
-    ('ts_zscore',     'period', [10, 20, 30, 60]),
-    ('delay',         'period', [1, 5, 10, 20, 60]),
-    ('delta',         'period', [1, 5, 10, 20, 60]),  # [新增] v3 语法糖
-    ('decay_linear',  'period', [5, 10, 20, 30]),
-    ('cs_zscore',     'period', [20]),
+    ('ts_rank',       'window', [5, 10, 15, 20, 30, 60]),
+    ('ts_zscore',     'window', [10, 20, 30, 60]),
+    ('delay',         'window', [1, 5, 10, 20, 60]),
+    ('delta',         'window', [1, 5, 10, 20, 60]),  # [新增] v3 语法糖
+    ('decay_linear',  'window', [5, 10, 20, 30]),
+    ('cs_zscore',     'window', [20]),
     ('cs_rank',       None, []),
     ('cs_mean',       None, []),            # [新增] 2026-06-01 截面均值
     ('signed_power',  'exponent', [2.0]),
     ('winsorize',     'n', [2.0, 3.0, 5.0]),  # [新增] v3 截尾
-    ('ts_sum',        'period', [5, 10, 15, 20, 30, 60]),
-    ('ts_mean',       'period', [5, 10, 15, 20, 30, 60]),
-    ('ts_std',        'period', [10, 20, 30, 60]),
-    ('ts_max',        'period', [5, 10, 20, 30, 60]),
-    ('ts_min',        'period', [5, 10, 20, 30, 60]),
-    ('sma',           'period', [5, 10, 20, 30]),
-    ('ts_argmin',     'period', [5, 10, 20]),
-    ('ts_argmax',     'period', [5, 10, 20]),
-    ('ts_skew',       'period', [10, 20, 30, 60]),  # [新增] 2026-06-01
-    ('ret',           'period', [1, 5, 10, 20, 60]),  # [新增] v3 零参数语法糖
-    ('adv',           'period', [5, 10, 15, 20, 30, 60]),  # [新增] v3 零参数语法糖
+    ('ts_sum',        'window', [5, 10, 15, 20, 30, 60]),
+    ('ts_mean',       'window', [5, 10, 15, 20, 30, 60]),
+    ('ts_std',        'window', [10, 20, 30, 60]),
+    ('ts_max',        'window', [5, 10, 20, 30, 60]),
+    ('ts_min',        'window', [5, 10, 20, 30, 60]),
+    ('sma',           'window', [5, 10, 20, 30]),
+    ('ts_argmin',     'window', [5, 10, 20]),
+    ('ts_argmax',     'window', [5, 10, 20]),
+    ('ts_skew',       'window', [10, 20, 30, 60]),  # [新增] 2026-06-01
+    ('ret',           'window', [1, 5, 10, 20, 60]),  # [新增] v3 零参数语法糖
+    ('adv',           'window', [5, 10, 15, 20, 30, 60]),  # [新增] v3 零参数语法糖
     ('intra_ret',     None, []),  # [新增] v3 日内收益语法糖
-    ('ts_regression_residual', 'period', [5, 10, 20, 30]),  # [新增] 2026-06-07 线性回归残差
-    ('correlation',   'period', [10, 20, 30]),  # [新增] 2026-06-07 滚动相关系数
+    ('ts_regression_residual', 'window', [5, 10, 20, 30]),  # [新增] 2026-06-07 线性回归残差
+    ('correlation',   'window', [10, 20, 30]),  # [新增] 2026-06-07 滚动相关系数
 ]
 
 DEFAULT_GP_CONFIG = {
@@ -811,7 +811,7 @@ class FactorDiscoveryEngine:
                  future_returns: pd.DataFrame = None,
                  seed_formulas: Dict[str, str] = None,
                  cost_rate: float = 0.0,
-                 seed_n: int = 100,
+                 seed_top_n: int = 100,
                  random_seed: int = None,
                  save_dir: str = None,
                  custom_terminals: List[str] = None):  # [新增] 2026-06-05
@@ -822,7 +822,7 @@ class FactorDiscoveryEngine:
             self.returns.index = pd.to_datetime(self.returns.index)
         self.future_returns = future_returns or self.returns.shift(-1)
         self.cost_rate = cost_rate
-        self.seed_n = seed_n
+        self.seed_top_n = seed_top_n
         self.random_seed = random_seed
         self.save_dir = save_dir  # [新增] 2026-06-04 GP 结果自动持久化目录
         self.custom_terminals = custom_terminals  # [新增] 2026-06-05
@@ -894,7 +894,7 @@ class FactorDiscoveryEngine:
                 print(f"{'='*50}")
 
             # 1. Collect seeds from library
-            seeds = self.library.seed_expressions(self.seed_n, sort_by='fitness')
+            seeds = self.library.seed_expressions(self.seed_top_n, sort_by='fitness')
             if verbose:
                 print(f"种子数: {len(seeds)} (from library size={self.library.size()})")
 

@@ -228,12 +228,12 @@ class FactorLibrary:
                 count += 1
         return count
 
-    def seed_expressions(self, n: int = 100,
+    def seed_expressions(self, top_n: int = 100,
                          sort_by: str = 'fitness') -> List[str]:
         """获取 Top N 因子表达式作为 GP 种子
 
         Args:
-            n: 返回的表达式数量
+            top_n: 返回的表达式数量
             sort_by: 排序字段 ('fitness' / 'ic_mean' / 'sharpe')
 
         Returns:
@@ -244,15 +244,15 @@ class FactorLibrary:
             key=lambda e: getattr(e, sort_by, 0),
             reverse=True,
         )
-        return [e.expression for e in entries[:n]]
+        return [e.expression for e in entries[:top_n]]
 
-    def top(self, n: int = 20, sort_by: str = 'fitness') -> List[LibraryEntry]:
+    def top(self, top_n: int = 20, sort_by: str = 'fitness') -> List[LibraryEntry]:
         """查询 Top N 因子"""
         return sorted(
             self._entries.values(),
             key=lambda e: getattr(e, sort_by, 0),
             reverse=True,
-        )[:n]
+        )[:top_n]
 
     def by_category(self, category: FactorCategory) -> List[LibraryEntry]:
         """按分类查询"""
@@ -266,18 +266,18 @@ class FactorLibrary:
         """按发现轮次查询"""
         return [e for e in self._entries.values() if e.discovered_at == round_num]
 
-    def by_time(self, date_from: str = None, date_to: str = None) -> List[LibraryEntry]:
+    def by_time(self, start_date: str = None, end_date: str = None) -> List[LibraryEntry]:
         """按入库时间范围查询
 
         Args:
-            date_from: 起始日期 '2026-06-01' (含)
-            date_to: 截止日期 '2026-06-04' (含)
+            start_date: 起始日期 '2026-06-01' (含)
+            end_date: 截止日期 '2026-06-04' (含)
         """
         result = list(self._entries.values())
-        if date_from:
-            result = [e for e in result if e.created_at >= date_from]
-        if date_to:
-            result = [e for e in result if e.created_at <= date_to + ' 23:59:59']
+        if start_date:
+            result = [e for e in result if e.created_at >= start_date]
+        if end_date:
+            result = [e for e in result if e.created_at <= end_date + ' 23:59:59']
         return result
 
     def save(self, path: str):

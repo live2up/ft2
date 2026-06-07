@@ -2,9 +2,11 @@
 
 > 因子挖掘体系
 
-> **版本：v3.2.0 | 更新日期：2026-06-05**
+> **版本：v3.3.0 | 更新日期：2026-06-07**
 >
 > **AI 助手注意：** 如果发现实际 API 与本文档不一致，说明源码已更新但 AI.md 未同步，请提醒用户更新。
+>
+> **[v3.3 新增]** 统一参数命名规范 → 见「命名规范」章节
 
 ---
 
@@ -43,18 +45,19 @@ panel = expr.evaluate(data_dict)  # → ndarray(T, N)
 终端变量:   open, high, low, close, volume, amount
             ★ 自定义变量: 任何在 data 字典中的字段都可作为终端变量
                (如 rel_close, share, downside_vol, rel_volume, rel_amount)
-一元函数:   abs(x), sqrt(x), log(x), exp(x), neg(x), sign(x), tanh(x)
+一元函数:   abs(x), sqrt(x), log(x), exp(x), neg(x), sign(x), tanh(x), not(x)
 二元函数:   add(x,y), sub(x,y), mul(x,y), div(x,y), max(x,y), min(x,y)
-时序原语:   ts_rank(x, period)      ts_zscore(x, period)
-            delay(x, period)         delta(x, period)  差分(省1层)
-            decay_linear(x, period)  ts_sum/mean/std/max/min(x, p)
-            sma(x, period, lag)      correlation/covariance/regbeta(x,y,p)
-            ts_argmin/max(x, p)      ts_skew(x, period)  偏度
-截面原语:   cs_rank(x)              cs_zscore(x, period)
+            gt(x,y), lt(x,y), ge(x,y), le(x,y), eq(x,y), ne(x,y), and(x,y), or(x,y)
+时序原语:   ts_rank(x, window)      ts_zscore(x, window)
+            delay(x, window)         delta(x, window)  差分(省1层)
+            decay_linear(x, window)  ts_sum/mean/std/max/min(x, window)
+            sma(x, window, offset)   correlation/covariance/regbeta(x,y,window)
+            ts_argmin/max(x, window) ts_skew(x, window)  偏度
+截面原语:   cs_rank(x)              cs_zscore(x, window)
             cs_mean(x)              signed_power(x, exp)
 健壮处理:   winsorize(x, n)         截尾到 ±nσ
-语法糖:     ret(period)             收益差（省2层）
-            adv(period)             均量（省1层）
+语法糖:     ret(window)             收益差（省2层）
+            adv(window)             均量（省1层）
             intra_ret               日内收益（(c-o)/o）
 条件分支:   ifelse(cond, a, b)
 
@@ -77,7 +80,7 @@ gp = GPEngine(
     max_depth=8,
     # 可选：自定义原语集和终端集
     custom_terminals=['close', 'volume', 'open'],
-    custom_primitives=[('ts_rank', 'period', [5,10,20,30])],
+    custom_primitives=[('ts_rank', 'window', [5,10,20,30])],
     seed_expressions=[           # 已知好因子注入
         "ts_rank(sub(close, delay(close, 20)), 10)",
     ],
@@ -108,7 +111,7 @@ engine = FactorDiscoveryEngine(
     returns=returns_df,
     seed_formulas=ALPHA101,      # 注入公式库作初始种子
     cost_rate=0.0,
-    seed_n=50,
+    seed_top_n=50,
     save_dir='./discovered',     # [新增] GP 结果持久化目录
 )
 
@@ -401,3 +404,81 @@ values = expr.evaluate(panel_dict)  # ✅ 自动从 data 中查找 rel_close
 **GP 自动发现层面：** `GPEngine` 会自动检测 `data` 中的非标准字段，将其作为终端变量纳入随机树生成。`FactorDiscoveryEngine` 通过 `custom_terminals` 参数可显式控制。
 
 **无需手动注册：** 变量查找优先级为 `VARIABLE_MAP` → `data` 字典直接查找，即放即用。
+
+---
+
+## 命名规范（v3.3 新增）
+
+> **设计原则：** 同一概念在全模块内用同一参数名，避免 `period`/`lookback`/`window` 混用造成的认知负担。
+> 所有函数签名均使用 **位置参数调用** 即可，本规范定义参数名的**语义标准**。
+
+### 核心概念 → 标准参数名
+
+| 概念 | 标准参数名 | 旧名（已废弃） | 适用范围 |
+|------|-----------|---------------|---------|
+| 时序窗口/回看期数 | `window` | `period`, `lookback`, `lookforward` | primitives, discover, backtest |
+| 调仓频率字符串 | `freq` | `mode` | FixedScheduler, parse_scheduler, AlphaExplorer |
+| 表达式字符串 | `expression` | `expression_str` | FactorExpression, ExpressionFactor, LibraryEntry |
+| 因子值矩阵 | `factor_values` | — | FactorValidator, FactorPipeline, FitnessCalculator |
+| 未来收益率 | `future_returns` | — | FactorValidator, FitnessCalculator |
+| 持仓数量 | `top_n` | `n` | TopNEqualWeight, FactorLibrary, FactorDiscoveryEngine |
+| 交易费率 | `cost_rate` | — | FactorPipeline, FitnessCalculator, GPEngine |
+| 面板数据字典 | `data` | — | FactorExpression.evaluate, GPEngine, FitnessCalculator |
+| 收益率DataFrame | `returns` | — | FactorPipeline, AlphaExplorer, FactorDiscoveryEngine |
+| 日期序列 | `dates` | — | ensure_data(), loaders |
+| 标的列表 | `symbols` | — | ensure_data(), loaders |
+| GP 原始参数 key | `'window'` | `'period'` | PRIMITIVE_WITH_PARAMS, evaluate_node params |
+
+### 过去 24h 完成的改动（v3.3）
+
+| 文件 | 改动 | 影响外部？ |
+|------|------|-----------|
+| `primitives.py` | 18 个函数 `period` → `window`，`sma()` 的 `lag` → `offset` | 否（位置参数） |
+| `engine.py` | `FactorExpression(expression_str)` → `FactorExpression(expression)` | 否 |
+| `engine.py` | `ExpressionFactor(expression_str)` → `ExpressionFactor(expression)`，属性 `expression_str` → `expression` | 否 |
+| `engine.py` | `ret`/`adv` 语法糖的 params key `'period'` → `'window'` | 否 |
+| `backtest.py` | `FixedScheduler(mode)` → `FixedScheduler(freq)`，`VALID_MODES` → `VALID_FREQS` | 否 |
+| `backtest.py` | `RiskParity(lookback)` → `RiskParity(window)` | 否 |
+| `base.py` | `FactorLibrary.seed_expressions(n)` → `seed_expressions(top_n)`，`top(n)` → `top(top_n)` | 否 |
+| `base.py` | `FactorLibrary.by_time(date_from, date_to)` → `by_time(start_date, end_date)` | 否 |
+| `discover.py` | `PRIMITIVE_WITH_PARAMS` 中 `'period'` → `'window'` | 否 |
+| `discover.py` | `FactorDiscoveryEngine(seed_n)` → `FactorDiscoveryEngine(seed_top_n)` | 否 |
+
+### 未改动项（外部大量关键字调用，保留不动）
+
+以下参数在 `yinzi-3` 中大量使用**关键字参数**调用（`returns=returns, scheduler=..., allocator=..., cost_rate=0.0`），改名会直接破坏外部代码：
+
+- `FactorPipeline(returns, scheduler, allocator, cost_rate)` — 所有参数保留
+- `TopNEqualWeight(top_n)` — 保留
+- `GPEngine(data, future_returns, returns, scheduler, allocator)` — 所有参数保留
+- `FitnessCalculator(data, future_returns, returns, cost_rate, scheduler, allocator)` — 所有参数保留
+- `FactorDiscoveryEngine(data, returns, future_returns, cost_rate)` — 所有参数保留
+- `FactorValidator(factor_values, future_returns)` — 保留
+- `FactorGridSearch(returns, cost_rate)` — 保留
+- `Person.expression_str` (Individual dataclass 字段) — 保留
+
+### 外部项目（yinzi-3）变量命名约定
+
+yinzi-3 项目中的局部变量已有高度一致的约定（扫描 8 个文件）：
+
+| 变量 | 推荐命名 | 一致性 | 说明 |
+|------|---------|--------|------|
+| 面板数据 | `panel` | **完全一致** | `d['panel']` |
+| 收益率 | `returns` | **完全一致** | `d['returns']` |
+| 日期 | `dates` | **完全一致** | `d['dates']` |
+| 标的 | `symbols` | **完全一致** | `d['symbols']` |
+| 因子值 ndarray | `vals` | **高度一致** | `FactorExpression(expr).evaluate(panel)` |
+| 因子值 DataFrame | `fv` | **完全一致** | `pd.DataFrame(vals, index=dates, columns=symbols)` |
+| Pipeline 对象 | `pl_me`, `pl_w` | **基本一致** | `pl_` 前缀 + 频率后缀 |
+| 回测结果 | `r_me`, `r_w` | **基本一致** | `r_` 前缀 + 频率后缀 |
+
+**建议风格：** 新脚本参照上述约定，循环中避免用 `n`/`e` 等单字母，优先用 `factor_name`/`expr_str` 等描述性变量名。
+
+### 新增函数参数规范
+
+新增代码按以下优先顺序选择参数名：
+
+1. **查表** — 上表的「标准参数名」列
+2. **同名优先** — 如果上层已有同名参数（如 `FactorPipeline(returns=...)`），子函数同名传递
+3. **避免缩写** — 除非是外部的通用惯例（如 `fv`、`pl_` 等局部变量）
+4. **位置参数** — 新增的公开 API 优先用位置参数签名，避免外部关键字依赖
