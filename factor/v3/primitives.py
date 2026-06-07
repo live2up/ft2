@@ -570,6 +570,75 @@ def _ts_skew_1d(x: np.ndarray, period: int) -> np.ndarray:
     return result
 
 
+def ts_regression_residual(x: np.ndarray, period: int | float = 20) -> np.ndarray:
+    """时序线性回归残差：对过去 period 日做线性拟合，返回残差
+
+    对每个截面对象独立计算：
+        1. 取过去 period 日的时序数据
+        2. 拟合线性回归 x = a + b * t (t为时间索引0,1,2,...)
+        3. 返回当前值 - 预测值 (残差)
+
+    残差>0 = 实际值高于线性趋势 = 超预期强势
+    残差<0 = 实际值低于线性趋势 = 超预期弱势
+
+    比 delta(x, period) 的优势：
+        - delta 只看首尾两个点，受噪声影响大
+        - ts_regression_residual 看所有点，对噪声更鲁棒
+
+    比 div(x, ts_mean(x, period)) 的优势：
+        - div(x, mean) = 当前值相对于历史均值
+        - ts_regression_residual = 当前值相对于线性趋势(含方向)
+        - 趋势上升时残差为负=低于预期(但可能高于均值)，更精细
+
+    比 decay_linear(x, period) 的优势：
+        - decay_linear = 加权均值(给定权重)
+        - ts_regression_residual = 真实线性回归(不预设权重)
+
+    使用示例:
+        ts_regression_residual(amount, 20)  → 成交额偏离20日趋势
+        ts_regression_residual(close, 10)   → 价格偏离10日趋势
+
+    Note:
+        period < 3 时返回全0 (样本不足无法回归)。
+        线性回归需要至少3个有效数据点，否则残差设为0。
+        回归只用时序最后一个点做预测（当前期）。
+
+    [新增] 2026-06-07
+    """
+    x = np.asarray(x, dtype=float)
+    period = int(period)
+    if period < 3:
+        return np.zeros_like(x)
+    if x.ndim == 1:
+        return _ts_regression_residual_1d(x, period)
+    result = np.full_like(x, np.nan)
+    for j in range(x.shape[1]):
+        result[:, j] = _ts_regression_residual_1d(x[:, j], period)
+    return result
+
+
+def _ts_regression_residual_1d(x: np.ndarray, period: int) -> np.ndarray:
+    """单列滚动线性回归残差"""
+    n = len(x)
+    result = np.full(n, np.nan)
+    for i in range(period - 1, n):
+        window = x[max(0, i - period + 1): i + 1]
+        valid = window[~np.isnan(window)]
+        if len(valid) < 3:
+            continue
+        t = np.arange(len(valid), dtype=float)
+        # Linear regression: x = a + b*t
+        cov = np.cov(t, valid)
+        if cov[0, 0] < 1e-15:
+            result[i] = 0.0
+            continue
+        b = cov[0, 1] / cov[0, 0]
+        a = np.mean(valid) - b * np.mean(t)
+        predicted = a + b * (len(valid) - 1)  # predict the last point
+        result[i] = valid[-1] - predicted
+    return result
+
+
 # ============================================================================
 # 原语注册表
 # ============================================================================
@@ -598,6 +667,7 @@ EXTENDED_PRIMITIVES = {
     'ts_argmax':     (ts_argmax, 1),
     'ifelse':        (ifelse, 3),
     'ts_skew':       (ts_skew, 1),         # [新增] v3
+    'ts_regression_residual': (ts_regression_residual, 1),  # [新增] 2026-06-07
 }
 
 

@@ -12,7 +12,72 @@ factor/v3/engine.py — 因子表达式引擎
   Part 4: AlphaExplorer + AlphaResult (批量探索器)
 
 [重构] 2026-06-01 从 v2 两个文件合并为 v3/engine.py
-=============================================================================
+[新增] 2026-06-07: 比较/逻辑算子 gt/lt/ge/le/eq/ne/and/or/not + ts_regression_residual
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+算子完整参考:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+一元函数 (UNARY):
+  abs(x)     — 绝对值
+  sqrt(x)    — 平方根 (负值→0)
+  log(x)     — 自然对数 (x→1e-10保护)
+  exp(x)     — 指数变换
+  neg(x)     — 取反
+  sign(x)    — 符号: 1/0/-1
+  tanh(x)    — 双曲正切, 软压缩到[-1,1]
+  not(x)     — 逻辑非: x==0→1, 否则→0
+
+二元函数 (BINARY):
+  add(x,y)   — x + y             sub(x,y)   — x - y
+  mul(x,y)   — x * y             div(x,y)   — x/y(|y|<1e-10→0)
+  max(x,y)   — 最大值            min(x,y)   — 最小值
+  gt(x,y)    — x > y →1/0        lt(x,y)    — x < y →1/0
+  ge(x,y)    — x >= y →1/0       le(x,y)    — x <= y →1/0
+  eq(x,y)    — |x-y|<1e-10→1/0   ne(x,y)    — |x-y|>=1e-10→1/0
+  and(x,y)   — 非零判与           or(x,y)    — 非零判或
+
+时序原语 (PRIMITIVE):
+  ts_rank(x,N)           — N日时序排名 [0,1]
+  ts_zscore(x,N)         — N日Z-score标准化
+  delay(x,N)             — N日前的值
+  delta(x,N)             — N日差分: x - delay(x,N)
+  ts_mean(x,N)           — N日移动平均
+  ts_std(x,N)            — N日移动标准差
+  ts_sum(x,N)            — N日累计和
+  ts_max(x,N) / ts_min(x,N) — N日最大/小值
+  ts_argmax(x,N)         — N日最高点位置 (0-index, 最新=0)
+  ts_argmin(x,N)         — N日最低点位置 (0-index, 最新=0)
+  ts_skew(x,N)           — N日偏度 (分布不对称性)
+  decay_linear(x,N)      — N日线性衰减加权 (近高远低)
+  sma(x,N)               — 简单移动平均 (平滑版)
+  correlation(x,y,N)     — N日滚动相关系数
+  covariance(x,y,N)      — N日滚动协方差
+  regbeta(x,y,N)         — N日回归beta: x对y的回归系数
+  signed_power(x, exponent=2.0) — 带符号幂: sign(x)*|x|^exponent
+  winsorize(x,N)         — 极值缩尾
+  ts_regression_residual(x,N) — ⭐ N日线性回归残差 (预测偏差)
+
+截面原语 (PRIMITIVE):
+  cs_rank(x)             — 截面排名
+  cs_zscore(x)           — 截面Z-score
+  cs_mean(x)             — 截面均值
+
+条件函数 (PRIMITIVE):
+  ifelse(cond, a, b)     — cond非零→a, 否则→b
+
+语法糖:
+  ret(N)                 — delta(close, N)
+  adv(N)                 — ts_mean(volume, N)
+  intra_ret()            — (close - open) / open
+
+表达式示例:
+  cs_rank(ts_rank(close, 20))                          — 价格趋势
+  cs_rank(ts_regression_residual(amount, 20))          — 成交额预测偏差
+  ifelse(and(gt(delta(close,5),0),gt(delta(amount,5),0)), 1, 0)  — 量价齐升
+  mul(cs_rank(correlation(close,bench_close,20)), 
+      cs_rank(ts_skew(rel_close, 30)))                 — 复杂组合
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 import re
@@ -31,6 +96,7 @@ from .primitives import (
     sma, covariance, regbeta,
     ts_argmin, ts_argmax, ifelse,
     cs_mean, ts_skew, delta, winsorize,     # [新增] 2026-06-01
+    ts_regression_residual,                 # [新增] 2026-06-07
 )
 from .primitives import cs_zscore as _prim_cs_zscore
 
@@ -116,6 +182,15 @@ def registered_terminals() -> list:
     return list(VARIABLE_MAP.keys())
 
 # 一元函数
+#   abs(x)       = |x|                     — 绝对值
+#   sqrt(x)      = √max(x,0)               — 平方根(负值截断)
+#   log(x)       = ln(max(x, 1e-10))        — 自然对数(零值保护)
+#   exp(x)       = e^x                     — 指数变换
+#   neg(x)       = -x                      — 取反
+#   sign(x)      = 1/0/-1                  — 符号函数
+#   tanh(x)      = (e^x-e^-x)/(e^x+e^-x)   — 双曲正切(软压缩到[-1,1])
+#   not(x)       = 1 if x==0 else 0        — 逻辑非
+# [新增] 2026-06-07: not
 UNARY_FUNCTIONS = {
     'abs': lambda x: np.abs(x),
     'sqrt': lambda x: np.sqrt(np.maximum(x, 0)),
@@ -124,9 +199,25 @@ UNARY_FUNCTIONS = {
     'neg': lambda x: -x,
     'sign': lambda x: np.sign(x),
     'tanh': lambda x: np.tanh(x),                     # [新增] 2026-06-01 双曲正切软压缩
+    'not': lambda x: np.where(np.abs(x) < 1e-10, 1.0, 0.0),  # [新增] 2026-06-07
 }
 
 # 二元函数
+#   add(x,y)  = x + y                    — 加法
+#   sub(x,y)  = x - y                    — 减法
+#   mul(x,y)  = x * y                    — 乘法(双确认/交互)
+#   div(x,y)  = x / y  (|y|<1e-10→0)    — 除法(比率/标准化)
+#   max(x,y)  = max(x,y)                 — 最大值
+#   min(x,y)  = min(x,y)                 — 最小值
+#   gt(x,y)   = 1 if x > y  else 0      — 大于(比较算子)
+#   lt(x,y)   = 1 if x < y  else 0      — 小于(比较算子)
+#   ge(x,y)   = 1 if x >= y else 0      — 大于等于
+#   le(x,y)   = 1 if x <= y else 0      — 小于等于
+#   eq(x,y)   = 1 if |x-y|<1e-10 else 0 — 等于(浮点保护)
+#   ne(x,y)   = 1 if |x-y|>=1e-10 else 0— 不等于
+#   and(x,y)  = 1 if x!=0 and y!=0      — 逻辑与(非零判真)
+#   or(x,y)   = 1 if x!=0 or  y!=0      — 逻辑或
+# [新增] 2026-06-07: gt/lt/ge/le/eq/ne/and/or
 BINARY_FUNCTIONS = {
     'add': lambda x, y: x + y,
     'sub': lambda x, y: x - y,
@@ -134,9 +225,55 @@ BINARY_FUNCTIONS = {
     'div': lambda x, y: np.where(np.abs(y) > 1e-10, x / y, 0.0),
     'max': lambda x, y: np.maximum(x, y),
     'min': lambda x, y: np.minimum(x, y),
+    # [新增] 2026-06-07 比较/逻辑算子
+    'gt': lambda x, y: np.where(x > y, 1.0, 0.0),
+    'lt': lambda x, y: np.where(x < y, 1.0, 0.0),
+    'ge': lambda x, y: np.where(x >= y, 1.0, 0.0),
+    'le': lambda x, y: np.where(x <= y, 1.0, 0.0),
+    'eq': lambda x, y: np.where(np.abs(x - y) < 1e-10, 1.0, 0.0),
+    'ne': lambda x, y: np.where(np.abs(x - y) >= 1e-10, 1.0, 0.0),
+    'and': lambda x, y: np.where((np.abs(x) > 1e-10) & (np.abs(y) > 1e-10), 1.0, 0.0),
+    'or': lambda x, y: np.where((np.abs(x) > 1e-10) | (np.abs(y) > 1e-10), 1.0, 0.0),
 }
 
 # 时序/截面原语
+#   时序类:
+#     ts_rank(x, N)      — N日内时序排名 [0,1]
+#     ts_zscore(x, N)    — N日Z-score标准化
+#     ts_mean(x, N)      — N日移动平均
+#     ts_std(x, N)       — N日移动标准差
+#     ts_sum(x, N)       — N日累计和
+#     ts_max(x, N)       — N日最大值
+#     ts_min(x, N)       — N日最小值
+#     ts_argmax(x, N)    — N日最高点位置(0-index, 末=0)
+#     ts_argmin(x, N)    — N日最低点位置(0-index, 末=0)
+#     ts_skew(x, N)      — N日偏度(分布不对称性)
+#     delay(x, N)        — N日前的值
+#     delta(x, N)        — N日差分 x - delay(x,N)
+#     decay_linear(x, N) — N日线性衰减加权平均(近高远低)
+#     correlation(x,y,N) — N日滚动相关系数
+#     covariance(x,y,N)  — N日滚动协方差
+#     regbeta(x,y,N)     — N日回归beta: x对y的回归系数
+#     sma(x, N)          — 简单移动平均(平滑版)
+#     signed_power(x, exponent=2.0) — 带符号幂变换 sign(x)*|x|^exponent
+#     winsorize(x, N)    — 极值缩尾(上下N/N分位数)
+#     ts_regression_residual(x, N) — ⭐ N日线性回归残差(预测偏差)
+#
+#   截面类:
+#     cs_rank(x)         — 截面排名
+#     cs_zscore(x)       — 截面Z-score
+#     cs_mean(x)         — 截面均值
+#
+#   条件类:
+#     ifelse(cond, a, b) — cond非零→a, 否则→b
+#
+#   语法糖:
+#     ret(N)             — delta(close, N) 简写
+#     adv(N)             — ts_mean(volume, N) 简写
+#     intra_ret()        — (close-open)/open 日内收益
+#
+# [新增] 2026-06-01: ts_skew/delta/winsorize/exp/tanh
+# [新增] 2026-06-07: ts_regression_residual
 PRIMITIVE_FUNCTIONS = {
     'ts_rank': ts_rank, 'ts_zscore': ts_zscore, 'delay': delay,
     'correlation': correlation, 'decay_linear': decay_linear,
@@ -148,6 +285,7 @@ PRIMITIVE_FUNCTIONS = {
     'cs_zscore': _prim_cs_zscore,
     'cs_mean': cs_mean, 'ts_skew': ts_skew, 'delta': delta,  # [新增] 2026-06-01
     'winsorize': winsorize,  # [新增] 2026-06-01
+    'ts_regression_residual': ts_regression_residual,  # [新增] 2026-06-07
     'ret': None, 'adv': None, 'intra_ret': None,  # [新增] 零参数语法糖
 }
 
@@ -215,7 +353,9 @@ def evaluate_node(node: ASTNode, data: Dict[str, np.ndarray]) -> np.ndarray:
             if node.params:
                 return prim_fn(*vals, **node.params)
             if fn_name == 'signed_power':
-                return prim_fn(vals[0], exponent=2.0)
+                # ⚠ 支持自定义幂指数: signed_power(x) 默认2.0, signed_power(x, 0.5) 用0.5
+                exponent = vals[1] if len(vals) > 1 else 2.0
+                return prim_fn(vals[0], exponent=exponent)
             return prim_fn(*vals)
         raise ValueError(f"未知函数: {fn_name}")
     raise ValueError(f"未知节点类型: {node.node_type}")

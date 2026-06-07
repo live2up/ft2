@@ -47,8 +47,9 @@ SAFE_GP_TERMINALS = {
     'open', 'high', 'low', 'close', 'volume', 'amount',
     'rel_close', 'share', 'downside_vol', 'rel_volume', 'rel_amount',
 }
-UNARY_OPS = ['abs', 'sqrt', 'log', 'neg', 'exp', 'tanh']  # [新增] 2026-06-01 exp/tanh
-BINARY_OPS = ['add', 'sub', 'mul', 'div', 'max', 'min']
+UNARY_OPS = ['abs', 'sqrt', 'log', 'neg', 'exp', 'tanh', 'not']  # [新增] 2026-06-07 not
+BINARY_OPS = ['add', 'sub', 'mul', 'div', 'max', 'min',
+              'gt', 'lt', 'and', 'or']  # [新增] 2026-06-07 比较/逻辑算子
 CONSTANTS = [0.0, -1.0, 1.0, 0.5, 2.0]
 
 PRIMITIVE_WITH_PARAMS = [
@@ -74,6 +75,8 @@ PRIMITIVE_WITH_PARAMS = [
     ('ret',           'period', [1, 5, 10, 20, 60]),  # [新增] v3 零参数语法糖
     ('adv',           'period', [5, 10, 15, 20, 30, 60]),  # [新增] v3 零参数语法糖
     ('intra_ret',     None, []),  # [新增] v3 日内收益语法糖
+    ('ts_regression_residual', 'period', [5, 10, 20, 30]),  # [新增] 2026-06-07 线性回归残差
+    ('correlation',   'period', [10, 20, 30]),  # [新增] 2026-06-07 滚动相关系数
 ]
 
 DEFAULT_GP_CONFIG = {

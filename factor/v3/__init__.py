@@ -40,6 +40,7 @@ from .primitives import (
     ts_sum, ts_mean, ts_std, ts_max, ts_min,
     sma, covariance, regbeta,
     ts_argmin, ts_argmax, ifelse, ts_skew, delta, winsorize,
+    ts_regression_residual,
     EXTENDED_PRIMITIVES, get_primitive, list_primitives,
 )
 
