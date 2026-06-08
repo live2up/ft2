@@ -399,39 +399,12 @@ body {
     padding: 8px 12px;
 }
 
-/* Markdown */
+/* [精简] 2026-06-08 Markdown — 仅补充浏览器默认不提供的样式 */
 .markdown-content { word-wrap: break-word; }
-.markdown-content h1 { font-size: 20px; margin: 0 0 10px; color: #37352f; }
-.markdown-content h2 { font-size: 18px; margin: 0 0 8px; color: #37352f; }
-.markdown-content h3 { font-size: 16px; margin: 0 0 6px; color: #37352f; }
-.markdown-content h4 { font-size: 15px; margin: 0 0 5px; color: #37352f; }
-.markdown-content h5, .markdown-content h6 { font-size: 14px; margin: 0 0 4px; color: #37352f; }
-.markdown-content p { margin: 0 0 8px; }
-.markdown-content strong { color: #37352f; }
-.markdown-content em { color: #666; }
-.markdown-content ul, .markdown-content ol { margin: 0 0 8px 20px; }
-.markdown-content li { margin: 4px 0; }
-.markdown-content a { color: #667eea; text-decoration: none; }
-.markdown-content a:hover { text-decoration: underline; }
-.markdown-content blockquote {
-    border-left: 3px solid #e9e9e9;
-    padding-left: 12px;
-    margin: 8px 0;
-    color: #666;
-    font-style: italic;
-}
-.markdown-content hr {
-    border: none;
-    border-top: 1px solid #e9e9e9;
-    margin: 12px 0;
-}
-/* [新增] 2026-06-08 Markdown 表格 — 最小化黑线边框 */
 .markdown-content table { border-collapse: collapse; margin: 12px 0; }
-.markdown-content th, .markdown-content td {
-    border: 1px solid #999;
-    padding: 6px 10px;
-    text-align: left;
-}
+.markdown-content th, .markdown-content td { border: 1px solid #999; padding: 6px 10px; }
+.markdown-content blockquote { border-left: 3px solid #e9e9e9; padding-left: 12px; margin: 8px 0; }
+.markdown-content hr { border: none; border-top: 1px solid #e9e9e9; margin: 12px 0; }
 
 /* 代码块 */
 .code-block {
