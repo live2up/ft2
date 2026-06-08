@@ -8,6 +8,17 @@ from jinja2 import Environment, FileSystemLoader
 from .cell import Cell, Section, CellType, CellBuilder, CellLike, _build_grid, _init_chart_registry
 
 
+# [修复] 2026-06-08 递归清洗 NaN/Inf，避免 JSON.parse 报 SyntaxError
+def _clean_nan(obj):
+    if isinstance(obj, dict):
+        return {k: _clean_nan(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_clean_nan(v) for v in obj]
+    elif isinstance(obj, float) and (obj != obj or obj in (float('inf'), float('-inf'))):
+        return None
+    return obj
+
+
 class SectionContext:
     """Section 上下文管理器"""
     
@@ -399,7 +410,9 @@ class Notebook:
     
     def to_json(self) -> str:
         """导出为JSON"""
-        return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)
+        data = self.to_dict()
+        data = _clean_nan(data)
+        return json.dumps(data, ensure_ascii=False, indent=2)
     
     # [新增] 2026-05-21 CDN 远程前缀常量，与本地模式对应
     _CDN_PREFIX = 'https://cdn.jsdelivr.net/gh/livepu/ft2@master/template'
@@ -446,6 +459,7 @@ class Notebook:
             'createdAt': self.created_at.strftime('%Y-%m-%d %H:%M:%S'),
             'children': [c.to_dict() for c in self.children]
         }
+        data = _clean_nan(data)
         data_json = json.dumps(data, ensure_ascii=False, default=str, indent=2)
         
         html_content = template.render(
