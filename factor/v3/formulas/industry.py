@@ -131,6 +131,23 @@ INDUSTRY_ALPHA: Dict[str, str] = {
     #   全样本=0.734
     #
     'ind_skew_relclose_60d': 'cs_rank(ts_skew(rel_close,60))',
+
+    # ── 双频组合型 (周度主导+月度辅助) ────────────────────────
+    #
+    # 2026-06-07突破: 周度条件切换(SW)权重90% + 月度超跌反弹(A1)权重10%
+    #   逻辑: SW是快响应因子(每周重新评估), A1是穿越保护(熊市正收益)
+    #   全样本=1.281(Top3) / 1.451(Top2) / 1.479(Top2+0.1*M6)
+    #   熊市=0.380(Top3) vs 纯SW熊市=0.205
+    #
+    'ind_dual_sw_a1': 'add(mul(0.9,ifelse(gt(ts_rank(bench_close,60),0.7),cs_rank(ts_argmin(delta(close,1),30)),cs_rank(ts_argmax(close,60)))),mul(0.1,cs_rank(ts_argmin(delta(close,1),30))))',
+
+    # ── 波动率条件切换型 (volhi20条件) ──────────────────────
+    #
+    # volhi20>0.8时用RA(资金面), 否则用M6(趋势加速)
+    #   全样本=1.251(Top3) — 比bull60条件(1.230)更优
+    #   逻辑: 高波动环境用资金面因子更稳, 低波动用趋势因子
+    #
+    'ind_switch_volhi_ra_m6': 'ifelse(gt(ts_rank(ts_std(close,20),60),0.8),cs_rank(ts_rank(rel_amount,10)),cs_rank(ts_argmax(close,60)))',
 }
 
 INDUSTRY_ALPHA_CATEGORIES: Dict[str, FactorCategory] = {
@@ -148,4 +165,6 @@ INDUSTRY_ALPHA_CATEGORIES: Dict[str, FactorCategory] = {
     'ind_share_residual_20d':  FactorCategory.VOLUME,
     'ind_amt_accel_20d':       FactorCategory.VOLUME,
     'ind_skew_relclose_60d':   FactorCategory.VOLATILITY,
+    'ind_dual_sw_a1':          FactorCategory.TECHNICAL,    # 双频组合
+    'ind_switch_volhi_ra_m6':  FactorCategory.TECHNICAL,    # 波动率条件切换
 }
