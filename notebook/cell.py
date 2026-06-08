@@ -13,6 +13,7 @@ from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 import json
+import textwrap
 import pandas as pd
 
 
@@ -530,8 +531,9 @@ class CellBuilder:
     
     @staticmethod
     def markdown(text: str) -> Cell:
-        """创建 Markdown 单元格"""
-        return Cell(CellType.MARKDOWN, text)
+        """创建 Markdown 单元格
+        [修复] 2026-06-08 dedent+strip 去掉三引号缩进，避免被 marked 误判为代码块"""
+        return Cell(CellType.MARKDOWN, textwrap.dedent(text).strip())
     
     # ---------- 5.2 代码类 ----------
     

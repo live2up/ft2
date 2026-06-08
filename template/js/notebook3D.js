@@ -1337,9 +1337,16 @@ const CellRenderer = {
         level: { type: Number, default: 0 }
     },
     setup(props) {
+        // [升级] 2026-06-08 使用 marked.js 替代简单 regex，支持 GFM 表格/代码块/列表/标题等
+        // [修复] 2026-06-08 trim() 去掉前导缩进，避免被 Markdown 误判为代码块
         const renderMarkdown = (content) => {
             if (!content) return '';
-            return content.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>').replace(/`(.*?)`/g, '<code>$1</code>').replace(/\n/g, '<br>');
+            try {
+                return marked.parse(content.trim());
+            } catch (e) {
+                console.warn('Markdown parse error:', e);
+                return content.replace(/\n/g, '<br>');
+            }
         };
 
         const getMetricClass = (value) => {
