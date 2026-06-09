@@ -71,6 +71,14 @@ class Engine:
         if isinstance(strategy, type):
             strategy = strategy()
         
+        # [新增] 2026-06-09 自动适配时间类型：str/date/datetime/Timestamp → pd.Timestamp
+        #   统一内部时间类型，用户可直接传 '2023-01-01' 字符串
+        #   纯日期结尾(00:00:00) → 推到 23:59:59，确保最后一天 bar 不被排除
+        start_time = pd.Timestamp(start_time)
+        end_time = pd.Timestamp(end_time)
+        if end_time.hour == 0 and end_time.minute == 0 and end_time.second == 0:
+            end_time = end_time.replace(hour=23, minute=59, second=59)
+        
         _add_bar = context._add_bar2bar_data_cache
         _snapshot = account.take_snapshot
 

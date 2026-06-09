@@ -16,6 +16,14 @@ class Context:
     def is_backtest_model(self):
         return self.mode == 'backtest'
 
+    # [新增] 2026-06-09 连续多次回测时重置数据上下文
+    #   后续引擎 run() 需要干净的 cache 和 bar_data_set，否则 bar 被跳过导致数据不更新
+    def reset(self):
+        self._cache = _Cache()
+        self.bar_data_set.clear()
+        self._current_time = None
+        # 保留 _subscribed（订阅信息）和 mode（回测模式标记）
+
     @property 
     def now(self):
         return self._current_time if self.mode == 'backtest' else datetime.datetime.now()
@@ -23,6 +31,9 @@ class Context:
     def subscribe(self, symbols: Union[str, List[str]], freq='1d', count=100, fields=None,format='df'):
         if isinstance(symbols, str):
             symbols = [symbols]
+        # [修复] 2026-06-09 fields 字符串转列表，避免 engine.add_data() 中逐字符遍历
+        if isinstance(fields, str):
+            fields = [f.strip() for f in fields.split(',')]
             
         for symbol in symbols:
             self._subscribed[(symbol, freq)] = {
