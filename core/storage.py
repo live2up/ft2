@@ -6,23 +6,21 @@ import logging
 logger = logging.getLogger(__name__)
 
 class Context:
+    """回测上下文 — 全局配置 + 当前时钟
+
+    [重构] 2026-06-09 _cache 和 bar_data_set 移入 Engine 实例：
+        - 缓存是每次回测独有的运行时状态，生命周期应与 Engine 一致
+        - context.data() 委托给 context._active_engine 的缓存
+        - 删除了 reset()：Engine 实例天然隔离，无需手动清理
+    """
     def __init__(self):
-        self._cache = _Cache()
         self._subscribed = {}
-        self.bar_data_set = set()
         self.mode = None
         self._current_time = None
-  
+        self._active_engine = None   # 当前活跃的 Engine 实例
+
     def is_backtest_model(self):
         return self.mode == 'backtest'
-
-    # [新增] 2026-06-09 连续多次回测时重置数据上下文
-    #   后续引擎 run() 需要干净的 cache 和 bar_data_set，否则 bar 被跳过导致数据不更新
-    def reset(self):
-        self._cache = _Cache()
-        self.bar_data_set.clear()
-        self._current_time = None
-        # 保留 _subscribed（订阅信息）和 mode（回测模式标记）
 
     @property 
     def now(self):
@@ -52,46 +50,31 @@ class Context:
         for symbol in symbols:
             if (symbol, freq) in self._subscribed:
                 del self._subscribed[(symbol, freq)]
-                self._rm_cache(symbol, freq)
+                # [重构] 2026-06-09 委托给活跃 Engine 清除缓存
+                if self._active_engine:
+                    self._active_engine._rm_cache(symbol, freq)
+
     @property  
     def symbols(self, freq=None):
         if freq:
             return {s[0] for s in self._subscribed if s[1] == freq}
         return {s[0] for s in self._subscribed}
     
-    def _add_bar2bar_data_cache(self, bar):
-        kk = (bar["symbol"], bar["frequency"], bar["eob"])
-        if kk in self.bar_data_set:
-            logger.debug("bar data %s 已存在, 跳过不加入", kk)
-        else:
-            context._add_data_to_cache(bar["symbol"], bar["frequency"], bar)
-            self.bar_data_set.add(kk)
-
-    def data(self, symbol: str, frequency: str, count: int = 1,fields: Union[str, List[str]] = None):
+    # [重构] 2026-06-09 data() 委托给活跃 Engine 的缓存
+    #   context 不再持有 _cache，由 context._active_engine 提供
+    def data(self, symbol: str, frequency: str, count: int = 1, fields: Union[str, List[str]] = None):
         if not frequency:
             frequency = "1d"
-        
         if count < 1:
             count = 1
-            
-        raw_data = self._cache.get_data(symbol, frequency, count, fields)
-                
-        return raw_data
+        if self._active_engine is None:
+            raise RuntimeError("context.data() 调用时没有活跃的 Engine，请先调用 engine.run()")
+        return self._active_engine._cache.get_data(symbol, frequency, count, fields)
 
-    
-    def _init_cache(self, symbol, freq, format, fields, count):
-        self._cache.init_cache(symbol, freq, format, fields, count)
 
-    def _has_cache(self, symbol, freq):
-        return self._cache.has_cache(symbol, freq)
-
-    def _rm_cache(self, symbol, freq):
-        self._cache.rm_cache(symbol, freq)
-
-    def _add_data_to_cache(self, symbol, freq, data):
-        if data is None:
-            return
-        self._cache.add_data(symbol, freq, data)
+# ============================================================================
+# 缓存数据结构（Engine 实例持有）
+# ============================================================================
 
 class _Cache:
     def __init__(self):

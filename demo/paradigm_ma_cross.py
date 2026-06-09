@@ -112,9 +112,9 @@ bench_trades = len(account.trade_records)
 bench_nav = account.snapshots[-1].nav if account.snapshots else 0
 print(f'  基准成交 {bench_trades} 笔，最终净值 {bench_nav:,.0f}')
 
-# [重要] 基准跑完后重置账户和上下文
+# [重要] 基准跑完后重置账户（恢复初始资金+清空持仓/记录）
+#   Engine 缓存已实例化隔离，无需 context.reset()
 account.reset(init_cash=1e6)
-context.reset()
 
 
 # ============================================================================
