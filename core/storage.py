@@ -8,6 +8,15 @@ logger = logging.getLogger(__name__)
 class Context:
     """回测上下文 — 全局配置 + 当前时钟
 
+    与 GM 架构的核心差异：
+        GM 的 context 是重对象，持有 _cache、bar_data_set、accounts、callbacks 等全部状态。
+        因为 GM 的引擎在 C SDK，Python 层需要 context 集中管理一切。
+        
+        本框架是纯 Python，Engine 实例管理运行时数据，context 只保留跨模块共享的：
+        - _subscribed（订阅配置）: Engine.add_data() 和 account._get_price() 共用
+        - mode / _current_time（模式+时钟）: context.now 供策略和 account 读取
+        - _active_engine（活跃引擎引用）: context.data() 委托目标
+
     [重构] 2026-06-09 _cache 和 bar_data_set 移入 Engine 实例：
         - 缓存是每次回测独有的运行时状态，生命周期应与 Engine 一致
         - context.data() 委托给 context._active_engine 的缓存
@@ -32,6 +41,10 @@ class Context:
         # [修复] 2026-06-09 fields 字符串转列表，避免 engine.add_data() 中逐字符遍历
         if isinstance(fields, str):
             fields = [f.strip() for f in fields.split(',')]
+        # [新增] 2026-06-09 自动补 eob：account._get_price() 内部依赖 eob 做时间比对
+        #   用户只需指定业务字段（如 'close'），框架自动确保 eob 被缓存
+        if fields is not None and 'eob' not in fields:
+            fields.append('eob')
             
         for symbol in symbols:
             self._subscribed[(symbol, freq)] = {

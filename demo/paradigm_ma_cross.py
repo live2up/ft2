@@ -50,9 +50,8 @@ for idx, row in df_raw.iterrows():
 # ============================================================================
 
 context.mode = 'backtest'
-# [注意] fields 必须包含 'close,eob'，account._get_price() 依赖 eob 做时间比对
-#       策略中用 context.data() 查询字段可不同于订阅字段（子集即可）
-context.subscribe(SYMBOL, '1d', count=300, fields='close,eob')
+# subscribe 会自动补 eob（account._get_price() 内部需要），用户只需声明业务字段
+context.subscribe(SYMBOL, '1d', count=300, fields='close')
 
 
 # ============================================================================

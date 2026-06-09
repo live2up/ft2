@@ -7,6 +7,13 @@ import pandas as pd
 class Engine:
     """回测引擎 — 时间线驱动
 
+    与 GM 架构的核心差异：
+        GM 的引擎是 C SDK（.pyd/.dll），Python 层只做事件分发。GM 的 cache 放全局 context
+        因为每进程只有一个数据源（C SDK 推送），不存在多引擎场景。
+        
+        本框架是纯 Python 引擎，同一进程可运行多个 Engine 实例（基准+策略）。
+        因此 _cache 和 bar_data_set 归 Engine 实例所有，天然隔离。
+
     [重构] 2026-06-09 _cache 和 bar_data_set 移入 Engine 实例：
         - 每个 Engine 实例持有独立的缓存，天然隔离多轮/多引擎回测
         - context.data() 通过 context._active_engine 委托到当前活跃引擎的缓存

@@ -251,6 +251,12 @@ class AccountAnalyzer:
         """
         注入基准日净值数据，开启对比分析模式。
 
+        设计说明：
+            GM 在终端 GUI 中选基准指数，后台 RPC 拉收益率画线，SDK 不暴露 API。
+            本框架通过 set_benchmark() 注入任意策略的日净值（通常是 BenchHolder
+            的结果），由 AccountAnalyzer 内部做日期对齐、同构指标计算和对比输出。
+            对比链路纯 Python，不依赖 GUI。
+
         基准指标在 to_notebook() 中懒计算：
         - 按策略当前日期范围对齐
         - 内部运行 AccountAnalyzer(daily_assets=aligned) 获取同构指标

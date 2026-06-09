@@ -615,7 +615,17 @@ class AccountManager:
 class BenchHolder:
     """
     买入持有基准策略 — 首 bar 全仓买入第一只标的，后续持有不动
-    
+
+    设计说明（与 GM 的差异）：
+        GM 的基准对比是通过终端 GUI 选一个指数（如沪深300），后台 RPC 拉该指数的
+        收益率序列来画线。Python SDK 不暴露 get_benchmark_return() API。
+        
+        本框架的基准是一个真实的策略（BenchHolder），走和主策略完全相同的引擎、
+        数据和账户通道。好处：
+        1. 基准和策略数据源一致，不存在因来源不同导致的偏差
+        2. 基准可任意定制（不限于预设指数，可以是任何自定义策略）
+        3. 对比链路完全可编程，不依赖 GUI
+
     用法:
         bench_engine.run(BenchHolder, start_time, end_time)
         bench_analyzer = AccountAnalyzer(account)
