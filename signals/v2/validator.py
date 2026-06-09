@@ -209,6 +209,9 @@ class WalkForwardResult:
         )
 
 
+# [弃用] 2026-06-10 建议用 core_backtest() 替代
+#   简化引擎的 Sharpe 比 core 引擎虚高 15~20%，且无费率/交易记录
+#   仅 gp_optimizer/grid_search 因性能原因保留使用
 def _compute_backtest(positions: pd.Series, data: pd.DataFrame,
                        signals: pd.Series = None,
                        initial_capital: float = 1_000_000,
@@ -335,6 +338,7 @@ def _compute_backtest(positions: pd.Series, data: pd.DataFrame,
     )
 
 
+# [弃用] 2026-06-10 建议用 run_backtest_with_core() / core_backtest() 替代
 def run_backtest(expr_or_gen: Any, data: pd.DataFrame,
                  initial_capital: float = 1_000_000,
                  long_only: bool = True,
@@ -611,9 +615,194 @@ def compare(*expressions: Any, data: pd.DataFrame,
     return pd.DataFrame(results)
 
 
-# [新增] 2026-06-03 signals/v2.1: 用 core 引擎替代简化回测
-#   信号预先嵌入 bar._signal → Engine 时间线递进 → on_bar 读信号调仓
-#   返回 AccountAnalyzer，享受完整分析能力（费率/备注/基准/HTML报告）
+# ============================================================
+# [新增] 2026-06-10 core_backtest — 纯信号→core引擎 一键回测
+# ============================================================
+# 设计原则:
+#   1. 只接受 pd.Series 信号（预计算），不接受 Expression/多态
+#   2. 信号时序: signal[t] → bar[t] 触发建仓/清仓（引擎逐bar递进天然T+1）
+#   3. 费率由 core.AccountManager 自动处理（ETF万3佣金+千1印花税）
+#   4. 返回 AccountAnalyzer → 链式调用 to_notebook/set_benchmark/to_excel
+#
+# 调用链: signal + ohlcv → embed _signal → Engine.run() → AccountAnalyzer
+# ============================================================
+
+def core_backtest(
+    signal: 'pd.Series',
+    data: 'pd.DataFrame',
+    symbol: str = '399317.SZ',
+    freq: str = '1d',
+    initial_capital: float = 1_000_000,
+    start_date: str = None,
+    note_fields: List[str] = None,
+) -> 'AccountAnalyzer':
+    """
+    用 ft2.core 引擎回测择时信号（纯信号入口，不依赖 Expression）。
+
+    Args:
+        signal: pd.Series，index=日期，value>0 做多、value<=0 空仓
+        data: OHLCV DataFrame，必须含 close/open 列，index=DatetimeIndex
+        symbol: 交易标的代码（'399317.SZ' 等）
+        freq: 数据频率（'1d' 等，作为引擎缓存 key）
+        initial_capital: 初始资金
+        start_date: 回测起始日期（'2020-01-01'），None=从数据首位开始。
+                    设置后策略和基准统一从该日期起步，净值起点一致。
+        note_fields: 附加写入 TradeRecord.note 的 bar 字段名（如 ['close','volume']）
+
+    Returns:
+        AccountAnalyzer: 含完整指标/交易记录，可链式调用:
+            analyzer.set_benchmark(...).to_notebook("标题")
+
+    Example:
+        >>> from signals.v2 import core_backtest
+        >>> # signal 已预先计算好
+        >>> analyzer = core_backtest(my_signal, ohlcv_df, symbol='399317.SZ',
+        ...                          start_date='2020-01-01')
+        >>> analyzer.set_benchmark(bench_nav, '买入持有').to_notebook("ATR择时")
+    """
+    from core.engine import Engine
+    from core.account import OrderSide
+    from core.storage import context
+    from core.analyzer import AccountAnalyzer
+
+    # ── 1. 信号对齐（全长保留，缺失填充 0=空仓）──
+    if not isinstance(signal, pd.Series):
+        raise TypeError(f"signal 必须是 pd.Series，收到 {type(signal)}")
+    if not isinstance(signal.values[0], (int, float, np.floating, np.integer)):
+        raise TypeError(f"signal 值必须是数值类型，收到 {type(signal.values[0])}")
+
+    df = data.copy()
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    if 'eob' not in df.columns:
+        df['eob'] = df.index
+
+    # [修复] 2026-06-10 去掉 common_idx 截断 → 用全量数据 + fillna(0)
+    #   旧逻辑: df = df.loc[common_idx] — 信号没有的日期被丢弃
+    #   结果: 空仓期的净值记录丢失，引擎从第一个信号日开始 → daily_assets 缺头
+    #   新逻辑: 信号对齐到数据全长，缺失处填 0 → 空仓期保留 INITIAL_CAPITAL 净值
+    df['_signal'] = signal.reindex(df.index).fillna(0).values
+
+    # [新增] 2026-06-10 start_date 截断 → 策略和基准统一起点
+    if start_date is not None:
+        start_ts = pd.Timestamp(start_date)
+        df = df.loc[df.index >= start_ts].copy()
+        if len(df) < 2:
+            import warnings
+            warnings.warn(f"core_backtest: start_date={start_date} 后数据不足2条")
+            return AccountAnalyzer(account=None)
+
+    if len(df) < 2:
+        import warnings
+        warnings.warn("core_backtest: 有效数据不足2条")
+        return AccountAnalyzer(account=None)
+
+    # ── 2. 引擎初始化 ──
+    engine = Engine(init_cash=initial_capital)
+    context.mode = 'backtest'
+    context.unsubscribe(symbol, freq)
+    context.subscribe(symbol, freq, count=300)
+    engine.add_data(symbol, freq, df)
+
+    note_fields = note_fields or []
+
+    class _SignalStrategy:
+        def on_bar(self, ctx, bars):
+            bar = bars[0]
+            sig = bar.get('_signal', 0)
+            has_pos = bool(ctx.account.get_position())
+
+            target_long = sig > 0
+
+            note_parts = [f"signal={sig:.4f}"]
+            for f in note_fields:
+                if f in bar:
+                    note_parts.append(f"{f}={bar[f]}")
+            note = ', '.join(note_parts)
+
+            if target_long and not has_pos:
+                try:
+                    ctx.account.order_percent(symbol, 1.0, OrderSide.Buy, note=note)
+                except ValueError:
+                    pass
+            elif not target_long and has_pos:
+                try:
+                    ctx.account.order_percent(symbol, 1.0, OrderSide.Sell, note=note)
+                except ValueError:
+                    pass
+
+    start_time = df['eob'].iloc[0]
+    end_time = df['eob'].iloc[-1]
+
+    try:
+        engine.run(_SignalStrategy, start_time, end_time)
+    except Exception as e:
+        import warnings
+        warnings.warn(f"core_backtest: Engine 回测异常: {e}")
+
+    return AccountAnalyzer(engine.account)
+
+
+def core_backtest_with_benchmark(
+    signal: 'pd.Series',
+    data: 'pd.DataFrame',
+    symbol: str = '399317.SZ',
+    freq: str = '1d',
+    initial_capital: float = 1_000_000,
+    start_date: str = None,
+    note_fields: List[str] = None,
+    bench_label: str = '基准',
+) -> 'AccountAnalyzer':
+    """
+    core_backtest + 基准对比（一次调用完成信号回测 + 基准注入）。
+
+    基准通过 BenchHolder 策略运行（与信号共用同一份数据），
+    daily_assets 自动注入到 signal analyzer 中。
+    当设置 start_date 时，策略和基准同时从该日期截断，确保起点一致。
+
+    Returns:
+        AccountAnalyzer: 已注入基准的 analyzer，可直接 to_notebook() 输出对比报告
+
+    Example:
+        >>> analyzer = core_backtest_with_benchmark(sig, df, start_date='2020-01-01')
+        >>> analyzer.to_notebook("策略 vs 基准")
+    """
+    from core.engine import Engine
+    from core.account import BenchHolder
+    from core.storage import context
+    from core.analyzer import AccountAnalyzer
+
+    # [修复] 2026-06-10 start_date 统一截断 → 策略和基准同一天起步
+    bench_data = data.copy()
+    if start_date is not None:
+        start_ts = pd.Timestamp(start_date)
+        bench_data = bench_data.loc[bench_data.index >= start_ts].copy()
+
+    # ── 1. 基准回测 ──
+    bench_engine = Engine(init_cash=initial_capital)
+    context.mode = 'backtest'
+    context.unsubscribe(symbol, freq)
+    context.subscribe(symbol, freq, count=3000)
+    bench_engine.add_data(symbol, freq, bench_data)
+
+    bench_dt_start = bench_data.index[0].to_pydatetime() if hasattr(bench_data.index[0], 'to_pydatetime') else bench_data.index[0]
+    bench_dt_end = bench_data.index[-1].to_pydatetime() if hasattr(bench_data.index[-1], 'to_pydatetime') else bench_data.index[-1]
+    bench_engine.run(BenchHolder, bench_dt_start, bench_dt_end)
+    bench_analyzer = AccountAnalyzer(bench_engine.account)
+
+    # ── 2. 信号回测（传入 start_date，内部截断到同一天）──
+    analyzer = core_backtest(
+        signal, data, symbol=symbol, freq=freq,
+        initial_capital=initial_capital, start_date=start_date,
+        note_fields=note_fields)
+
+    # ── 3. 注入基准 ──
+    analyzer.set_benchmark(bench_analyzer.daily_assets, bench_label)
+    return analyzer
+
+
+# [复用] 2026-06-10 重构: run_backtest_with_core 现在对 Series 输入委托给 core_backtest
+#   Expression/callable/ndarray 的兼容性保留，但信号解析后统一走 core_backtest
 def run_backtest_with_core(
     expr_or_signals,
     data: 'pd.DataFrame',
@@ -621,6 +810,7 @@ def run_backtest_with_core(
     freq: str = '1d',
     initial_capital: float = 1_000_000,
     long_only: bool = True,
+    start_date: str = None,
     note_fields: List[str] = None,
 ) -> 'AccountAnalyzer':
     """
@@ -649,85 +839,32 @@ def run_backtest_with_core(
         >>> analyzer = run_backtest_with_core(expr, df, symbol='399317.SZ')
         >>> analyzer.set_benchmark(bench_nav, '买入持有').to_notebook("ATR突破")
     """
-    from core.engine import Engine
-    from core.account import OrderSide
-    from core.storage import context
     from core.analyzer import AccountAnalyzer
 
-    # ── 1. 信号标准化 ──
-    if hasattr(expr_or_signals, 'generate'):
-        signal_values = expr_or_signals.generate(data)
-    elif callable(expr_or_signals):
-        signal_values = expr_or_signals(data)
+    # ── 1. 信号标准化（多态分发 → 统一为 pd.Series）──
+    if isinstance(expr_or_signals, pd.Series):
+        signal_values = expr_or_signals
     elif isinstance(expr_or_signals, np.ndarray):
         signal_values = pd.Series(
             expr_or_signals.ravel(), index=data.index[:len(expr_or_signals)])
-    elif isinstance(expr_or_signals, pd.Series):
-        signal_values = expr_or_signals
+    elif hasattr(expr_or_signals, 'generate'):
+        signal_values = expr_or_signals.generate(data)
+    elif callable(expr_or_signals):
+        signal_values = expr_or_signals(data)
     else:
         signal_values = pd.Series(
             list(expr_or_signals), index=data.index[:len(expr_or_signals)])
 
-    # ── 2. 信号嵌入 data ──
-    df = data.copy()
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index)
-    if 'eob' not in df.columns:
-        df['eob'] = df.index
-
-    # 对齐信号日期
-    common_idx = df.index.intersection(signal_values.index)
-    if len(common_idx) < 2:
+    if len(signal_values.dropna()) < 2:
         import warnings
-        warnings.warn("run_backtest_with_core: 有效数据不足")
+        warnings.warn("run_backtest_with_core: 有效信号值不足")
         return AccountAnalyzer(account=None)
-    df = df.loc[common_idx]
-    df['_signal'] = signal_values.reindex(common_idx).fillna(0).values
 
-    # ── 3. 引擎 + 策略 ──
-    engine = Engine(init_cash=initial_capital)
-    context.mode = 'backtest'
-    context.unsubscribe(symbol, freq)
-    context.subscribe(symbol, freq, count=300)
-    engine.add_data(symbol, freq, df)
-
-    note_fields = note_fields or []
-
-    class _SignalStrategy:
-        def on_bar(self, ctx, bars):
-            bar = bars[0]
-            sig = bar.get('_signal', 0)
-            has_pos = bool(ctx.account.get_position())  # 利用 get_position() 无参返回 dict 的灵活性
-
-            target_long = sig > 0  # 当前仅支持做多（long_only=True）
-
-            note_parts = [f"signal={sig:.4f}"]
-            for f in note_fields:
-                if f in bar:
-                    note_parts.append(f"{f}={bar[f]}")
-            note = ', '.join(note_parts)
-
-            if target_long and not has_pos:
-                try:
-                    ctx.account.order_percent(symbol, 1.0, OrderSide.Buy, note=note)
-                except ValueError:
-                    pass
-            elif not target_long and has_pos:
-                try:
-                    ctx.account.order_percent(symbol, 1.0, OrderSide.Sell, note=note)
-                except ValueError:
-                    pass
-
-    start_time = df['eob'].iloc[0]
-    end_time = df['eob'].iloc[-1]
-
-    try:
-        engine.run(_SignalStrategy, start_time, end_time)
-    except Exception as e:
-        import warnings
-        warnings.warn(f"Core engine 回测异常: {e}")
-
-    return AccountAnalyzer(engine.account)
+    # ── 2. 委托给 core_backtest（纯信号 → core 引擎）──
+    return core_backtest(
+        signal_values, data, symbol=symbol, freq=freq,
+        initial_capital=initial_capital, start_date=start_date,
+        note_fields=note_fields)
 
 
 class Validator:

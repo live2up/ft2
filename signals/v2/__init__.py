@@ -51,11 +51,14 @@ signals v2 是基于 AIdev 探索结论的底层重构模块。
                       │
                       ▼
  ┌─────────────────────────────────────────────────────────────────────┐
- │  回测验证层  ───  validator.py                                       │
- │                                                                      │
- │  run_backtest()  —  信号 → 持仓(T+1) → 净值 → 绩效指标               │
- │  walk_forward()  —  滚动窗口验证，过拟合检测                         │
- │  compare()       —  多表达式横向对比                                  │
+│  回测验证层  ───  validator.py                                       │
+│                                                                      │
+│  core_backtest()       — 纯信号 → core 引擎 → AccountAnalyzer (推荐) │
+│  core_backtest_with_benchmark() — 信号+基准一键回测                   │
+│  run_backtest_with_core()        — 兼容 Expression/callable 的多态    │
+│  run_backtest() [deprecated]     — 简化引擎（虚高15~20%）            │
+│  walk_forward()       — 滚动窗口验证，过拟合检测                     │
+│  compare()             — 多表达式横向对比                              │
  └────────────────────┬────────────────────────────────────────────────┘
                       │
          ┌────────────┼────────────┐
@@ -146,6 +149,8 @@ from .validator import (
     run_backtest,
     run_backtest_from_signal,
     run_backtest_with_core,
+    core_backtest,
+    core_backtest_with_benchmark,
     walk_forward,
     WalkForwardResult,
 )
@@ -244,9 +249,10 @@ __all__ = [
     # Expression
     'NodeType', 'TreeNode', 'Expression', 'parse_expression',
     'parse_and_build', 'persist', 'regime_switch', 'np_persist',
-    # Validator (v2.1 新增 run_backtest_with_core)
+    # Validator (v2.1 core_backtest + run_backtest_with_core)
     'Validator', 'run_backtest', 'run_backtest_from_signal',
-    'run_backtest_with_core', 'walk_forward', 'WalkForwardResult',
+    'run_backtest_with_core', 'core_backtest', 'core_backtest_with_benchmark',
+    'walk_forward', 'WalkForwardResult',
     # Walk-Forward v2.1
     'walk_forward_with_core', 'WalkForwardCoreResult',
     # Pipeline
