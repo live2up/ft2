@@ -22,7 +22,9 @@ context.now  ctx.account.     @metric 收集     nb.export_html()
 - `_cache`、`bar_data_set`、`account` 全部归 Engine 实例所有，多引擎天然隔离
 - `context.account` 委托到 `context._active_engine.account`，策略统一用 `ctx.account`
 - 移除全局 `account` 实例，不再需要 `account.reset()`
-- `context.subscribe()` 自动补 `eob` 字段，fields 支持逗号分隔字符串
+- `context.subscribe()` 自动补 `eob` 字段到缓存，fields 支持逗号分隔字符串
+- ⚠️ `context.data()` 的 `fields` 参数是二次过滤：即使缓存里有 `eob`，不显式请求就不返回。
+  需要用 `eob` 时必须写 `ctx.data(symbol, freq, count, fields='close,eob')`，不能只写 `fields='close'`
 
 ---
 
