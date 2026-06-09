@@ -640,8 +640,7 @@ class BenchHolder:
         context.account.order_percent(bars[0]['symbol'], 1.0, OrderSide.Buy, note='基准买入持有')
 
 
-# ============================================================================
-# 全局实例
-# ============================================================================
-
-account = AccountManager(init_cash=1e6)
+# [重构] 2026-06-09 移除全局 account 实例
+#   旧架构：全局 account 被 Engine.run() 期间使用，需手动 account.reset()
+#   新架构：每 Engine 实例内置独立 AccountManager，通过 context.account 委托访问
+#   全局实例已无使用场景，移除以避免误用

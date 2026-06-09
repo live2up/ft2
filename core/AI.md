@@ -2,7 +2,7 @@
 
 > 回测引擎核心 + HTML 报告（已融合 notebook 模块）
 >
-> **版本：v2.3 | 更新日期：2026-06-09**
+> **版本：v2.4 | 更新日期：2026-06-09**
 
 ---
 
@@ -13,10 +13,16 @@ Engine → AccountManager → AccountAnalyzer → Notebook → HTML
   │           │                 │               │
   │ 时间线驱动  │ 订单/持仓/费用   │ 指标计算       │ 渲染层(Jinja2+Vue3+ECharts)
   ▼           ▼                 ▼               ▼
-context.now  account.order_   @metric 收集     nb.export_html()
-逐bar推进    percent()         .to_notebook()   ─→ template/notebook.html
+context.now  ctx.account.     @metric 收集     nb.export_html()
+逐bar推进    order_percent()   .to_notebook()   ─→ template/notebook.html
                               .to_excel()       ─→ template/js/(Vue3/ECharts/ft-table)
 ```
+
+**v2.4 重构要点（2026-06-09）：**
+- `_cache`、`bar_data_set`、`account` 全部归 Engine 实例所有，多引擎天然隔离
+- `context.account` 委托到 `context._active_engine.account`，策略统一用 `ctx.account`
+- 移除全局 `account` 实例，不再需要 `account.reset()`
+- `context.subscribe()` 自动补 `eob` 字段，fields 支持逗号分隔字符串
 
 ---
 
@@ -25,9 +31,9 @@ context.now  account.order_   @metric 收集     nb.export_html()
 ```python
 from core.engine import Engine
 from core.storage import context
-from core.account import account, OrderSide
+from core.account import OrderSide
 
-engine = Engine()
+engine = Engine(init_cash=1e6)  # 每实例独立账户，初始资金在构造时指定
 context.mode = 'backtest'
 context.subscribe('399317.SZ', '1d', count=300)
 
@@ -36,33 +42,38 @@ engine.add_data('399317.SZ', '1d', df)
 
 # 运行（传策略类，引擎自动实例化）
 engine.run(MyStrategy, start_time, end_time)
+
+# 分析
+from core.analyzer import AccountAnalyzer
+analyzer = AccountAnalyzer(engine.account)
 ```
 
 - `Engine.timeline` 是 `OrderedDict[eob → List[bar]]`，按时间排序驱动
 - 每个 bar 先入缓存（`_add_bar`），再调 `on_bar`
 - 策略实例化在 `run()` 内完成，`context.data()` 只能看到 ≤当前时间的数据
+- `Engine.run()` 入口注册 `_active_engine`，退出时恢复，支持嵌套多引擎
 
 ---
 
 ## 2. AccountManager — 账户管理
 
 ```python
-from core.account import account, OrderSide
+# 策略内部通过 context.account 访问（委托到活跃 Engine 的账户）
+def on_bar(self, context, bars):
+    account = context.account
 
-# 下单（可选 note 记录信号备注）
-account.order_percent('399317.SZ', 1.0, OrderSide.Buy, note="温度计75度")
-account.order_volume('399317.SZ', 100, OrderSide.Sell)
+    # 下单（可选 note 记录信号备注）
+    account.order_percent('399317.SZ', 1.0, OrderSide.Buy, note="温度计75度")
+    account.order_volume('399317.SZ', 100, OrderSide.Sell)
 
-# 查询
-account.get_account()        # {'cash': ..., 'nav': ...}
-account.get_position(symbol) # {'volume': ..., 'cost_price': ...}
-account.trade_records        # List[TradeRecord] 含 note 字段
-account.snapshots            # List[AccountSnapshot]
+    # 查询
+    account.get_account()        # {'cash': ..., 'nav': ...}
+    account.get_position(symbol) # {'volume': ..., 'cost_price': ...}
 ```
 
 - 费用计算：佣金 0.03% + 印花税 0.1%（卖）+ 最低 5 元
 - 交易单位：默认自动识别（stock/etf→100股，index→1，其他→0.1）
-- 策略层可覆盖：`account.fee_config = {'lot_size': 1, ...}` 或 `account.fee_config['lot_size'] = 100`
+- 策略层可覆盖：`engine.account.fee_config['lot_size'] = 100`
 - `TradeRecord.note`：追溯每笔交易触发原因
 
 ---
@@ -298,7 +309,7 @@ nb.export_html()  # → 输出到当前脚本所在目录
 3. **引擎天然防未来** — `eob` 时间线 + `context.now` 保证每时刻只能看到 ≤当前的数据
 4. **频率无限制** — `freq` 是纯字符串 key，支持 `'1d'`/`'m10'`/`'my_signal'` 等任意自定义频率
 5. **初始快照独立** — `init_snapshot(start_time-1天)` 作为 `snapshots[0]`，分析层零推断、零补偿
-6. **缓存实例化隔离** — `_cache` 归 Engine 实例所有，多引擎天然隔离，无需 `context.reset()`
+6. **缓存实例化隔离** — `_cache`/`bar_data_set`/`account` 归 Engine 实例所有，多引擎天然隔离，无需 `account.reset()`
 7. **基准＝真实策略** — `BenchHolder` 走与主策略相同的引擎+数据+账户通道，对比结果无偏差
 8. **Notebook 渲染层内聚** — `analyzer.to_notebook()` 内部完成全链路；支持 `header/footer` 回调扩展
 
@@ -308,8 +319,8 @@ nb.export_html()  # → 输出到当前脚本所在目录
 
 ```
 core/
-├── engine.py          # 回测引擎 (Engine + timeline 驱动)
-├── account.py         # 账户管理 (AccountManager + OrderSide + BenchHolder)
+├── engine.py          # 回测引擎 (Engine + timeline 驱动，无全局实例)
+├── account.py         # 账户管理 (AccountManager + OrderSide + BenchHolder，无全局实例)
 ├── analyzer.py        # 分析器 (AccountAnalyzer + @metric + to_notebook/to_excel)
 ├── storage.py         # 数据存储 (context 上下文)
 ├── symbol_classifier.py # 品种分类

@@ -137,4 +137,6 @@ class Engine:
             context._active_engine = prev_engine
 
 
-engine = Engine()
+# [重构] 2026-06-09 移除全局 engine 实例
+#   旧架构：全局 engine + 全局 account，需手动 reset()
+#   新架构：每次回测创建 Engine(init_cash=...) 新实例，内置独立账户

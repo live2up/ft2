@@ -19,7 +19,7 @@
 
 ```python
 import sys; sys.path.insert(0, r'd:\01-Doc\Quant\ft2')
-from core import Engine, AccountAnalyzer, context, account, OrderSide, BenchHolder
+from core import Engine, AccountAnalyzer, context, OrderSide, BenchHolder
 from notebook import Notebook
 from factor.v3 import FactorExpression, GPEngine, FactorDiscoveryEngine  # v3 推荐
 from signals.v2 import Expression, FeatureSpace, run_backtest_with_core  # v2.1 推荐

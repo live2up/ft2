@@ -650,7 +650,7 @@ def run_backtest_with_core(
         >>> analyzer.set_benchmark(bench_nav, '买入持有').to_notebook("ATR突破")
     """
     from core.engine import Engine
-    from core.account import account, OrderSide
+    from core.account import OrderSide
     from core.storage import context
     from core.analyzer import AccountAnalyzer
 
@@ -685,14 +685,11 @@ def run_backtest_with_core(
     df['_signal'] = signal_values.reindex(common_idx).fillna(0).values
 
     # ── 3. 引擎 + 策略 ──
-    engine = Engine()
+    engine = Engine(init_cash=initial_capital)
     context.mode = 'backtest'
-    context.bar_data_set.clear()       # 清理前次回测的bar去重缓存
     context.unsubscribe(symbol, freq)
     context.subscribe(symbol, freq, count=300)
     engine.add_data(symbol, freq, df)
-
-    account.reset(init_cash=initial_capital)
 
     note_fields = note_fields or []
 
@@ -700,7 +697,7 @@ def run_backtest_with_core(
         def on_bar(self, ctx, bars):
             bar = bars[0]
             sig = bar.get('_signal', 0)
-            has_pos = bool(account.get_position())  # 利用 get_position() 无参返回 dict 的灵活性
+            has_pos = bool(ctx.account.get_position())  # 利用 get_position() 无参返回 dict 的灵活性
 
             target_long = sig > 0  # 当前仅支持做多（long_only=True）
 
@@ -712,12 +709,12 @@ def run_backtest_with_core(
 
             if target_long and not has_pos:
                 try:
-                    account.order_percent(symbol, 1.0, OrderSide.Buy, note=note)
+                    ctx.account.order_percent(symbol, 1.0, OrderSide.Buy, note=note)
                 except ValueError:
                     pass
             elif not target_long and has_pos:
                 try:
-                    account.order_percent(symbol, 1.0, OrderSide.Sell, note=note)
+                    ctx.account.order_percent(symbol, 1.0, OrderSide.Sell, note=note)
                 except ValueError:
                     pass
 
@@ -730,7 +727,7 @@ def run_backtest_with_core(
         import warnings
         warnings.warn(f"Core engine 回测异常: {e}")
 
-    return AccountAnalyzer(account)
+    return AccountAnalyzer(engine.account)
 
 
 class Validator:
