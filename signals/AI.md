@@ -1,209 +1,267 @@
 # signals 模块 AI 助手指南
 
-> **版本：v2.1 | 更新日期：2026-06-03**
+> **版本：v3 | 更新日期：2026-06-10**
 
 ## 项目定位
-择时信号研究模块，专注计算，不负责输出。
+
+择时信号研究模块，探索、测试、回测全部走 `ft2.core.Engine`。
 
 ## 版本说明
-- **v2.1** — 当前主力（表达式引擎 + core 引擎回测 + Walk-Forward 稳定性分析）
-- **v2.0** — 内置简化回测（`run_backtest` / `BacktestResult`），仍可用但建议迁移到 v2.1
-- **v1/** — 前期版本，已处于非维护状态
 
-## v2.1 vs v2.0 关键区别
+| 版本 | 状态 | 说明 |
+|------|------|------|
+| **v3** | **主力** | 统一引擎 (`EngineV3`), full/fast 双模式, `from signals.v3 import ...` |
+| v2 | 冻结 | 保留表达式引擎/特征工厂, 简化回测已弃用 (保留兼容) |
+| v1 | 淘汰 | 不再维护, 不再引用 |
 
-| 特性 | v2.0（兼容保留） | v2.1（推荐） |
-|------|-----------------|-------------|
-| 回测引擎 | 内置简化回测 (`run_backtest`) | core 引擎 (`run_backtest_with_core`) |
-| 回测返回值 | `BacktestResult` (9个标量) | `AccountAnalyzer` (全套指标+链式输出) |
-| Walk-Forward | `walk_forward` (训练/测试 Sharpe) | `walk_forward_with_core` (12项指标+稳定性) |
-| 报告输出 | 手动拼接 | `analyzer.set_benchmark(...).to_notebook(...)` |
+## v3 核心变革
 
-## 架构原则
-- **signals/ 专注计算**：信号生成、回测、IC分析
-- **输出委托 core.analyzer**：`run_backtest_with_core` 返回 `AccountAnalyzer`，链式调用 `.to_notebook()`
-- **禁止跨版本依赖**：v1 与 v2 各自独立
+v3 与 v2 的最大区别：**搜索和验证用同一把尺子**。
+
+```
+v2 问题:  GP/网格搜索 → 简化引擎 (虚高20%) → 发现信号 → core引擎验证 (真实)
+          → 选出来的最优信号可能过不了验证关
+
+v3 方案:  GPSearch/GridSearch → EngineV3(mode='fast') → 直接就是真实Sharpe
+          → 验证 → EngineV3(mode='full') → AccountAnalyzer → to_notebook
+          fast 和 full 同一 Engine.run() 时间线, 同一费率公式, Sharpe 一致
+```
+
+## 架构总览
+
+```
+                         数据源 (d2_api/TDX)
+                               │
+                  ┌────────────┼────────────┐
+                  ▼            ▼            ▼
+          signals/v2/      signals/v2/    signals/v3/
+          features.py      expression     engine.py    ← 统一回测入口
+          FeatureSpace      Expression    EngineV3
+          (55+特征)         parse/生成     backtest(mode='fast|full')
+                  │            │               │
+                  └────────────┼───────────────┤
+                               │               │
+            ┌──────────────────┼───────────────┤
+            ▼                  ▼               ▼
+     ┌─────────────┐  ┌──────────────┐  ┌──────────────┐
+     │ v3/search/   │  │ v3/validate/  │  │ v3/scoring   │
+     │              │  │              │  │              │
+     │ GPSearch     │  │ single       │  │ Composite    │
+     │ GridSearch   │  │ compare      │  │ Scorer       │
+     │              │  │ walkforward  │  │ 3-zone       │
+     └──────┬───────┘  └──────┬───────┘  └──────────────┘
+            │                 │
+            └────────┬────────┘
+                     ▼
+            ┌─────────────────┐
+            │   EngineV3       │
+            │                  │
+            │ fast → Engine    │
+            │   .run() + 自管  │
+            │   净值 (无记录)   │
+            │                  │
+            │ full → Engine    │
+            │   .run() +       │
+            │   AccountManager │
+            │   → Analyzer     │
+            └────────┬─────────┘
+                     ▼
+            ┌─────────────────┐
+            │    ft2.core       │
+            │ Engine/Account/   │
+            │ Analyzer/Notebook │
+            └──────────────────┘
+```
 
 ## 目录结构
+
 ```
 signals/
-├── v1/                     # 已归档（TA-Lib 类信号 + 融合器 + 回测）
-├── v2/                     # 当前主力 (v2.1)
-│   ├── features.py         # 特征工厂（55+ 纯函数 + 声明式配置 → 特征矩阵）
-│   ├── expression.py       # 表达式引擎（Tokenizer → Parser → AST → 信号序列）
-│   ├── pipeline.py         # 管线编排（多阶段信号处理链）
-│   ├── validator.py        # 回测验证（run_backtest / run_backtest_with_core / walk_forward）
-│   ├── walk_forward_v2.py  # [v2.1] Walk-Forward (core 引擎版, 全套指标+稳定性分析)
-│   ├── scoring.py          # 多条件打分（加权合成 + 三区状态机）
-│   ├── grid_search.py      # 参数网格搜索
-│   ├── gp_optimizer.py     # 遗传算法优化
-│   ├── pysr_adapter.py     # PySR 符号回归适配器
-│   ├── ic_analyzer.py      # IC 分析器
+├── v1/                     # 淘汰 (不再维护)
+├── v2/                     # 冻结 (特征工厂/表达式引擎/管线/打分 仍可用)
+│   ├── features.py         # FeatureSpace (v3 继承)
+│   ├── expression.py       # Expression (v3 继承)
+│   ├── pipeline.py         # SignalPipeline (v3 继承)
+│   ├── validator.py        # core_backtest / run_backtest_with_core (v2 桥接)
+│   ├── scoring.py          # 多条件打分 (v3 继承)
 │   ├── presets.py          # 表达式模板库
-│   ├── registry.py         # 表达式注册与发现
-│   ├── explainer.py        # 白盒子解释引擎
-│   ├── decay_monitor.py    # 因子衰减监控
-│   ├── market_breadth.py   # 市场广度特征
-│   ├── timeframe.py        # 多周期特征计算
-│   └── __init__.py         # 模块入口
+│   ├── registry.py         # 表达式注册
+│   ├── explainer.py        # 白盒解释
+│   ├── decay_monitor.py    # 衰减监控
+│   ├── ic_analyzer.py      # IC 分析
+│   └── ...
+├── v3/                     # 主力 ←
+│   ├── engine.py           # EngineV3: full/fast 双模式
+│   ├── search/
+│   │   ├── gp.py           # GPSearch (v2算法 + v3引擎)
+│   │   └── grid.py         # GridSearch (v2算法 + v3引擎)
+│   ├── validate/
+│   │   ├── single.py       # 单信号验证
+│   │   ├── compare.py      # 多信号对比
+│   │   └── walkforward.py  # WF 验证
+│   ├── scoring.py          # 连续值打分 (继承 v2)
+│   ├── monitor/            # 解释/衰减/IC (待桥接)
+│   └── __init__.py         # 统一导出
 └── AI.md
 ```
 
-## 核心 API (v2)
+---
 
-### 1. 特征工厂
+## 核心 API (v3)
+
+### 0. 导入规范
+
 ```python
-from signals.v2 import FeatureSpace, register_feature
+# v3 统一入口 (推荐)
+from signals.v3 import (
+    EngineV3, FastResult,                    # 引擎
+    GPSearch, GridSearch,                     # 搜索
+    validate_single, compare_signals,         # 验证
+    FeatureSpace, Expression,                 # 继承v2
+    ScoredSignal, CompositeScorer,            # 打分
+)
 
-# 默认配置：55+ 技术指标
+# 回测
+result = EngineV3.backtest(signal, data, mode='fast')    # 搜索
+analyzer = EngineV3.backtest(signal, data, mode='full')  # 验证
+```
+
+### 1. 特征工厂 (继承 v2, 不变)
+
+```python
+from signals.v3 import FeatureSpace, register_feature
+
 fs = FeatureSpace()
 features = fs.fit_transform(df)
 # features.columns: ['ATR{7}', 'RSI{14}', 'EMA{20}', ...]
-
-# 自定义配置
-config = {
-    'features': {'my_cat': ['RSI(period=[5,14])']},
-    'regime': True,           # 追加市场状态特征
-    'market_breadth': False,   # 追加市场广度特征（需 advance/decline 列）
-    'normalize': True,
-}
-fs2 = FeatureSpace(config=config)
 ```
 
-### 2. 表达式引擎
-```python
-from signals.v2 import Expression
-
-# 字符串 → 自动编译 → 信号
-expr = Expression("thr_mean(ATR{7}) & thr_mean(TRIMA{60})", fs)
-signals = expr.generate(df)            # pd.Series (0.0/1.0)
-
-# {} 引用特征列，() 函数调用
-# thr_0 / thr_mean / thr_med / thr_roll_mean / thr_zscore / thr_pct / thr_range
-# & = AND  | = OR  persist(expr, 3) = 连续3日确认
-signals2 = Expression("persist(thr_mean(ATR{7}), 3)", fs).generate(df)
-```
-
-### 3. 回测
-
-#### 3a. v2.1 core 引擎回测（推荐）
+### 2. 表达式引擎 (继承 v2, 不变)
 
 ```python
-from signals.v2 import run_backtest_with_core, Expression, FeatureSpace
+from signals.v3 import Expression
 
-fs = FeatureSpace()
 expr = Expression("thr_mean(ATR{7})", fs)
+signals = expr.generate(df)            # pd.Series (0.0/1.0)
+# thr_0 / thr_mean / thr_med / thr_roll_mean
+# & = AND  | = OR  persist(expr, n) = 连续确认
+```
 
-# 用 core 引擎回测 → 返回 AccountAnalyzer（全套指标 + 链式输出）
-analyzer = run_backtest_with_core(expr, df, symbol='399317.SZ')
+### 3. 回测 — EngineV3 (核心)
 
-# 链式调用：注入基准 → 输出报告 → 获取指标
-analyzer.set_benchmark(bench_nav, '买入持有') \
-        .to_notebook("ATR突破策略")
+```python
+from signals.v3 import EngineV3
 
-# 单独获取指标
-analyzer.sharpe_ratio()        # → 0.57
-analyzer.max_drawdown()        # → (0.185, peak_date, trough_date)
-analyzer.win_rate()            # → 0.52
-analyzer.volatility()          # → 0.125
+# ── fast 模式: 搜索 (Engine.run() 时间线, 自管净值, 无记录) ──
+r = EngineV3.backtest(signal, data, mode='fast', start_date='2020-01-01')
+# → FastResult(sharpe=1.16, cagr=0.148, max_drawdown=-0.10, trades=112)
 
-# 信号输入支持多种格式
-run_backtest_with_core(expr, df)                 # Expression 实例
-run_backtest_with_core(signal_series, df)        # pd.Series
-run_backtest_with_core(signal_array, df)         # np.ndarray
-run_backtest_with_core(lambda d: ..., df)        # callable
+# ── full 模式: 验证 (Engine.run() + AccountManager) ──
+analyzer = EngineV3.backtest(signal, data, mode='full',
+                              start_date='2020-01-01',
+                              bench_label='399317.SZ')
+analyzer.to_notebook("策略回测")
+
+# ── 费率控制 (指数择时默认不扣费) ──
+EngineV3.backtest(signal, data, mode='fast', with_fees=False)  # 默认
+EngineV3.backtest(signal, data, mode='fast', with_fees=True)   # ETF费率
 ```
 
 **参数：**
+
 | 参数 | 默认 | 说明 |
 |------|------|------|
-| `expr_or_signals` | — | Expression / Series / ndarray / callable |
-| `data` | — | OHLCV DataFrame (index=DatetimeIndex) |
-| `symbol` | `'399317.SZ'` | 交易标的代码 |
-| `freq` | `'1d'` | 数据频率 |
+| `signal` | — | pd.Series / np.ndarray / list, value>0 做多 |
+| `data` | — | OHLCV DataFrame, index=DatetimeIndex |
+| `symbol` | `'399317.SZ'` | 交易标的 |
 | `initial_capital` | `1_000_000` | 初始资金 |
-| `long_only` | `True` | 仅做多（当前不支持做空） |
-| `note_fields` | `None` | 附加 bar 字段写入 TradeRecord.note |
+| `start_date` | `None` | 回测起始日 `'2020-01-01'` |
+| `mode` | `'full'` | `'fast'` → FastResult, `'full'` → AccountAnalyzer |
+| `with_fees` | `False` | 指数择时默认不扣费率 |
+| `bench_label` | `None` | full 模式下基准标签 (自动跑 BenchHolder) |
 
-#### 3b. v2.0 内置简化回测（兼容保留）
+**模式对比：**
+
+| | full (验证) | fast (搜索) |
+|---|---|---|
+| 引擎 | `Engine.run()` | `Engine.run()` 同一 |
+| 费率 | `fee_config` | `fee_config` 同一 |
+| 时间安全 | eob 递进 + context.now | 同一 |
+| 持仓管理 | `order_percent()` | 自管 cash/shares/price |
+| 输出 | `AccountAnalyzer` | `FastResult` |
+| 记录 | TradeRecord + snapshots | 无 |
+| 速度/次 | ~3s | ~0.5s |
+| GP 4000次 | 3.3h | 33min |
+
+### 4. 搜索 — GPSearch
 
 ```python
-from signals.v2 import run_backtest, walk_forward
+from signals.v3 import GPSearch, FeatureSpace
 
-# 单次回测 → BacktestResult（9个标量指标）
-result = run_backtest(expr, df, initial_capital=1e6)
-# result.total_return, result.sharpe, result.max_drawdown, result.win_rate, ...
+fs = FeatureSpace().fit(data)
+gs = GPSearch(fs, train_data, test_data,
+              population_size=80, generations=50,
+              start_date='2020-01-01')
+gs.run()
 
-# Walk-Forward → 每窗口仅 train/test Sharpe
-wf = walk_forward(expr, df, train_size='2Y', test_size='1Y', step='6M')
-# wf.folds: [{train_sharpe, test_sharpe, ...}, ...]
+# Top-N elite → full 验证
+for ind in gs.elite_set(5):
+    signal = ind.tree.evaluate(feature_data)
+    analyzer = EngineV3.backtest(signal, data, mode='full')
+    analyzer.to_notebook(f"GP: {ind.expression_str}")
 ```
 
-#### 3c. v2.1 Walk-Forward（core 引擎版）
+### 5. 搜索 — GridSearch
 
 ```python
-from signals.v2 import walk_forward_with_core, WalkForwardCoreResult
+from signals.v3 import GridSearch
 
-wf = walk_forward_with_core(expr, df, symbol='399317.SZ',
-                            train_size='2Y', test_size='1Y', step='6M')
-
-# 汇总属性
-wf.stability_score      # 夏普稳定性 = mean/sigma
-wf.overfit_ratio        # 过拟合比 = train_sharpe_mean / test_sharpe_mean
-wf.negative_count       # 负夏普窗口数
-wf.train_sharpes        # List[float] 训练集各窗夏普
-wf.test_sharpes         # List[float] 测试集各窗夏普
-
-# 报告方法
-wf.to_dataframe()       # 窗口级指标表 (train/test 各12项)
-wf.stability_report()   # 指标稳定性: {sharpe: {mean, std, cv}, ...}
-
-# 特殊属性
-wf.overfit_ratio        # >2.0 强烈过拟合
-wf.stability_score      # 越高越稳定，<0.5 不稳定
-
-# 判断标准
-if wf.overfit_ratio > 1.5 and wf.stability_score < 0.5:
-    print("⚠ 过拟合高风险")
-elif wf.negative_count > 0:
-    print("⚠ 部分窗口亏损")
-else:
-    print("✓ 稳健")
+gs = GridSearch("thr_mean(ATR(?))",
+                param_grid={'?': [7, 10, 14, 20]},
+                data=data, feature_space=fs,
+                start_date='2020-01-01')
+df = gs.run(mode='fast')
+# df.sort_values('Sharpe', ascending=False).head(5)
 ```
 
-### 4. IC 分析
-```python
-from signals.v2 import ICAnalyzer
+### 6. 验证 — 单信号
 
-signals = expr.generate(df)
-ic = ICAnalyzer.analyze(signals, df['close'])
-# ic['basic']['summary']['ic_mean']     IC 均值
-# ic['significance']['p_value']         显著性
-# ic['decay']['decay_rate']             衰减率
-# ic['annual']                          年度分解
-# ic['turnover']['mean_turnover']       换手率
-# ic['distribution']['is_normal']       IC 正态性
+```python
+from signals.v3 import validate_single
+
+analyzer = validate_single(signal, data, start_date='2020-01-01',
+                            bench_label='399317.SZ')
+analyzer.to_notebook("策略回测")
 ```
 
-### 5. 管线编排
+### 7. 验证 — 多信号对比
+
 ```python
-from signals.v2 import SignalPipeline, pipe_and, pipe_or
+from signals.v3 import compare_signals
 
-pipeline = SignalPipeline([
-    ("signal", expr),
-    ("persist", 3),           # 连续3日确认
-    ("threshold", lambda x: x > 0.5),
-])
-signals = pipeline.generate(df)
-
-# 快捷组合
-signals = pipe_and(expr1, expr2).generate(df)     # 两个信号取 AND
-signals = pipe_or(expr1, expr2).generate(df)      # 两个信号取 OR
+df = compare_signals([
+    {'name': 'ATR-TSF', 'expr': 'thr_mean(ATR{7}) - thr_mean(TSF{7})'},
+    {'name': '量波比', 'expr': 'thr_mean(VOL_RATIO{5,20}) div thr_med((ATR{3} sub TSF{7}))'},
+], data=data, start_date='2020-01-01')
+# df columns: 排名, 名称, Sharpe, 年化, 最大回撤, 交易, 胜率
 ```
 
-### 6. 多条件打分
+### 8. 验证 — Walk-Forward
+
 ```python
-from signals.v2 import ScoredSignal, CompositeScorer, three_zone_backtest
+from signals.v3 import walkforward_validate
+
+wf = walkforward_validate(signal, data, symbol='399317.SZ',
+                           train_size='2Y', test_size='1Y', step='6M')
+# wf.summary['mean_test_sharpe']
+# wf.summary['stability_score']
+# wf.summary['negative_count']
+```
+
+### 9. 多条件打分 (继承 v2)
+
+```python
+from signals.v3 import ScoredSignal, CompositeScorer
 
 signals = [
     ScoredSignal('CLOSE_MA_RATIO{10}', weight=0.4),
@@ -211,134 +269,49 @@ signals = [
 ]
 scorer = CompositeScorer(signals, features)
 score = scorer.compute()
-bt = three_zone_backtest(score, df['close'], entry_thr=0.3, exit_thr=-0.3)
-```
-
-### 7. 参数网格搜索
-```python
-from signals.v2 import GridSearch
-
-gs = GridSearch("thr_mean(ATR(?))", fs, param_grid={'?': [7, 10, 14, 20]})
-results = gs.run(df)
-# results.top(n=5, by='sharpe')  → 最佳参数排序
-```
-
-### 8. 遗传算法优化
-```python
-from signals.v2 import GPOptimizer
-
-gp = GPOptimizer(fs, train_data=df_train, population_size=500, generations=50)
-best = gp.run()
-# best.expression_str  → 最优表达式
-# best.train_sharpe    → 训练集夏普
-# gp.report()          → 代际收敛报告
-```
-
-### 9. 因子衰减监控
-```python
-from signals.v2 import DecayMonitor, check_decay
-
-decay = check_decay(expr, df)
-# decay.alert_level  → NORMAL / DECAYING / DEAD / REVERSED
-# decay.rolling_ic   → 滚动 IC 序列
-```
-
-### 10. 白盒子解释
-```python
-from signals.v2 import Explainer
-
-report = Explainer.explain(expr, fs, df)
-# 在 12 种市场状态（vol×trend×volume）下切片分析信号表现
-```
-
-### 11. 多周期特征
-```python
-from signals.v2 import compute_multitimeframe_features
-
-features = compute_multitimeframe_features(fs, df, timeframes={'W': 'W-FRI'})
-# 第1组: ATR{7}, RSI{14}, ...        (日线)
-# 第2组: W_ATR{7}, W_RSI{14}, ...    (周线)
-```
-
-### 12. 市场广度特征（需外部数据）
-```python
-# DataFrame 需预先包含：advance, decline, new_highs, new_lows 等列
-config = {'market_breadth': True}
-fs = FeatureSpace(config=config)
-features = fs.fit_transform(df)
-# 自动追加: ADV_DEC_RATIO, NEW_HIGH_LOW, MCCLELLAN_OSC, ARMS_INDEX
 ```
 
 ---
 
-## BacktestResult 字段（v2.0 简化回测）
-| 类型 | 字段 |
-|------|------|
-| 收益 | total_return, annual_return, excess_return |
-| 风险 | max_drawdown, annual_vol, downside_vol |
-| 比率 | sharpe, sortino, calmar, information_ratio |
-| 交易 | trade_count, win_rate, profit_loss_ratio |
-
-> **v2.1**: `run_backtest_with_core` 返回 `AccountAnalyzer`（见 `core/AI.md` 第3章），内置 20+ 指标，支持链式 `.to_notebook()/.to_excel()`。
-
-## WalkForwardCoreResult 字段（v2.1）
-
-| 属性 | 类型 | 说明 |
-|------|------|------|
-| `windows` | `List[Dict]` | 每窗口 train/test 12项指标 |
-| `summary` | `Dict` | 汇总统计 |
-| `train_sharpes` | `List[float]` | 训练集各窗夏普 |
-| `test_sharpes` | `List[float]` | 测试集各窗夏普 |
-| `stability_score` | `float` | 夏普稳定性 = mean/sigma |
-| `overfit_ratio` | `float` | 过拟合比 = train_mean / test_mean |
-| `negative_count` | `int` | 负夏普窗口数 |
-| `to_dataframe()` | `DataFrame` | 窗口级指标表 |
-| `stability_report()` | `Dict` | 12项指标均值/标准差/CV |
-
-## IC分析结果结构
-```python
-ic_result = {
-    'basic': {
-        'summary': {'ic_mean': ..., 'ic_std': ..., 'ic_ir': ..., 'ic_positive_ratio': ...},
-        'IC_1d': {'pearson_ic': ..., 'rank_ic': ...},
-        'IC_5d': {...}, 'IC_20d': {...}, ...
-    },
-    'rolling': {'window_30d': {...}, 'window_60d': {...}, 'window_120d': {...}},
-    'decay': {'data': [{'holding_period': ..., 'pearson_ic': ...}, ...], 'decay_rate': ...},
-    'significance': {'pearson_ic': ..., 't_statistic': ..., 'p_value': ..., 'significant': ...},
-    'annual': {2024: {'pearson_ic': ..., 'sample_size': ...}, ...},
-    'cumulative': {'series': ..., 'final_value': ...},
-    'turnover': {'mean_turnover': ..., 'max_turnover': ...},
-    'distribution': {'mean': ..., 'skewness': ..., 'is_normal': ..., 'percentile_5': ...},
-}
-```
-
 ## 表达式语法速查
-```
-特征引用:     ATR{7}, RSI{14}, MACD{12,26,9}     ← {} 引用列
-阈值函数:     thr_0(x)        x > 0 → 1
-             thr_mean(x)     x > mean(x) → 1
-             thr_med(x)      x > median(x) → 1
-             thr_roll_mean(x, w)    x > rolling_mean(w) → 1
-             thr_zscore(x, w, k)    布林带式突破
-             thr_pct(x, p)     x > 历史 p 分位数 → 1
-             thr_range(x, lo, hi)    区间过滤
-二元运算:     expr1 & expr2   AND
-             expr1 | expr2   OR
-             -expr           反转
-信号确认:     persist(expr, n)   连续 n 日同向才触发
-条件分支:     if_then(cond, a, b) / regime_switch()
 
+```
+特征引用:     ATR{7}, RSI{14}, MACD{12,26,9}    ← {} 引用列
+阈值函数:     thr_0(x)          x > 0 → 1
+             thr_mean(x)       x > mean(x) → 1
+             thr_med(x)        x > median(x) → 1
+             thr_roll_mean(x,w)  x > rolling_mean(w) → 1
+             thr_zscore(x,w,k)   布林带式突破
+             thr_pct(x,p)       x > 历史 p 分位数 → 1
+二元运算:     expr1 & expr2     AND
+             expr1 | expr2     OR
+             expr1 + expr2      加法组合
+             -expr              反转
+信号确认:     persist(expr, n)   连续 n 日同向才触发
 完整示例:     persist(thr_mean(ATR{7}) & thr_mean(TRIMA{60}), 3)
 ```
 
+---
+
+## v2 → v3 迁移速查
+
+| v2 用法 | v3 用法 |
+|---------|---------|
+| `from signals.v2 import run_backtest_with_core` | `from signals.v3 import EngineV3` |
+| `run_backtest_with_core(expr, data)` | `EngineV3.backtest(signal, data, mode='full')` |
+| `from signals.v2 import run_backtest` | **弃用, 无替代 — 用 EngineV3 fast 模式** |
+| `from signals.v2 import GPOptimizer` | `from signals.v3 import GPSearch` |
+| `from signals.v2 import GridSearch` | `from signals.v3 import GridSearch` |
+| `from signals.v2 import FeatureSpace, Expression` | `from signals.v3 import FeatureSpace, Expression` (同) |
+
+---
+
 ## 注意事项
-- v1 非维护状态，新开发全部走 v2
-- **推荐使用 v2.1 API**：`run_backtest_with_core` + `walk_forward_with_core`
-- v2.0 的 `run_backtest` / `walk_forward` 保留兼容，但不建议新项目使用
-- `from signals.v2 import ...` 是最佳实践
-- 不要直接 import `signals`（会同时触发 v1 和 v2）
-- FeatureSpace 一次 fit，多次使用（传给 Expression、GP、GridSearch、回测）
-- `run_backtest_with_core` 返回 `AccountAnalyzer`，可直接 `.to_notebook()` 输出 HTML 报告
-- 外部数据（行业/广度/日内）通过 DataFrame 附加列注入，不影响框架
-- v2.1 Walk-Forward 每窗口重置 FeatureSpace 防前瞻偏差
+
+- **v1 淘汰，不再引用**
+- **v2 冻结**：特征工厂/表达式引擎/管线/打分/解释器等纯计算模块仍可用，回测部分建议迁移 v3
+- **v3 主力**：`from signals.v3 import ...`
+- `EngineV3.backtest(mode='fast')` 的 Sharpe 与 `mode='full'` 一致，搜索出来直接就是真的
+- 指数择时默认 `with_fees=False`
+- FastResult 不含 TradeRecord，需要交易明细请用 `mode='full'`
+- FeatureSpace 一次 fit，多次使用（传给 Expression、GP、GridSearch）

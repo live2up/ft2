@@ -10,7 +10,6 @@ import numpy as np, pandas as pd
 from typing import Dict, List, Optional, Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from signals.v2.grid_search import GridSearch as V2GridSearch, GridResult
 from signals.v2.expression import Expression
 from signals.v2.features import FeatureSpace
 

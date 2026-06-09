@@ -8,7 +8,7 @@ import sys, os, numpy as np, pandas as pd
 from typing import Dict, List, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from signals.v2.walk_forward_v2 import WalkForwardCoreResult, WINDOW_METRICS
+from signals.v2.walk_forward_v2 import WalkForwardCoreResult
 
 from ..engine import EngineV3
 
