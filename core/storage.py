@@ -84,6 +84,14 @@ class Context:
             raise RuntimeError("context.data() 调用时没有活跃的 Engine，请先调用 engine.run()")
         return self._active_engine._cache.get_data(symbol, frequency, count, fields)
 
+    # [新增] 2026-06-09 account 委托给活跃 Engine
+    #   策略统一通过 context.account 访问，回测走 SimAccount，实盘可替换为 RealBroker
+    @property
+    def account(self):
+        if self._active_engine is None:
+            raise RuntimeError("context.account 调用时没有活跃的 Engine")
+        return self._active_engine.account
+
 
 # ============================================================================
 # 缓存数据结构（Engine 实例持有）

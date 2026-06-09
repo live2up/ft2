@@ -626,16 +626,18 @@ class BenchHolder:
         2. 基准可任意定制（不限于预设指数，可以是任何自定义策略）
         3. 对比链路完全可编程，不依赖 GUI
 
+    [重构] 2026-06-09 改用 context.account 访问活跃 Engine 的账户（不再依赖全局 account）
+
     用法:
         bench_engine.run(BenchHolder, start_time, end_time)
-        bench_analyzer = AccountAnalyzer(account)
-        strategy_analyzer.set_benchmark(bench_analyzer.daily_assets, '买入持有')
+        bench_analyzer = AccountAnalyzer(bench_engine.account)
+        strategy_analyzer.set_benchmark(bench_analyzer.daily_assets, '国证A指')
     """
     
     def on_bar(self, context, bars):
-        if account.get_position():
+        if context.account.get_position():
             return
-        account.order_percent(bars[0]['symbol'], 1.0, OrderSide.Buy, note='基准买入持有')
+        context.account.order_percent(bars[0]['symbol'], 1.0, OrderSide.Buy, note='基准买入持有')
 
 
 # ============================================================================

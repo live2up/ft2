@@ -2,7 +2,7 @@
 
 > 回测引擎核心 + HTML 报告（已融合 notebook 模块）
 >
-> **版本：v2.2 | 更新日期：2026-06-03**
+> **版本：v2.3 | 更新日期：2026-06-09**
 
 ---
 
@@ -110,6 +110,21 @@ analyzer.metrics()  # → Dict[name → {name, value, group, desc, fmt, order}]
 analyzer.to_notebook("策略回测")
 # 内部: Notebook(title) → 构建 cells(指标表格/净值图/交易记录) → Jinja2 渲染 → 输出 .html
 
+# 带自定义内容的报告（header/footer 回调）
+analyzer.to_notebook("策略回测",
+    header=lambda nb: nb.markdown("## 策略参数\n- MA5/20 交叉择时"),
+    footer=lambda nb: nb.markdown("## 结论\n年化超额 +5.2%"))
+
+# header/footer 支持完整 Notebook API（chart/table/section 等）
+def add_header(nb):
+    nb.metrics({'夏普': '1.85', '胜率': '52%'}, title="核心 KPI", columns=2)
+
+def add_footer(nb):
+    with nb.section("归因分析"):
+        nb.table(factor_data, columns=['日期', '因子暴露', '收益贡献'])
+
+analyzer.to_notebook("策略回测", header=add_header, footer=add_footer)
+
 # Excel 报告
 analyzer.to_excel("策略回测")
 # → Sheet1: 回测指标(分组)  Sheet2: 每日资产  Sheet3: 交易记录
@@ -189,14 +204,14 @@ from core import BenchHolder
 # 推荐：同一份 bars 跑两个策略，共享 init_snapshot(start_time-1天)，日期天然对齐
 bench_engine = Engine()
 # ... 加载相同数据到 bench_engine ...
-bench_engine.run(BenchHolder, start_time, end_time)  # 买入持有
+bench_engine.run(BenchHolder, start_time, end_time)  # 买入持有（基准＝标的本身）
 bench_analyzer = AccountAnalyzer(account)
 
 engine.run(MyStrategy, start_time, end_time)          # 择时策略
 strategy_analyzer = AccountAnalyzer(account)
 
 # 注入基准 → to_notebook() 自动生成对比 section
-strategy_analyzer.set_benchmark(bench_analyzer.daily_assets, '买入持有')
+strategy_analyzer.set_benchmark(bench_analyzer.daily_assets, '国证A指')
 strategy_analyzer.to_notebook("策略 vs 基准")
 ```
 
@@ -283,7 +298,9 @@ nb.export_html()  # → 输出到当前脚本所在目录
 3. **引擎天然防未来** — `eob` 时间线 + `context.now` 保证每时刻只能看到 ≤当前的数据
 4. **频率无限制** — `freq` 是纯字符串 key，支持 `'1d'`/`'m10'`/`'my_signal'` 等任意自定义频率
 5. **初始快照独立** — `init_snapshot(start_time-1天)` 作为 `snapshots[0]`，分析层零推断、零补偿
-6. **Notebook 渲染层内聚** — `analyzer.to_notebook()` 内部完成 数据→cells→JSON-LD→Jinja2→HTML 全链路；`template/` 目录与 `notebook/` 模块协同，对调用者透明
+6. **缓存实例化隔离** — `_cache` 归 Engine 实例所有，多引擎天然隔离，无需 `context.reset()`
+7. **基准＝真实策略** — `BenchHolder` 走与主策略相同的引擎+数据+账户通道，对比结果无偏差
+8. **Notebook 渲染层内聚** — `analyzer.to_notebook()` 内部完成全链路；支持 `header/footer` 回调扩展
 
 ---
 
