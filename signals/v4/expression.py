@@ -62,7 +62,13 @@ class Expression:
         result = evaluate(self._tree, data_dict)
         if result.size == 1:
             result = np.full(len(data), result.item())
-        return pd.Series(result.flatten()[:len(data)],
+        result = result.flatten()
+        # 对齐索引：FeatureSpace 会截掉前 N 天冷启动 NaN，
+        # 若 result 短于 data，应该对齐到 data 尾部
+        if len(result) < len(data):
+            offset = len(data) - len(result)
+            return pd.Series(result, index=data.index[offset:], name=self.name)
+        return pd.Series(result[:len(data)],
                         index=data.index[:len(result)], name=self.name)
     
     def evaluate_panel(self, assets: Dict[str, pd.DataFrame],
