@@ -100,6 +100,10 @@ from .validate import validate_single, compare_signals, walkforward_validate, wa
 # ── v3 打分 ──
 from .scoring import ScoredSignal, CompositeScorer, three_zone_backtest, BacktestResult
 
+# ── v3 分析 ──
+from .monitor import ICAnalyzer, DecayMonitor, DecayResult, AlertLevel, check_decay
+from .monitor import Explainer, ExplanationReport, RegimePerformance, explain_signal
+
 __all__ = [
     # v3 引擎
     'EngineV3', 'FastResult',
@@ -119,4 +123,7 @@ __all__ = [
     # 注册表/预设
     'ExpressionRegistry', 'DEFAULT_REGISTRY',
     'PRESETS', 'ExpressionPreset',
+    # 分析
+    'ICAnalyzer', 'DecayMonitor', 'DecayResult', 'AlertLevel', 'check_decay',
+    'Explainer', 'ExplanationReport', 'RegimePerformance', 'explain_signal',
 ]
