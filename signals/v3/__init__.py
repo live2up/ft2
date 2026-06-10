@@ -95,7 +95,7 @@ from .engine import EngineV3, FastResult
 from .search import GPSearch, GridSearch
 
 # ── v3 验证 ──
-from .validate import validate_single, compare_signals, walkforward_validate
+from .validate import validate_single, compare_signals, walkforward_validate, walkforward_validate_expr
 
 # ── v3 打分 ──
 from .scoring import ScoredSignal, CompositeScorer, three_zone_backtest, BacktestResult
@@ -106,7 +106,7 @@ __all__ = [
     # 搜索
     'GPSearch', 'GridSearch',
     # 验证
-    'validate_single', 'compare_signals', 'walkforward_validate',
+    'validate_single', 'compare_signals', 'walkforward_validate', 'walkforward_validate_expr',
     # 打分
     'ScoredSignal', 'CompositeScorer', 'three_zone_backtest', 'BacktestResult',
     # 特征/表达式

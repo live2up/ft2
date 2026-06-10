@@ -1,13 +1,68 @@
 """
 signals/v3/scoring.py — 连续值打分择时框架
 =============================================================================
-v3 独立版本，不依赖 v2。
-将多个连续信号加权合成为复合分数，通过三区状态机生成持仓决策。
+v3 独立版本。将多个连续信号加权合成为复合分数，通过三区状态机生成持仓决策。
+
+[修复] 2026-06-10 zscore/rank 改为 expanding 统计量，消除全序列前向偏差:
+  - zscore: expanding mean/std (t时刻只用[0:t]的数据)
+  - rank: expanding percentile rank (t时刻只统计历史)
+  旧实现用 np.nanmean/np.nanstd 全序列 → score[i] 含未来信息 → 虚高 Sharpe
+
 =============================================================================
 """
 import numpy as np
 import pandas as pd
 from typing import List, Optional, Callable
+
+
+# ============================================================
+# Expanding 统计工具 (防前向偏差)
+# ============================================================
+
+def _expanding_zscore(values: np.ndarray, min_warmup: int = 20) -> np.ndarray:
+    """expanding z-score: 每时刻只用历史数据计算 mean/std
+
+    zscore[i] = (values[i] - mean[0:i+1]) / std[0:i+1], 截断到 [-3, 3]
+    [修复] 替代原 np.nanmean/np.nanstd 全序列版本，消除前向偏差
+
+    Args:
+        min_warmup: 冷启动天数，前 min_warmup 天统计量不稳定，返回 0（中性）
+    """
+    n = len(values)
+    result = np.full(n, np.nan)
+    cumsum = np.nancumsum(values)
+    cumsum2 = np.nancumsum(values ** 2)
+    count = np.arange(1, n + 1, dtype=float)
+
+    for i in range(min_warmup, n):
+        mean = cumsum[i] / count[i]
+        var = cumsum2[i] / count[i] - mean ** 2
+        std = np.sqrt(max(var, 1e-10))
+        result[i] = np.clip((values[i] - mean) / std, -3.0, 3.0)
+
+    # 冷启动期间 → 中性
+    result[:min_warmup] = 0.0
+    return np.nan_to_num(result, nan=0.0)
+
+
+def _expanding_rank(values: np.ndarray, min_warmup: int = 20) -> np.ndarray:
+    """expanding percentile rank: t时刻在历史中的百分位
+
+    rank[i] = (#values[0:i+1] <= values[i]) / (i+1), 值域 [0, 1]
+    [修复] 替代原 pd.Series.rank(pct=True) 全序列版本，消除前向偏差
+
+    Args:
+        min_warmup: 冷启动天数，前 min_warmup 天排名不稳定，返回 0.5（中位）
+    """
+    n = len(values)
+    result = np.full(n, np.nan)
+
+    for i in range(min_warmup, n):
+        window = values[:i + 1]
+        result[i] = np.sum(window <= values[i]) / (i + 1)
+
+    result[:min_warmup] = 0.5  # 冷启动 → 中位
+    return np.nan_to_num(result, nan=0.5)
 
 
 # ============================================================
@@ -24,19 +79,27 @@ class ScoredSignal:
         权重（可正可负，负权重=反向信号）
     transform : str or callable
         变换方式:
-        - 'raw'    : 原始值（需已归一化到 -1~1）
-        - 'rank'   : 百分位排名 0~1
-        - 'zscore' : Z-score 标准化，截断到 [-3, 3]
-        - 'binary' : thr_0 二值化 {0, 1}
-        - 'neg_log': 负对数变换（用于波动率等正偏态分布）
-        - callable : 自定义变换函数 fn(values) → array
+        - 'raw'            : 原始值（需已归一化到 -1~1）
+        - 'rank'           : expanding 百分位排名 0~1（无前向偏差）
+        - 'zscore'         : expanding Z-score [-3, 3]（无前向偏差）
+        - 'rank_full'      : 全序列排名 0~1（⚠ 含未来信息，仅用于对比实验）
+        - 'zscore_full'    : 全序列 Z-score（⚠ 含未来信息，仅用于对比实验）
+        - 'binary'         : thr_0 二值化 {0, 1}
+        - 'neg_log'        : 负对数变换（用于波动率等正偏态分布）
+        - callable         : 自定义变换函数 fn(values) → array
     """
 
     def __init__(self, name: str, weight: float = 1.0,
-                 transform: str = 'raw'):
+                 transform: str = 'raw', warmup: int = 20):
+        """        
+        Args:
+            warmup: expanding 变换的冷启动天数（仅 zscore/rank 有效）,
+                    默认 20。前 warmup 天 zscore→0(中性), rank→0.5(中位)
+        """
         self.name = name
         self.weight = weight
         self.transform = transform
+        self.warmup = warmup
 
     def apply(self, series: pd.Series) -> np.ndarray:
         values = series.values.copy()
@@ -45,10 +108,20 @@ class ScoredSignal:
         if self.transform == 'raw':
             return values
 
+        # [修复] expanding rank — 无前向偏差（默认）
         if self.transform == 'rank':
+            return _expanding_rank(values, self.warmup)
+
+        # [保留] 全序列 rank — 含未来信息，仅用于对比实验
+        if self.transform == 'rank_full':
             return pd.Series(values).rank(pct=True).values
 
+        # [修复] expanding zscore — 无前向偏差（默认）
         if self.transform == 'zscore':
+            return _expanding_zscore(values, self.warmup)
+
+        # [保留] 全序列 zscore — 含未来信息，仅用于对比实验
+        if self.transform == 'zscore_full':
             mean, std = np.nanmean(values), np.nanstd(values)
             if std < 1e-10:
                 return np.zeros_like(values)
@@ -115,7 +188,7 @@ def three_zone_backtest(score: pd.Series,
                         entry_threshold: float = 0.3,
                         exit_threshold: float = -0.3) -> 'BacktestResult':
     """
-    三区状态机回测
+    三区状态机回测 — 无前向偏差（状态机只依赖历史）
 
     复合分数通过三区逻辑转为持仓:
       score >  entry_thr  →  开多仓
