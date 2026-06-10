@@ -5,7 +5,7 @@ signals/v3/validate/compare.py — 多信号对比 (v3 独立)
 import pandas as pd
 from typing import List, Dict, Any
 
-from ..engine import EngineV3
+from ..engine import EngineCore
 
 
 def compare_signals(
@@ -46,7 +46,7 @@ def compare_signals(
                 print(f"  [{name}] 跳过: 无 signal 或 expr")
                 continue
 
-            analyzer = EngineV3.backtest(
+            analyzer = EngineCore.backtest(
                 signal_series, data, symbol=symbol, mode='full',
                 initial_capital=initial_capital, start_date=start_date)
 

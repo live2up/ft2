@@ -5,7 +5,7 @@ signals/v3/validate/single.py — 单信号验证
 import pandas as pd
 from typing import List, Optional
 
-from ..engine import EngineV3
+from ..engine import EngineCore
 
 
 def validate_single(
@@ -24,7 +24,7 @@ def validate_single(
     Returns:
         AccountAnalyzer: 可链式调用 .to_notebook(title, header=, footer=)
     """
-    return EngineV3.backtest(
+    return EngineCore.backtest(
         signal, data, symbol=symbol, mode='full',
         initial_capital=initial_capital, start_date=start_date,
         note_fields=note_fields, bench_label=bench_label)

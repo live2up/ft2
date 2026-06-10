@@ -1,7 +1,7 @@
 """
 signals/v3/search/grid.py — 参数网格搜索 (v3 独立引擎版)
 =============================================================================
-v3 独立版，笛卡尔积展开 + v3.EngineV3.backtest(mode='fast|full')。
+v3 独立版，笛卡尔积展开 + v3.EngineCore.backtest(mode='fast|full')。
 =============================================================================
 """
 import itertools
@@ -11,7 +11,7 @@ from typing import Dict, List, Any
 
 from ..expression_v3 import Expression
 from ..features import FeatureSpace
-from ..engine import EngineV3
+from ..engine import EngineCore
 
 
 class GridSearch:
@@ -71,7 +71,7 @@ class GridSearch:
                     signal = expr.generate(self.data)
 
                     if mode == 'fast':
-                        bt = EngineV3.backtest(
+                        bt = EngineCore.backtest(
                             signal, self.data, symbol=self.symbol,
                             mode='fast', start_date=self.start_date)
                         results.append({
@@ -86,7 +86,7 @@ class GridSearch:
                         break
                     else:
                         from core.analyzer import AccountAnalyzer
-                        analyzer = EngineV3.backtest(
+                        analyzer = EngineCore.backtest(
                             signal, self.data, symbol=self.symbol,
                             mode='full', start_date=self.start_date)
                         m = analyzer.metrics()

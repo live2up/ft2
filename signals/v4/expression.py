@@ -5,8 +5,8 @@ signals/v4/expression.py — V4 Expression 类（基于 Python AST）
   >>> from signals.v4 import Expression
   >>> expr = Expression("(CLOSE / ts_mean(CLOSE, 50) - 1) * 100")
   >>> signal = expr.generate(ohlcv_df)  # -> pd.Series
-  >>> from signals.v4 import EngineV3
-  >>> result = EngineV3.backtest(signal, ohlcv_df, mode='fast')
+  >>> from signals.v4 import EngineCore
+  >>> result = EngineCore.backtest(signal, ohlcv_df, mode='fast')
 =============================================================================
 """
 import ast

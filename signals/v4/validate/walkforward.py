@@ -25,7 +25,7 @@ import pandas as pd
 from typing import Dict, List, Optional, Union
 
 from ..wf_result import WalkForwardCoreResult
-from ..engine import EngineV3
+from ..engine import EngineCore
 
 
 # ── 时间窗口解析 ──
@@ -43,7 +43,7 @@ def _parse_td(s: str) -> pd.Timedelta:
 def _run_window(seg_sig, seg_data, symbol, initial_capital):
     """单窗口 full 模式回测，返回指标 dict"""
     try:
-        analyzer = EngineV3.backtest(
+        analyzer = EngineCore.backtest(
             seg_sig, seg_data, symbol=symbol, mode='full',
             initial_capital=initial_capital)
         m = analyzer.metrics()
@@ -187,7 +187,7 @@ def walkforward_validate_expr(
     每窗口独立:
       1. fs.fit(train_data) → train_features
       2. expr.generate(train_data) → train_signal
-      3. EngineV3.backtest(train_signal, train_data, mode='full')
+      3. EngineCore.backtest(train_signal, train_data, mode='full')
       4. 测试窗口同步骤 1~3
 
     Args:

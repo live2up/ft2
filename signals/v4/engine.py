@@ -13,14 +13,14 @@ v3 核心设计: 探索、测试、回测三个阶段全部走 ft2.core Engine�
 快约 6 倍，适合 GP/网格搜索。无费率模式下 fast/full 差异 < 0.001。
 
 用法:
-  from signals.v3 import EngineV3
+  from signals.v3 import EngineCore
 
   # full 模式 — 验证
-  analyzer = EngineV3.backtest(signal, data, mode='full', start_date='2020-01-01')
+  analyzer = EngineCore.backtest(signal, data, mode='full', start_date='2020-01-01')
   analyzer.set_benchmark(...).to_notebook("策略")
 
   # fast 模式 — 搜索
-  result = EngineV3.backtest(signal, data, mode='fast', start_date='2020-01-01')
+  result = EngineCore.backtest(signal, data, mode='fast', start_date='2020-01-01')
   # result.sharpe, result.cagr, result.mdd, result.trades
 =============================================================================
 """
@@ -58,7 +58,7 @@ class FastResult:
                 f"MDD={self.max_drawdown:.1%}, trades={self.trades})")
 
 
-class EngineV3:
+class EngineCore:
     """v3 统一回测引擎 — ft2.core 驱动, full/fast 双模式"""
 
     # ============================================================
@@ -107,10 +107,10 @@ class EngineV3:
             raise TypeError(f"signal 类型不支持: {type(signal)}")
 
         if mode == 'fast':
-            return EngineV3._run_fast(signal, data, symbol, freq,
+            return EngineCore._run_fast(signal, data, symbol, freq,
                                        initial_capital, start_date, with_fees)
         else:
-            return EngineV3._run_full(signal, data, symbol, freq,
+            return EngineCore._run_full(signal, data, symbol, freq,
                                        initial_capital, start_date,
                                        note_fields, bench_label, with_fees)
 
@@ -122,7 +122,7 @@ class EngineV3:
     def _run_full(signal, data, symbol, freq, initial_capital, start_date,
                   note_fields, bench_label, with_fees):
         """full 模式: 完整 Engine.run() → AccountAnalyzer"""
-        df = EngineV3._prepare_data(data, signal, start_date)
+        df = EngineCore._prepare_data(data, signal, start_date)
         engine = Engine(init_cash=initial_capital)
         context.mode = 'backtest'
 
@@ -205,7 +205,7 @@ class EngineV3:
 
         差异仅在: 不生成 TradeRecord / snapshots, 性能 ~0.5s/次
         """
-        df = EngineV3._prepare_data(data, signal, start_date)
+        df = EngineCore._prepare_data(data, signal, start_date)
         engine = Engine(init_cash=initial_capital)
         context.mode = 'backtest'
 
