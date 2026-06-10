@@ -169,6 +169,9 @@ class EngineV3:
             bench_df = data.copy()
             if start_date:
                 bench_df = bench_df.loc[bench_df.index >= pd.Timestamp(start_date)]
+            # [修复] 2026-06-10 基准补 eob，否则 Engine.add_data 跳过所有 bar
+            if 'eob' not in bench_df.columns:
+                bench_df['eob'] = bench_df.index
             bench_eng = Engine(init_cash=initial_capital)
             # [修复] 2026-06-10 基准与策略用相同费率模式
             if not with_fees:
