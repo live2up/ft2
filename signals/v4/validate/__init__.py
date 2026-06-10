@@ -1,11 +1,9 @@
 """
-signals/v3/validate/__init__.py — 验证层
-=============================================================================
-全部走 v3.EngineCore(mode='full') → AccountAnalyzer → to_notebook
+signals/v4/validate — 信号验证层 (ft2.core Engine)
 """
+
 from .single import validate_single
 from .compare import compare_signals
-from .walkforward import walkforward_validate, walkforward_validate_expr
+from .walkforward import walkforward_validate
 
-__all__ = ['validate_single', 'compare_signals',
-           'walkforward_validate', 'walkforward_validate_expr']
+__all__ = ['validate_single', 'compare_signals', 'walkforward_validate']

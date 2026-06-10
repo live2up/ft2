@@ -9,8 +9,7 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Any
 
-from ..expression_v3 import Expression
-from ..features import FeatureSpace
+from ..expression import Expression
 from ..engine import EngineCore
 
 
@@ -25,17 +24,12 @@ class GridSearch:
     """
 
     def __init__(self, template: str, param_grid: Dict[str, List],
-                 data: pd.DataFrame, feature_space: FeatureSpace,
-                 initial_capital: float = 1_000_000,
-                 start_date: str = None,
-                 symbol: str = '399317.SZ'):
+                 data: pd.DataFrame,
+                 start_date: str = None):
         self.template = template
         self.param_grid = param_grid
         self.data = data
-        self.fs = feature_space
-        self.capital = initial_capital
         self.start_date = start_date
-        self.symbol = symbol
 
     def run(self, mode: str = 'fast') -> pd.DataFrame:
         """
@@ -67,7 +61,7 @@ class GridSearch:
             success = False
             for attempt in range(3):
                 try:
-                    expr = Expression(expr_str, feature_space=self.fs)
+                    expr = Expression(expr_str)
                     signal = expr.generate(self.data)
 
                     if mode == 'fast':

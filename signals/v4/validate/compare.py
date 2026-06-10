@@ -1,78 +1,79 @@
 """
-signals/v3/validate/compare.py — 多信号对比 (v3 独立)
-=============================================================================
-"""
-import pandas as pd
-from typing import List, Dict, Any
+signals/v4/validate/compare.py — 多信号对比验证
 
+用法:
+  >>> from signals.v4.validate import compare_signals
+  >>> df = compare_signals([
+  ...     {'name': 'ATR突破', 'expr': 'atr(HIGH,LOW,CLOSE,7) > ts_mean(atr(HIGH,LOW,CLOSE,7),30)'},
+  ...     {'name': 'RSI超卖', 'expr': 'rsi(CLOSE,14) < -0.3'},
+  ... ], data)
+"""
+import pandas as pd, numpy as np
+from ..expression import Expression
 from ..engine import EngineCore
 
 
-def compare_signals(
-    signals: List[Dict[str, Any]],
-    data: pd.DataFrame,
-    symbol: str = '399317.SZ',
-    initial_capital: float = 1_000_000,
-    start_date: str = None,
-) -> pd.DataFrame:
+def _m(md, name, default=0):
+    for k, v in md.items():
+        if isinstance(v, dict) and v.get('name') == name:
+            val = v['value']
+            r = val[0] if isinstance(val, tuple) else val
+            return r if r is not None else default
+    return default
+
+
+def compare_signals(signals: list, data: pd.DataFrame,
+                    symbol: str = '399317.SZ',
+                    start_date: str = None,
+                    mode: str = 'full') -> pd.DataFrame:
     """
-    多信号批量 full 模式对比。
+    多信号对比回测
 
     Args:
-        signals: List[Dict], 每个 dict 含:
-            - 'name': 信号名称
-            - 'expr': 表达式字符串 (可选, Expression 计算)
-            - 'signal': pd.Series (可选, 直接传信号)
+        signals: [{'name': '名称', 'expr': 'V4表达式'}, ...]
         data: OHLCV DataFrame
-        symbol: 标的
-        initial_capital: 初始资金
+        symbol: 交易标的
         start_date: 回测起始日
+        mode: 'fast' (快速) / 'full' (标准, 含费率)
 
     Returns:
-        DataFrame: 按 Sharpe 降序排列的对比表
+        DataFrame, columns=[排名, 名称, 表达式, Sharpe, 年化, 最大回撤, 胜率, 交易]
     """
     results = []
     for i, sig in enumerate(signals):
         name = sig.get('name', f'信号{i+1}')
+        expr_str = sig['expr']
         try:
-            if 'signal' in sig and sig['signal'] is not None:
-                signal_series = sig['signal']
-            elif 'expr' in sig:
-                from ..expression_v3 import Expression
-                from ..features import FeatureSpace
-                fs = sig.get('feature_space') or FeatureSpace().fit(data)
-                signal_series = Expression(sig['expr'], feature_space=fs).generate(data)
+            expr = Expression(expr_str)
+            signal = expr.generate(data)
+            result = EngineCore.backtest(signal, data, mode=mode,
+                                         symbol=symbol, start_date=start_date)
+            if mode == 'fast':
+                sr = round(result.sharpe, 3)
+                cagr = result.cagr
+                mdd = result.max_drawdown
+                wr = 0
+                trades = result.trades
             else:
-                print(f"  [{name}] 跳过: 无 signal 或 expr")
-                continue
-
-            analyzer = EngineCore.backtest(
-                signal_series, data, symbol=symbol, mode='full',
-                initial_capital=initial_capital, start_date=start_date)
-
-            m = analyzer.metrics()
-
-            def _v(key, d=0):
-                for k, v in m.items():
-                    if isinstance(v, dict) and v.get('name') == key:
-                        val = v['value']
-                        return val[0] if isinstance(val, tuple) else val
-                return d
+                m = result.metrics()
+                sr = round(float(_m(m, '夏普比率') or 0), 3)
+                cagr = float(_m(m, '年化收益率') or 0)
+                mdd = float(_m(m, '最大回撤') or 0)
+                wr = float(_m(m, '胜率') or 0)
+                trades = len(result.account.trade_records) // 2 if result.account else 0
 
             results.append({
-                '排名': 0, '名称': name,
-                'Sharpe': round(float(_v('夏普比率')), 3),
-                '年化': float(_v('年化收益率')),
-                '最大回撤': float(_v('最大回撤')),
-                '交易': len(analyzer.account.trade_records) // 2,
-                '胜率': float(_v('胜率')),
-                '_analyzer': analyzer,
+                '名称': name, '表达式': expr_str,
+                'Sharpe': sr, '年化': cagr, '最大回撤': mdd,
+                '胜率': wr, '交易': trades,
             })
-            print(f"  [{name}] SR={results[-1]['Sharpe']:.3f}")
         except Exception as e:
-            print(f"  [{name}] FAIL: {e}")
+            results.append({
+                '名称': name, '表达式': expr_str,
+                'Sharpe': 0, '年化': 0, '最大回撤': 0, '胜率': 0, '交易': 0,
+                'error': str(e),
+            })
 
-    results.sort(key=lambda r: r['Sharpe'], reverse=True)
-    for i, r in enumerate(results):
-        r['排名'] = i + 1
-    return pd.DataFrame(results)
+    df = pd.DataFrame(results).sort_values('Sharpe', ascending=False)
+    df.insert(0, '排名', range(1, len(df) + 1))
+    return df
