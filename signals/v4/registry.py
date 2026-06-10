@@ -102,6 +102,27 @@ def ts_roc(x, w):
     r[w:] = (x[w:] - x[:-w]) / np.where(np.abs(x[:-w]) > 1e-10, x[:-w], np.nan)
     return r
 
+def ts_zscore(x, d):
+    """滚动 Z-score: (x - μ) / σ"""
+    mu = ts_mean(x, d); sg = ts_std(x, d)
+    return np.where(sg > 1e-10, (np.asarray(x, float) - mu) / sg, 0)
+
+def ts_scale(x, d):
+    """滚动缩放: 窗口内绝对值之和 → 1"""
+    x = np.asarray(x, float); r = np.full_like(x, np.nan)
+    for i in range(d - 1, len(x)):
+        seg = x[i - d + 1 : i + 1]; s = np.sum(np.abs(seg))
+        r[i] = x[i] / s if s > 1e-10 else 0
+    return r
+
+def ts_quantile(x, d):
+    """滚动分位数排名: 当前值在窗口中的分位 0~1（同 ts_rank，更通用）"""
+    return ts_rank(x, d)
+
+def ts_av_diff(x, d):
+    """当前值 - 窗口均值（偏离度）"""
+    return np.asarray(x, float) - ts_mean(x, d)
+
 def ts_decay_linear(x, d):
     """线性衰减加权均值: 近期权重大, 权重=[1,2,...,d]/sum"""
     x = np.asarray(x, float)
@@ -365,6 +386,10 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'ts_cov':      ts_cov,
     'ts_var':      lambda x, w: ts_std(x, w) ** 2,
     'ts_logret':   lambda x: safe_log(x / ts_delay(x, 1)),
+    'ts_zscore':   ts_zscore,
+    'ts_scale':    ts_scale,
+    'ts_quantile': ts_quantile,
+    'ts_av_diff':  ts_av_diff,
     'ts_decay_linear': ts_decay_linear,
     'ts_product':  ts_product,
     'ts_regression': ts_regression,
