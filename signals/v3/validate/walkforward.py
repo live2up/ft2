@@ -168,7 +168,7 @@ def walkforward_validate(
 # ============================================================
 
 def walkforward_validate_expr(
-    expr_str: str,
+    expression: str,
     data: pd.DataFrame,
     feature_space: 'FeatureSpace' = None,
     symbol: str = '399317.SZ',
@@ -191,7 +191,7 @@ def walkforward_validate_expr(
       4. 测试窗口同步骤 1~3
 
     Args:
-        expr_str: 表达式字符串 ("thr_mean(ATR{7}) & thr_mean(EMA{20})")
+        expression: 表达式字符串 ("thr_mean(ATR{7}) & thr_mean(EMA{20})")
         data: OHLCV DataFrame
         feature_space: FeatureSpace 实例 (None→创建默认)
         symbol: 交易标的
@@ -262,7 +262,7 @@ def walkforward_validate_expr(
         for phase, seg_data in [('train', train_data), ('test', test_data)]:
             try:
                 fs = FS(config=_base_config).fit(seg_data)  # 每窗口新实例
-                expr = Expression(expr_str, feature_space=fs)
+                expr = Expression(expression, feature_space=fs)
                 seg_sig = expr.generate(seg_data)
                 window[phase] = _run_window(seg_sig, seg_data, symbol, initial_capital)
             except Exception as e:

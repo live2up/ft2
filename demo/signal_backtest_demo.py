@@ -1,14 +1,18 @@
 """
-demo/core_backtest_notebook.py — EngineV3 回测 + Notebook header/footer 完整示例
-=============================================================================
+demo/signal_backtest_demo.py — signals.v3 择时回测范式 (EngineV3)
+====================================================================
 [更新] 2026-06-10 从 signals.v2 迁移到 signals.v3 (EngineV3)
+[重命名] 2026-06-10 core_backtest_notebook → signal_backtest_demo（避免误解为裸 core 引擎）
 
-展示 EngineV3.backtest() + AccountAnalyzer.to_notebook 的 header/footer 回调能力：
+信号探测/择时回测的标准范式：
+  Expression → EngineV3.backtest() → AccountAnalyzer.to_notebook()
+
+展示 header/footer 回调能力：
   - header: 对比表 / KPI卡片 / 自定义图表
   - footer: 结论 / 方法论说明
 
 用法:
-  D:/Programs/mamba/envs/py313/python.exe demo/core_backtest_notebook.py
+  D:/Programs/mamba/envs/py313/python.exe demo/signal_backtest_demo.py
 输出:
   tmp/EngineV3_demo_最优信号.html
 """

@@ -49,8 +49,8 @@ class ICAnalyzer:
     def analyze(
         signals: pd.Series,
         prices: pd.Series,
-        rolling_windows: List[int] = None,
-        holding_periods: List[int] = None,
+        forward_periods: List[int] = None,
+        ic_windows: List[int] = None,
         alpha: float = 0.05,
         annualize: bool = True,
     ) -> Dict:
@@ -60,8 +60,8 @@ class ICAnalyzer:
         Args:
             signals: 信号序列（与 prices 日期对齐）
             prices: 收盘价序列
-            rolling_windows: 滚动窗口列表，默认 [30, 60, 120]
-            holding_periods: 持有期列表，默认 [1, 3, 5, 10, 20]
+            forward_periods: 持有期列表，默认 [1, 3, 5, 10, 20]
+            ic_windows: IC滚动窗口列表，默认 [30, 60, 120]
             alpha: 显著性水平，默认 0.05
             annualize: 是否年度分析，默认 True
 
@@ -76,23 +76,23 @@ class ICAnalyzer:
                 - turnover: 信号换手率
                 - distribution: IC分布形态
         """
-        rolling_windows = rolling_windows or [30, 60, 120]
-        holding_periods = holding_periods or [1, 3, 5, 10, 20]
+        forward_periods = forward_periods or [1, 3, 5, 10, 20]
+        ic_windows = ic_windows or [30, 60, 120]
 
         # T+1: signal(t) → forward_return(t+1)
         signal_shifted = signals.shift(1)
 
         forward_returns = {}
-        for period in holding_periods:
+        for period in forward_periods:
             forward_returns[period] = prices.shift(-period) / prices - 1
 
         result = {}
         result['basic'] = ICAnalyzer._basic_ic(
-            signal_shifted, forward_returns, holding_periods)
+            signal_shifted, forward_returns, forward_periods)
         result['rolling'] = ICAnalyzer._rolling_ic(
-            signal_shifted, forward_returns[5], rolling_windows)
+            signal_shifted, forward_returns[5], ic_windows)
         result['decay'] = ICAnalyzer._ic_decay(
-            signal_shifted, forward_returns, holding_periods)
+            signal_shifted, forward_returns, forward_periods)
         result['significance'] = ICAnalyzer._significance_test(
             signal_shifted, forward_returns[5], alpha)
         if annualize and len(signal_shifted) > 365:
@@ -123,10 +123,10 @@ class ICAnalyzer:
 
     @staticmethod
     def _basic_ic(signal: pd.Series, forward_returns: Dict,
-                  holding_periods: List[int]) -> Dict:
+                  forward_periods: List[int]) -> Dict:
         """基础IC统计 — 各持有期的 Pearson/Rank IC"""
         result = {}
-        for period in holding_periods:
+        for period in forward_periods:
             returns = forward_returns[period]
             result[f'IC_{period}d'] = {
                 'pearson_ic': ICAnalyzer._calculate_ic(signal, returns, 'pearson'),
@@ -134,7 +134,7 @@ class ICAnalyzer:
             }
         # 用持有期5天（或第一个可用期）的IC做汇总统计
         base_returns = forward_returns.get(
-            5, forward_returns.get(holding_periods[0]))
+            5, forward_returns.get(forward_periods[0]))
         if base_returns is not None:
             ic_60 = signal.rolling(60).corr(base_returns)
             ic_valid = ic_60.dropna()
@@ -154,13 +154,13 @@ class ICAnalyzer:
 
     @staticmethod
     def _rolling_ic(signal: pd.Series, returns: pd.Series,
-                     windows: List[int]) -> Dict:
+                     ic_windows: List[int]) -> Dict:
         """多窗口滚动IC"""
         result = {}
-        for window in windows:
-            ic_rolling = signal.rolling(window).corr(returns)
+        for w in ic_windows:
+            ic_rolling = signal.rolling(w).corr(returns)
             ic_valid = ic_rolling.dropna()
-            result[f'window_{window}d'] = {
+            result[f'window_{w}d'] = {
                 'series': ic_rolling,
                 'mean': ic_valid.mean(),
                 'std': ic_valid.std(),
@@ -174,10 +174,10 @@ class ICAnalyzer:
 
     @staticmethod
     def _ic_decay(signal: pd.Series, forward_returns: Dict,
-                  holding_periods: List[int]) -> Dict:
+                  forward_periods: List[int]) -> Dict:
         """IC衰减曲线 — 随持有期延长IC如何变化"""
         decay_data = []
-        for period in holding_periods:
+        for period in forward_periods:
             returns = forward_returns[period]
             decay_data.append({
                 'holding_period': period,
@@ -187,7 +187,7 @@ class ICAnalyzer:
         if len(decay_data) >= 2:
             first_ic = abs(decay_data[0]['pearson_ic'])
             last_ic = abs(decay_data[-1]['pearson_ic'])
-            span = holding_periods[-1] - holding_periods[0]
+            span = forward_periods[-1] - forward_periods[0]
             decay_rate = (first_ic - last_ic) / span if first_ic > 0 else 0
         else:
             decay_rate = 0
