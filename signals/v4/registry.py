@@ -209,6 +209,42 @@ def cs_zscore(x):
             r[i][v] = (x[i][v] - m) / s if s > 1e-10 else 0.0
     return r
 
+def cs_scale(x, scale=1.0):
+    """截面缩放: 使 sum(abs(x)) = scale，2D 输入按行操作"""
+    x = np.asarray(x, float)
+    if x.ndim == 1: return x / (np.sum(np.abs(x)) + 1e-10) * scale
+    r = np.full_like(x, np.nan)
+    for i in range(x.shape[0]):
+        v = ~np.isnan(x[i])
+        if v.sum() > 0:
+            s = np.sum(np.abs(x[i][v]))
+            r[i][v] = x[i][v] / s * scale if s > 1e-10 else 0.0
+    return r
+
+def cs_winsorize(x, std=4.0):
+    """截面缩尾: 将超过 ±std 倍标准差的极值截断"""
+    x = np.asarray(x, float)
+    if x.ndim == 1:
+        m, s = np.mean(x), np.std(x)
+        return np.clip(x, m - std * s, m + std * s)
+    r = x.copy()
+    for i in range(x.shape[0]):
+        v = ~np.isnan(x[i])
+        if v.sum() > 1:
+            m, s = np.mean(x[i][v]), np.std(x[i][v], ddof=0)
+            r[i][v] = np.clip(x[i][v], m - std * s, m + std * s)
+    return r
+
+def cs_normalize(x, use_std=False, limit=0.0):
+    """截面归一化: use_std=True → zscore + scale, use_std=False → sum(abs)=1"""
+    if use_std:
+        return cs_scale(cs_zscore(x))
+    return cs_scale(x, 1.0)
+
+def cs_quantile(x, driver='gaussian', sigma=1.0):
+    """截面分位数: 同 cs_rank，预留扩展接口"""
+    return cs_rank(x)
+
 
 # ============================================================
 # 数学函数
@@ -397,7 +433,9 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'expanding_mean': expanding_mean, 'expanding_median': expanding_median,
     'expanding_std':  expanding_std,  'expanding_percentile': expanding_percentile,
     # 截面
-    'cs_rank': cs_rank, 'cs_zscore': cs_zscore,
+    'cs_rank':   cs_rank,   'cs_zscore':   cs_zscore,
+    'cs_scale':  cs_scale,  'cs_winsorize': cs_winsorize,
+    'cs_normalize': cs_normalize, 'cs_quantile': cs_quantile,
     # 数学
     'abs': safe_abs, 'log': safe_log, 'sqrt': safe_sqrt,
     'sign': safe_sign, 'exp': safe_exp, 'tanh': safe_tanh,
