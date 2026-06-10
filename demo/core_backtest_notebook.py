@@ -1,14 +1,16 @@
 """
-demo/core_backtest_notebook.py — core_backtest + notebook header/footer 完整示例
+demo/core_backtest_notebook.py — EngineV3 回测 + Notebook header/footer 完整示例
 =============================================================================
-展示 core_backtest 三行回测 + AccountAnalyzer.to_notebook 的 header/footer 回调能力：
+[更新] 2026-06-10 从 signals.v2 迁移到 signals.v3 (EngineV3)
+
+展示 EngineV3.backtest() + AccountAnalyzer.to_notebook 的 header/footer 回调能力：
   - header: 对比表 / KPI卡片 / 自定义图表
   - footer: 结论 / 方法论说明
 
 用法:
   D:/Programs/mamba/envs/py313/python.exe demo/core_backtest_notebook.py
 输出:
-  tmp/v18_最优信号_CoreBacktest.html
+  tmp/EngineV3_demo_最优信号.html
 """
 import sys, os, numpy as np, pandas as pd
 
@@ -19,13 +21,8 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, 'v2'))
 
 from d2_api import d2_api
-from signals.v2 import core_backtest, core_backtest_with_benchmark
-from signals.v2 import FeatureSpace, Expression
-from signals.v2.expression import parse_expression
+from signals.v3 import EngineV3, FeatureSpace, Expression
 from shared.config import SYMBOL, DATA_START, START_DATE, END_DATE, INITIAL_CAPITAL
-
-# 自定义特征注册
-from v18.custom_features import *  # noqa: RANGE_PCT 等
 
 
 # ============================================================
@@ -34,7 +31,7 @@ from v18.custom_features import *  # noqa: RANGE_PCT 等
 data = d2_api.kline.query(SYMBOL, DATA_START, END_DATE, interval='1d')
 print(f"数据: {len(data)} 行, {data.columns.tolist()}")
 
-# 构建增强 FeatureSpace（含 RANGE_PCT 等自定义特征）
+# 构建 FeatureSpace + 手动追加自定义特征
 fs = FeatureSpace().fit(data)
 feat_df = fs.transform(data)
 
@@ -72,14 +69,18 @@ TOP_FORMULAS = [
     ("T28-终极", "(ATR-TSF+BW-TSF)×RANGE_PCT", "(thr_mean(ATR{10} - TSF{10}) + thr_mean(BBWIDTH{20} - TSF{7})) * thr_mean(RANGE_PCT)"),
 ]
 
-# 对每个公式: Expression → signal → core_backtest
+# 对每个公式: Expression → signal → EngineV3.backtest
 results = []
 for short_id, short_name, expr_str in TOP_FORMULAS:
     print(f"\n[{short_id}] {expr_str[:60]} ...", end=" ")
     try:
         signal = Expression(expr_str, feature_df=feat_df).generate(data)
-        analyzer = core_backtest(signal, data, symbol=SYMBOL,
-                                 initial_capital=INITIAL_CAPITAL, start_date=START_DATE)
+        # [更新] 2026-06-10 v3: EngineV3.backtest 替代 core_backtest
+        # mode='full' → AccountAnalyzer, bench_label 自动跑基准
+        analyzer = EngineV3.backtest(
+            signal, data, symbol=SYMBOL, mode='full',
+            initial_capital=INITIAL_CAPITAL, start_date=START_DATE,
+        )
         m = analyzer.metrics()
 
         def _v(name, default=0):
@@ -89,12 +90,12 @@ for short_id, short_name, expr_str in TOP_FORMULAS:
                     return val[0] if isinstance(val, tuple) else val
             return default
 
-        # [新增] 2026-06-10 从 daily_assets 计算回撤序列
+        # 从 daily_assets 计算回撤序列
         daily = analyzer.daily_assets
         dates = sorted(daily.keys())
         nav_arr = np.array([daily[d] for d in dates])
         cummax = np.maximum.accumulate(nav_arr)
-        dd_arr = (nav_arr / cummax - 1)  # 回撤序列
+        dd_arr = (nav_arr / cummax - 1)
         dd_max = float(np.min(dd_arr))
 
         sharpe = round(float(_v('夏普比率')), 3)
@@ -113,7 +114,7 @@ for short_id, short_name, expr_str in TOP_FORMULAS:
     except Exception as e:
         print(f"FAIL: {e}")
 
-# [修复] 2026-06-10 基准用 START_DATE 截断（与 core_backtest(start_date=START_DATE) 对齐）
+# 基准: 手动计算 (与策略 daily_assets 日期对齐)
 closes = data.loc[data.index >= pd.Timestamp(START_DATE), 'close'].values
 bench_ret = np.diff(closes) / closes[:-1]
 bench_cagr = (closes[-1]/closes[0])**(252/len(closes)) - 1
@@ -132,6 +133,12 @@ top = results[0]
 def add_footer(nb):
     with nb.section("结论与方法论"):
         nb.markdown(
+            "### EngineV3 (signals.v3) 特点\n"
+            "- **统一入口**: `EngineV3.backtest()` 替代 v2 的多个回测函数\n"
+            "- **双模式**: `full` → AccountAnalyzer / `fast` → FastResult (GP搜索用)\n"
+            "- **自动基准**: `bench_label='399317.SZ'` 参数自动跑买入持有基准\n"
+            "- **费率控制**: `with_fees` 指数择时默认关闭\n"
+            "\n"
             "### 信号形态比引擎更重要\n"
             "- 从 v15（简化引擎 SR=1.0~1.95）到 v18（core引擎 含费率），下降 20~40%\n"
             "- 但 **close_ma_ratio** 从 1.95 → 0.16 的主因是 thr_mean 二值化，不是引擎差异\n"
@@ -183,13 +190,12 @@ def add_header(nb):
     series_list = []
     for i in range(min(3, len(results))):
         r = results[i]
-        nav_norm = r['nav'] / INITIAL_CAPITAL  # 归一化
+        nav_norm = r['nav'] / INITIAL_CAPITAL
         series_list.append({'name': f"#{i+1} {r['id']}", 'data': [round(v,4) for v in nav_norm]})
 
     # 基准净值（START_DATE 截断，与策略 daily_assets 日期对齐）
     bench_data = data.loc[data.index >= pd.Timestamp(START_DATE)]
     bench_norm = closes / closes[0]
-    bench_dates = [d.strftime('%Y-%m-%d') if hasattr(d,'strftime') else str(d) for d in bench_data.index]
 
     if len(bench_norm) > len(dates_all):
         bench_norm = bench_norm[:len(dates_all)]
@@ -213,11 +219,11 @@ def add_header(nb):
 
 
 # ── 主报告: analyzer.to_notebook(title, header=, footer=) ──
-output_dir = os.path.join(ROOT, 'v2', 'v18', 'output')
+output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tmp')
 os.makedirs(output_dir, exist_ok=True)
 
 top['analyzer'].base_dir = output_dir
-# [修复] 2026-06-10 set_benchmark 用 START_DATE 截断的净值 dict
+# [更新] 2026-06-10 set_benchmark 用 START_DATE 截断的净值 dict
 bench_data = data.loc[data.index >= pd.Timestamp(START_DATE)]
 bench_nav_dict = {
     d.date() if hasattr(d, 'date') else d: float(closes[i] / closes[0] * INITIAL_CAPITAL)
@@ -225,11 +231,11 @@ bench_nav_dict = {
 }
 top['analyzer'].set_benchmark(bench_nav_dict, SYMBOL)
 top['analyzer'].to_notebook(
-    f"v18 最优择时 — core_backtest",
+    f"EngineV3 demo — v18 最优择时",
     header=add_header,
     footer=add_footer)
 
-print(f"\n>> HTML: {output_dir}/v18 最优择时 — core_backtest.html")
+print(f"\n>> HTML: {output_dir}/EngineV3 demo — v18 最优择时.html")
 
 # 控制台
 print(f"\n{'排名':<4} {'ID':<12} {'Sharpe':>7} {'CAGR':>7} {'MDD':>7} {'交易':>5}")

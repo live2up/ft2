@@ -19,49 +19,55 @@ from typing import List, Optional, Callable
 # Expanding 统计工具 (防前向偏差)
 # ============================================================
 
-def _expanding_zscore(values: np.ndarray, min_warmup: int = 20) -> np.ndarray:
+def _expanding_zscore(values: np.ndarray, warmup: int = 20) -> np.ndarray:
     """expanding z-score: 每时刻只用历史数据计算 mean/std
 
     zscore[i] = (values[i] - mean[0:i+1]) / std[0:i+1], 截断到 [-3, 3]
-    [修复] 替代原 np.nanmean/np.nanstd 全序列版本，消除前向偏差
 
     Args:
-        min_warmup: 冷启动天数，前 min_warmup 天统计量不稳定，返回 0（中性）
+        warmup: 冷启动 bar 数，前 warmup 条统计量不稳定，返回 0（中性）
     """
     n = len(values)
+    if warmup >= n:
+        return np.zeros(n)           # 序列太短，全中性
+
     result = np.full(n, np.nan)
-    cumsum = np.nancumsum(values)
-    cumsum2 = np.nancumsum(values ** 2)
+    # [兼容] np.nancumsum 仅 NumPy≥2.0 可用，手动实现
+    v_clean = np.where(np.isnan(values), 0.0, values)
+    v2_clean = np.where(np.isnan(values), 0.0, values ** 2)
+    cumsum = np.cumsum(v_clean)
+    cumsum2 = np.cumsum(v2_clean)
     count = np.arange(1, n + 1, dtype=float)
 
-    for i in range(min_warmup, n):
+    for i in range(warmup, n):
         mean = cumsum[i] / count[i]
         var = cumsum2[i] / count[i] - mean ** 2
         std = np.sqrt(max(var, 1e-10))
         result[i] = np.clip((values[i] - mean) / std, -3.0, 3.0)
 
-    # 冷启动期间 → 中性
-    result[:min_warmup] = 0.0
+    result[:warmup] = 0.0
     return np.nan_to_num(result, nan=0.0)
 
 
-def _expanding_rank(values: np.ndarray, min_warmup: int = 20) -> np.ndarray:
+def _expanding_rank(values: np.ndarray, warmup: int = 20) -> np.ndarray:
     """expanding percentile rank: t时刻在历史中的百分位
 
     rank[i] = (#values[0:i+1] <= values[i]) / (i+1), 值域 [0, 1]
-    [修复] 替代原 pd.Series.rank(pct=True) 全序列版本，消除前向偏差
 
     Args:
-        min_warmup: 冷启动天数，前 min_warmup 天排名不稳定，返回 0.5（中位）
+        warmup: 冷启动 bar 数，前 warmup 条排名不稳定，返回 0.5（中位）
     """
     n = len(values)
+    if warmup >= n:
+        return np.full(n, 0.5)       # 序列太短，全中位
+
     result = np.full(n, np.nan)
 
-    for i in range(min_warmup, n):
+    for i in range(warmup, n):
         window = values[:i + 1]
         result[i] = np.sum(window <= values[i]) / (i + 1)
 
-    result[:min_warmup] = 0.5  # 冷启动 → 中位
+    result[:warmup] = 0.5
     return np.nan_to_num(result, nan=0.5)
 
 
@@ -91,10 +97,14 @@ class ScoredSignal:
 
     def __init__(self, name: str, weight: float = 1.0,
                  transform: str = 'raw', warmup: int = 20):
-        """        
+        """
         Args:
-            warmup: expanding 变换的冷启动天数（仅 zscore/rank 有效）,
-                    默认 20。前 warmup 天 zscore→0(中性), rank→0.5(中位)
+            name: 特征列名
+            weight: 权重（正=正向，负=反向）
+            transform: 变换方式 (raw/rank/zscore/binary/neg_log/rank_full/zscore_full)
+            warmup: expanding 变换的冷启动 bar 数（仅 rank/zscore 有效）
+                    前 warmup 条 → zscore=0(中性), rank=0.5(中位)
+                    默认 20 ≈ 一个月交易日。可网格搜索调优
         """
         self.name = name
         self.weight = weight
