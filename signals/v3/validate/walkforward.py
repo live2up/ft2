@@ -1,15 +1,14 @@
 """
-signals/v3/validate/walkforward.py — Walk-Forward 验证 (v3 引擎版)
+signals/v3/validate/walkforward.py — Walk-Forward 验证 (v3 独立引擎版)
 =============================================================================
-继承 v2.walk_forward_v2 的窗口逻辑, 每窗口用 v3.EngineV3(mode='full')。
+每窗口用 v3.EngineV3(mode='full')。
 =============================================================================
 """
-import sys, os, numpy as np, pandas as pd
-from typing import Dict, List, Optional
+import numpy as np
+import pandas as pd
+from typing import Dict, List
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from signals.v2.walk_forward_v2 import WalkForwardCoreResult
-
+from ..wf_result import WalkForwardCoreResult
 from ..engine import EngineV3
 
 

@@ -1,5 +1,5 @@
 """
-signals/v3/validate/compare.py — 多信号对比
+signals/v3/validate/compare.py — 多信号对比 (v3 独立)
 =============================================================================
 """
 import pandas as pd
@@ -38,7 +38,8 @@ def compare_signals(
             if 'signal' in sig and sig['signal'] is not None:
                 signal_series = sig['signal']
             elif 'expr' in sig:
-                from signals.v2 import Expression, FeatureSpace
+                from ..expression import Expression
+                from ..features import FeatureSpace
                 fs = sig.get('feature_space') or FeatureSpace().fit(data)
                 signal_series = Expression(sig['expr'], feature_space=fs).generate(data)
             else:

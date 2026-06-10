@@ -1,18 +1,16 @@
 """
-signals/v3/search/grid.py — 参数网格搜索 (v3 引擎版)
+signals/v3/search/grid.py — 参数网格搜索 (v3 独立引擎版)
 =============================================================================
-继承 v2.grid_search.GridSearch 的笛卡尔积展开逻辑,
-替换回测为 v3.EngineV3.backtest(mode='fast')。
+v3 独立版，笛卡尔积展开 + v3.EngineV3.backtest(mode='fast|full')。
 =============================================================================
 """
-import sys, os, itertools
-import numpy as np, pandas as pd
-from typing import Dict, List, Optional, Any
+import itertools
+import numpy as np
+import pandas as pd
+from typing import Dict, List, Any
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from signals.v2.expression import Expression
-from signals.v2.features import FeatureSpace
-
+from ..expression import Expression
+from ..features import FeatureSpace
 from ..engine import EngineV3
 
 
@@ -23,7 +21,7 @@ class GridSearch:
     用法:
         gs = GridSearch(template, param_grid, data, fs, start_date='2020-01-01')
         result = gs.run()
-        print(result.top(5))
+        print(result.head(5))
     """
 
     def __init__(self, template: str, param_grid: Dict[str, List],
@@ -92,12 +90,14 @@ class GridSearch:
                             signal, self.data, symbol=self.symbol,
                             mode='full', start_date=self.start_date)
                         m = analyzer.metrics()
+
                         def _v(name, d=0):
                             for k, v in m.items():
                                 if isinstance(v, dict) and v.get('name') == name:
                                     val = v['value']
                                     return val[0] if isinstance(val, tuple) else val
                             return d
+
                         results.append({
                             '表达式': expr_str,
                             '参数': str(params),

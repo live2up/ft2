@@ -1,24 +1,23 @@
 """
-signals/v3/search/gp.py — GP 遗传算法搜索 (v3 引擎版)
+signals/v3/search/gp.py — GP 遗传算法搜索 (v3 独立引擎版)
 =============================================================================
-继承 v2.gp_optimizer.GPOptimizer 的种群/交叉/变异逻辑,
+继承 v3.gp_optimizer.GPOptimizer 的种群/交叉/变异逻辑,
 替换 _evaluate_signals 为 v3.EngineV3.backtest(mode='fast')。
 
-效果: 4000 次评估全部走 core 时间线 + ETF 费率, 约 33 分钟 (vs v2 简化引擎 8 分钟)
+效果: 4000 次评估全部走 core 时间线 + ETF 费率, 约 33 分钟
 =============================================================================
 """
-import sys, os, random, numpy as np, pandas as pd
-from typing import Dict, List, Optional, Set
+import numpy as np
+import pandas as pd
+from typing import List, Dict
 
-# 从 v2 继承核心算法
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
-from signals.v2.gp_optimizer import (
+# ── v3 本地导入 ──
+from ..gp_optimizer import (
     GPOptimizer, Individual, GenerationHistory,
     NODE_CONFIG, SEED_EXPRESSIONS,
 )
-from signals.v2.expression import Expression, parse_expression
-from signals.v2.features import FeatureSpace
-
+from ..expression import Expression, parse_expression
+from ..features import FeatureSpace
 from ..engine import EngineV3
 
 
