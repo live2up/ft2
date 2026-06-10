@@ -15,7 +15,6 @@ import numpy as np
 from typing import Dict, Optional, List
 
 from .ast_dsl import parse_expression, evaluate, get_variables, get_functions
-from .registry import is_valid_variable
 
 
 class Expression:
@@ -50,7 +49,7 @@ class Expression:
     def generate(self, data: pd.DataFrame,
                  extra_features: Dict[str, np.ndarray] = None) -> pd.Series:
         """
-        从 OHLCV DataFrame 生成信号序列
+        从 OHLCV DataFrame 生成信号序列（单品种择时）
         
         Args:
             data: OHLCV DataFrame (index=DatetimeIndex, 含 open/high/low/close/volume)
@@ -65,6 +64,67 @@ class Expression:
             result = np.full(len(data), result.item())
         return pd.Series(result.flatten()[:len(data)],
                         index=data.index[:len(result)], name=self.name)
+    
+    def evaluate_panel(self, assets: Dict[str, pd.DataFrame],
+                       align: str = 'inner') -> pd.DataFrame:
+        """
+        多品种批量求值（因子轮动用）
+        
+        Args:
+            assets: {品种代码: OHLCV DataFrame}
+            align: 'inner'=取公共日期, 'outer'=取并集（NaN填充）
+        
+        Returns:
+            DataFrame(index=日期, columns=品种代码)，值为连续因子值
+            每列是该品种在同一表达式下的求值结果
+        
+        用法:
+            expr = Expression("(CLOSE / ts_mean(CLOSE, 50) - 1) * 100")
+            panel = expr.evaluate_panel({'399967': df1, '399970': df2, ...})
+            # → 可用于截面排名选 Top N
+        """
+        results = {}
+        for code, df in assets.items():
+            try:
+                results[code] = self.generate(df)
+            except Exception as e:
+                import warnings
+                warnings.warn(f"品种 {code} 求值失败: {e}")
+        
+        if not results:
+            raise ValueError("所有品种求值均失败")
+        
+        panel = pd.DataFrame(results)
+        
+        # 日期对齐
+        if align == 'inner':
+            common_index = panel.index
+            for col in panel.columns:
+                common_index = common_index.intersection(panel[col].dropna().index)
+            panel = panel.loc[common_index]
+        
+        return panel
+    
+    def rank_panel(self, assets: Dict[str, pd.DataFrame],
+                   align: str = 'inner') -> pd.DataFrame:
+        """
+        多品种批量求值 + 截面排名（一步到位）
+        
+        Returns:
+            DataFrame(index=日期, columns=品种代码)，值为 0~1 截面百分位排名
+            每日每品种的排名值（1=最强，0=最弱）
+        """
+        panel = self.evaluate_panel(assets, align=align)
+        # 每日截面排名
+        from scipy.stats import rankdata
+        ranked = panel.copy()
+        for i in range(len(panel)):
+            row = panel.iloc[i].values
+            valid = ~np.isnan(row)
+            if valid.sum() > 0:
+                rk = rankdata(row[valid]) / valid.sum()
+                ranked.iloc[i, valid] = rk
+        return ranked
 
 
 def _build_data_dict(data: pd.DataFrame,
