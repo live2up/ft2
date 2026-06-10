@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 signals/v4/registry.py — 函数注册表
 =============================================================================
@@ -9,6 +10,7 @@ Python AST DSL 的所有可用函数。每个函数接收 numpy 数组，返回 
 =============================================================================
 """
 import numpy as np
+import talib
 from typing import Dict, Callable
 
 
@@ -70,7 +72,7 @@ def ts_corr(x, y, w):
     return r
 
 def ts_cov(x, y, w):
-    """滚动协方差"""
+    """Rolling covariance"""
     x, y = np.asarray(x, float), np.asarray(y, float)
     r = np.full_like(x, np.nan)
     for i in range(w - 1, len(x)):
@@ -97,18 +99,18 @@ def ts_argmin(x, w):
     return _rolling(x, w, lambda a: len(a) - 1 - np.argmin(a))
 
 def ts_roc(x, w):
-    """变化率: (x[t] - x[t-w]) / x[t-w]"""
+    """Rate of change: (x[t]-x[t-w])/x[t-w]"""
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
     r[w:] = (x[w:] - x[:-w]) / np.where(np.abs(x[:-w]) > 1e-10, x[:-w], np.nan)
     return r
 
 def ts_zscore(x, d):
-    """滚动 Z-score: (x - μ) / σ"""
+    """Rolling Z-score: (x-mu)/sigma"""
     mu = ts_mean(x, d); sg = ts_std(x, d)
     return np.where(sg > 1e-10, (np.asarray(x, float) - mu) / sg, 0)
 
 def ts_scale(x, d):
-    """滚动缩放: 窗口内绝对值之和 → 1"""
+    """Rolling scale: sum(abs(x)) in window -> 1"""
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
     for i in range(d - 1, len(x)):
         seg = x[i - d + 1 : i + 1]; s = np.sum(np.abs(seg))
@@ -116,15 +118,15 @@ def ts_scale(x, d):
     return r
 
 def ts_quantile(x, d):
-    """滚动分位数排名: 当前值在窗口中的分位 0~1（同 ts_rank，更通用）"""
+    """Rolling quantile rank 0~1"""
     return ts_rank(x, d)
 
 def ts_av_diff(x, d):
-    """当前值 - 窗口均值（偏离度）"""
+    """Current minus rolling mean (deviation)"""
     return np.asarray(x, float) - ts_mean(x, d)
 
 def ts_decay_linear(x, d):
-    """线性衰减加权均值: 近期权重大, 权重=[1,2,...,d]/sum"""
+    """Linear decay weighted mean"""
     x = np.asarray(x, float)
     r = np.full_like(x, np.nan)
     weights = np.arange(1, d + 1, dtype=float)
@@ -134,7 +136,7 @@ def ts_decay_linear(x, d):
     return r
 
 def ts_product(x, d):
-    """滚动乘积: 过去 d 天累积乘积（如复利收益）"""
+    """Rolling product over d periods"""
     x = np.asarray(x, float)
     r = np.full_like(x, np.nan)
     for i in range(d - 1, len(x)):
@@ -143,10 +145,7 @@ def ts_product(x, d):
     return r
 
 def ts_regression(y, x, d, rettype=2):
-    """
-    滚动线性回归: y = α + β·x + ε
-    
-    rettype: 0=β(斜率) 1=α(截距) 2=残差(ε, 均值回归核心) 3=预测值(ŷ) 4=R²
+    """Rolling linear regression: y = alpha + beta*x + eps
     """
     y, x = np.asarray(y, float), np.asarray(x, float)
     r = np.full_like(y, np.nan)
@@ -210,7 +209,7 @@ def cs_zscore(x):
     return r
 
 def cs_scale(x, scale=1.0):
-    """截面缩放: 使 sum(abs(x)) = scale，2D 输入按行操作"""
+    """Cross-sectional scale: sum(abs(x)) = scale"""
     x = np.asarray(x, float)
     if x.ndim == 1: return x / (np.sum(np.abs(x)) + 1e-10) * scale
     r = np.full_like(x, np.nan)
@@ -222,7 +221,7 @@ def cs_scale(x, scale=1.0):
     return r
 
 def cs_winsorize(x, std=4.0):
-    """截面缩尾: 将超过 ±std 倍标准差的极值截断"""
+    """Cross-sectional winsorize at +/-std"""
     x = np.asarray(x, float)
     if x.ndim == 1:
         m, s = np.mean(x), np.std(x)
@@ -236,13 +235,13 @@ def cs_winsorize(x, std=4.0):
     return r
 
 def cs_normalize(x, use_std=False, limit=0.0):
-    """截面归一化: use_std=True → zscore + scale, use_std=False → sum(abs)=1"""
+    """Cross-sectional normalize"""
     if use_std:
         return cs_scale(cs_zscore(x))
     return cs_scale(x, 1.0)
 
 def cs_quantile(x, driver='gaussian', sigma=1.0):
-    """截面分位数: 同 cs_rank，预留扩展接口"""
+    """Cross-sectional quantile"""
     return cs_rank(x)
 
 
@@ -273,134 +272,158 @@ def persist(x, n=3):
 # ============================================================
 
 def _feature_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
-    """RSI 中心化版本 (RSI - 50) / 50，值域 [-1, 1]"""
+    """RSI centered: (RSI-50)/50, range [-1,1]. talib-aligned."""
     c = np.asarray(close, float)
-    diff = np.diff(c, prepend=c[0])
-    gain = np.where(diff > 0, diff, 0).astype(float)
-    loss = np.where(diff < 0, -diff, 0).astype(float)
-    result = np.full(len(c), np.nan)
-    for i in range(period, len(c)):
-        avg_gain = np.mean(gain[i - period:i])
-        avg_loss = np.mean(loss[i - period:i])
-        rs = avg_gain / avg_loss if avg_loss > 0 else 100
-        result[i] = 100 - 100 / (1 + rs)
-    result = np.nan_to_num(result, nan=50)
+    result = talib.RSI(c, timeperiod=period)
+    result = np.nan_to_num(result, nan=50.0)
     return (result - 50) / 50
 
+
 def _feature_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    """ATR — 平均真实波幅"""
+    """ATR - Wilder smoothed. talib-aligned."""
     h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
-    tr = np.maximum(h - l, np.abs(h - np.roll(c, 1)), np.abs(l - np.roll(c, 1)))
+    return talib.ATR(h, l, c, timeperiod=period)
+
+
+def _feature_atr_sma(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    """ATR-SMA: simple rolling mean of TR (original V4, kept for compat)"""
+    h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
+    tr = np.maximum(h - l, np.maximum(np.abs(h - np.roll(c, 1)), np.abs(l - np.roll(c, 1))))
     tr[0] = h[0] - l[0]
     return _rolling(tr, period, np.mean)
 
+
+def _wilder_smooth(x: np.ndarray, period: int) -> np.ndarray:
+    """Wilder smoothing: S[t]=(S[t-1]*(p-1)+x[t])/p, seed=SMA. talib-aligned."""
+    x = np.asarray(x, float)
+    n = len(x)
+    r = np.full(n, np.nan)
+    if n < period:
+        return r
+    r[period - 1] = np.mean(x[:period])
+    for i in range(period, n):
+        if np.isnan(r[i - 1]):
+            r[i] = np.nan
+        else:
+            r[i] = (r[i - 1] * (period - 1) + x[i]) / period
+    return r
+
+
+def _feature_ema(x: np.ndarray, period: int = 20) -> np.ndarray:
+    """EMA: recursive, talib-aligned. k=2/(p+1), seed=SMA."""
+    x = np.asarray(x, float)
+    n = len(x)
+    k = 2.0 / (period + 1)
+    r = np.full(n, np.nan)
+    if n < period:
+        return r
+    r[period - 1] = np.mean(x[:period])
+    for i in range(period, n):
+        if np.isnan(r[i - 1]):
+            r[i] = np.nan
+        else:
+            r[i] = (x[i] - r[i - 1]) * k + r[i - 1]
+    return r
+
+
 def _feature_bbwidth(close: np.ndarray, period: int = 20) -> np.ndarray:
-    """布林带宽度 = (上轨-下轨)/中轨"""
+    """Bollinger Band Width = (upper-lower)/middle. talib-aligned."""
     c = np.asarray(close, float)
-    ma = _rolling(c, period, np.mean)
-    std = _rolling(c, period, lambda a: np.std(a, ddof=1))
-    return np.where(ma > 0, (4 * std) / ma, 0)
+    upper, middle, lower = talib.BBANDS(c, timeperiod=period, nbdevup=2, nbdevdn=2, matype=0)
+    return np.where(middle > 0, (upper - lower) / middle, 0)
+
 
 def _feature_stddev(close: np.ndarray, period: int = 20) -> np.ndarray:
+    """Standard Deviation. talib-aligned."""
     c = np.asarray(close, float)
-    return _rolling(c, period, lambda a: np.std(a, ddof=1))
+    return talib.STDDEV(c, timeperiod=period, nbdev=1)
+
 
 def _feature_adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    """ADX - Average Directional Index. talib-aligned."""
     h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
-    dm_plus = np.where((h - np.roll(h, 1)) > (np.roll(l, 1) - l),
-                       np.maximum(h - np.roll(h, 1), 0), 0).astype(float)
-    dm_minus = np.where((np.roll(l, 1) - l) > (h - np.roll(h, 1)),
-                        np.maximum(np.roll(l, 1) - l, 0), 0).astype(float)
-    tr = np.maximum(h - l, np.abs(h - np.roll(c, 1)), np.abs(l - np.roll(c, 1)))
-    tr[0] = h[0] - l[0]
-    atr = _rolling(tr, period, np.mean)
-    di_p = np.where(atr > 0, _rolling(dm_plus, period, np.mean) / atr * 100, 0)
-    di_m = np.where(atr > 0, _rolling(dm_minus, period, np.mean) / atr * 100, 0)
-    dx = np.where(di_p + di_m > 0, np.abs(di_p - di_m) / (di_p + di_m) * 100, 0)
-    return _rolling(dx, period, np.mean)
+    return talib.ADX(h, l, c, timeperiod=period)
+
 
 def _feature_cci(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    """CCI - Commodity Channel Index. talib-aligned."""
     h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
-    tp = (h + l + c) / 3
-    tp_ma = _rolling(tp, period, np.mean)
-    md = _rolling(np.abs(tp - tp_ma), period, np.mean)
-    return np.where(md > 0, (tp - tp_ma) / (0.015 * md), 0)
+    return talib.CCI(h, l, c, timeperiod=period)
+
 
 def _feature_macd(close: np.ndarray, fast: int = 12, slow: int = 26, signal: int = 9) -> np.ndarray:
+    """MACD histogram = 2*(DIF-DEA). talib-aligned."""
     c = np.asarray(close, float)
-    def _ema(arr, p):
-        a = 2/(p+1); r = arr.copy()
-        for i in range(1, len(r)): r[i] = a*arr[i] + (1-a)*r[i-1]
-        return r
-    dif = _ema(c, fast) - _ema(c, slow)
-    dea = _ema(dif, signal)
+    dif, dea, hist = talib.MACD(c, fastperiod=fast, slowperiod=slow, signalperiod=signal)
     return 2 * (dif - dea)
 
-def _feature_trima(close: np.ndarray, period: int = 40) -> np.ndarray:
-    c = np.asarray(close, float)
-    half = period // 2 + 1
-    return _rolling(_rolling(c, half, np.mean), half, np.mean)
 
-def _feature_ema_fast(close: np.ndarray, period: int = 20) -> np.ndarray:
+def _feature_trima(close: np.ndarray, period: int = 40) -> np.ndarray:
+    """TRIMA - Triangular Moving Average. talib-aligned."""
     c = np.asarray(close, float)
-    a = 2 / (period + 1)
-    r = c.copy()
-    for i in range(1, len(r)): r[i] = a * c[i] + (1 - a) * r[i - 1]
-    return r
+    return talib.TRIMA(c, timeperiod=period)
+
 
 def _feature_tsf(close: np.ndarray, period: int = 7) -> np.ndarray:
+    """TSF - Time Series Forecast. talib-aligned."""
     c = np.asarray(close, float)
-    r = np.full(len(c), np.nan)
-    for i in range(period - 1, len(c)):
-        y = c[i - period + 1 : i + 1]
-        x = np.arange(period)
-        slope, intercept = np.polyfit(x, y, 1)
-        r[i] = intercept + slope * period
-    return r
+    return talib.TSF(c, timeperiod=period)
+
 
 def _feature_kama(close: np.ndarray, period: int = 30) -> np.ndarray:
-    return _rolling(np.asarray(close, float), period, np.mean)
+    """KAMA - Kaufman Adaptive Moving Average. talib-aligned."""
+    c = np.asarray(close, float)
+    return talib.KAMA(c, timeperiod=period)
+
 
 def _feature_wma(close: np.ndarray, period: int = 20) -> np.ndarray:
-    return _rolling(np.asarray(close, float), period, np.mean)
+    """WMA - Weighted Moving Average. talib-aligned."""
+    c = np.asarray(close, float)
+    return talib.WMA(c, timeperiod=period)
+
 
 def _feature_dema(close: np.ndarray, period: int = 20) -> np.ndarray:
-    return _rolling(np.asarray(close, float), period, np.mean)
+    """DEMA - Double Exponential Moving Average. talib-aligned."""
+    c = np.asarray(close, float)
+    return talib.DEMA(c, timeperiod=period)
+
 
 def _feature_hv(close: np.ndarray, period: int = 20) -> np.ndarray:
+    """Historical Volatility: annualized std of daily returns x100."""
     c = np.asarray(close, float)
-    rets = np.diff(c) / c[:-1]
+    rets = np.diff(c) / np.where(c[:-1] > 0, c[:-1], 1)
     rets = np.insert(rets, 0, 0)
     return _rolling(rets, period, lambda a: np.std(a, ddof=1) * np.sqrt(252) * 100)
 
+
 def _feature_natr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    """NATR - Normalized ATR. talib-aligned."""
     h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
-    tr = np.maximum(h - l, np.abs(h - np.roll(c, 1)), np.abs(l - np.roll(c, 1)))
-    tr[0] = h[0] - l[0]
-    atr = _rolling(tr, period, np.mean)
-    return np.where(c > 0, atr / c * 100, 0)
+    return talib.NATR(h, l, c, timeperiod=period)
+
 
 def _feature_var(close: np.ndarray, period: int = 20) -> np.ndarray:
-    return _rolling(np.asarray(close, float), period, lambda a: np.var(a, ddof=1))
+    """Variance. talib-aligned."""
+    c = np.asarray(close, float)
+    return talib.VAR(c, timeperiod=period)
+
 
 def _feature_linearreg(close: np.ndarray, period: int = 20) -> np.ndarray:
+    """Linear Regression value. talib-aligned."""
     c = np.asarray(close, float)
-    r = np.full(len(c), np.nan)
-    for i in range(period - 1, len(c)):
-        y = c[i - period + 1 : i + 1]
-        x = np.arange(period)
-        slope, intercept = np.polyfit(x, y, 1)
-        r[i] = intercept + slope * (period - 1)
-    return r
+    return talib.LINEARREG(c, timeperiod=period)
+
 
 def _feature_vol_ratio(close: np.ndarray, volume: np.ndarray, short: int = 5, long: int = 20) -> np.ndarray:
+    """Volume ratio = SMA(vol,short) / SMA(vol,long). No talib equivalent."""
     v = np.asarray(volume, float)
     vs = _rolling(v, short, np.mean)
     vl = _rolling(v, long, np.mean)
     return np.where(vl > 0, vs / vl, 0)
 
+
 def _feature_amt_ratio(amount: np.ndarray, short: int = 5, long: int = 20) -> np.ndarray:
-    """成交额量比 = 短期均额 / 长期均额（行业指数优选）"""
+    # amt ratio = short_mean / long_mean
     a = np.asarray(amount, float)
     return np.where(_rolling(a, long, np.mean) > 0,
                     _rolling(a, short, np.mean) / _rolling(a, long, np.mean), 0)
@@ -445,13 +468,16 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     # 特征计算（从 OHLCV 实时算，无需 FeatureSpace）
     'rsi':         _feature_rsi,
     'atr':         _feature_atr,
+    'atr_sma':     _feature_atr_sma,
+    
     'bb_width':    _feature_bbwidth,
     'stddev':      _feature_stddev,
     'adx':         _feature_adx,
     'cci':         _feature_cci,
     'macd':        _feature_macd,
     'trima':       _feature_trima,
-    'ema':         _feature_ema_fast,
+    'ema':         _feature_ema,
+    'wilder_smooth': _wilder_smooth,
     'tsf':         _feature_tsf,
     'kama':        _feature_kama,
     'wma':         _feature_wma,
