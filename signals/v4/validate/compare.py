@@ -77,3 +77,36 @@ def compare_signals(signals: list, data: pd.DataFrame,
     df = pd.DataFrame(results).sort_values('Sharpe', ascending=False)
     df.insert(0, '排名', range(1, len(df) + 1))
     return df
+
+
+def signal_correlation(signals: list, data: pd.DataFrame) -> pd.DataFrame:
+    """
+    信号相关性分析 — 检测冗余信号, 辅助融合决策
+
+    Args:
+        signals: [{'name': '名称', 'expr': 'V4表达式'}, ...]
+        data: OHLCV DataFrame
+
+    Returns:
+        DataFrame: 相关性矩阵 (n×n), 值越高越冗余
+
+    解读:
+        >0.8  高度冗余, 融合无增益
+        0.5~0.8 中度相关, 谨慎融合
+        <0.3  低相关, 适合融合
+    """
+    signal_series = {}
+    for sig in signals:
+        name = sig.get('name', sig['expr'][:30])
+        try:
+            expr = Expression(sig['expr'])
+            signal_series[name] = expr.generate(data).fillna(0)
+        except Exception as e:
+            print(f"  X {name}: {e}")
+
+    if len(signal_series) < 2:
+        return pd.DataFrame()
+
+    df_signals = pd.DataFrame(signal_series)
+    return df_signals.corr().round(3)
+
