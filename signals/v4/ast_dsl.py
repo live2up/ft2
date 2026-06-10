@@ -222,6 +222,16 @@ def parse_expression(expr_str: str,
 # 求值器
 # ============================================================
 
+def _unwrap_scalar(val: np.ndarray):
+    """将标量数组解包为 Python 原生类型（int 或 float）"""
+    if val.size != 1:
+        return val
+    v = val.item()
+    # 检查原始 AST Constant 是否整数，保持 int 类型
+    if isinstance(v, float) and v == int(v) and abs(v) < 1e12:
+        return int(v)
+    return v
+
 def evaluate(tree: ast.Expression, 
              data: Dict[str, np.ndarray]) -> np.ndarray:
     """
@@ -334,18 +344,12 @@ def _eval_node(node: ast.AST, data: Dict[str, np.ndarray]) -> np.ndarray:
         args = []
         for arg_node in node.args:
             val = _eval_node(arg_node, data)
-            if val.size == 1:
-                args.append(val.item())
-            else:
-                args.append(val)
+            args.append(_unwrap_scalar(val))
         # 关键字参数
         kwargs = {}
         for kw in node.keywords:
             val = _eval_node(kw.value, data)
-            if val.size == 1:
-                kwargs[kw.arg] = val.item()
-            else:
-                kwargs[kw.arg] = val
+            kwargs[kw.arg] = _unwrap_scalar(val)
         
         return func(*args, **kwargs)
     
