@@ -24,11 +24,12 @@ class GridSearch:
     """
 
     def __init__(self, template: str, param_grid: Dict[str, List],
-                 data: pd.DataFrame,
+                 data: pd.DataFrame, symbol: str = '399317.SZ',
                  start_date: str = None):
         self.template = template
         self.param_grid = param_grid
         self.data = data
+        self.symbol = symbol
         self.start_date = start_date
 
     def run(self, mode: str = 'fast') -> pd.DataFrame:
