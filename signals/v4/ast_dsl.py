@@ -167,7 +167,7 @@ def _check_node_safety(node: ast.AST):
         _check_node_safety(child)
 
 
-def _check_complexity(node: ast.AST, max_depth: int = 10, max_nodes: int = 100):
+def _check_complexity(node: ast.AST, max_depth: int = 15, max_nodes: int = 200):
     """检查表达式复杂度"""
     # 深度
     depth = _ast_depth(node)
@@ -188,8 +188,8 @@ def _ast_depth(node: ast.AST) -> int:
 
 
 def parse_expression(expr_str: str, 
-                     max_depth: int = 10,
-                     max_nodes: int = 100) -> ast.Expression:
+                     max_depth: int = 15,
+                     max_nodes: int = 200) -> ast.Expression:
     """
     解析并校验表达式字符串
     
