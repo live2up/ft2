@@ -528,22 +528,67 @@ SAFE_CONSTANTS = {'True': 1.0, 'False': 0.0, 'None': 0.0, 'pi': np.pi, 'e': np.e
 
 VALID_VAR_PREFIXES = [
     'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME', 'AMOUNT', 'VWAP', 'RETURNS', 'RET',
-    'ATR', 'STDDEV', 'BBWIDTH', 'HV', 'NATR',
-    'TRIMA', 'SMA', 'MA', 'EMA', 'TSF', 'WMA', 'DEMA', 'KAMA',
-    'ADX', 'RSI', 'CCI', 'MACD', 'MFI', 'ULTOSC', 'ROC', 'MOM_RATIO',
-    'TREND_STRENGTH', 'LINEARREG', 'VAR',
-    'VOL_RATIO', 'VOL_CHG', 'VOL_REGIME', 'OBV',
-    'AVGPRICE', 'WCLPRICE', 'CORREL', 'MOM_CHG', 'UP_RATIO',
-    # 行业扩散度
-    'SECTOR_UP', 'SECTOR_MOM20', 'SECTOR_MA20', 'SECTOR_AD',
-    'SECTOR_UP_Z', 'SECTOR_MOM20_Z', 'SECTOR_MA20_Z',
-    'BW_MA5', 'BW_MA10', 'BW_MA20', 'BW_MOM5',
-    'BW5', 'BW10', 'BW20',
-    'DISP', 'BWMOM20', 'ROTSPD', 'NHL20', 'SKEW',
-    'VMED', 'VDISP', 'VSKEW',
-    'CORR', 'CORRDISP',
-    'TAILUP', 'TAILDOWN', 'TAILNET',
-    'AMT5', 'AMT10',
+    # 特征指标（通过 _feature_xxx 函数实时计算或预计算注入）
+    'ATR',          # 平均真实波幅 (Average True Range)
+    'STDDEV',       # 滚动标准差
+    'BBWIDTH',      # 布林带宽度 (upper-lower)/middle
+    'HV',           # 历史波动率 (年化)
+    'NATR',         # 归一化 ATR (ATR/CLOSE)
+    'TRIMA', 'SMA', 'MA', 'EMA', 'TSF', 'WMA', 'DEMA', 'KAMA',  # 各类均线
+    'ADX',          # 平均趋向指数 (趋势强度)
+    'RSI',          # 相对强弱指标
+    'CCI',          # 商品通道指数
+    'MACD',         # MACD 柱
+    'MFI',          # 资金流量指数
+    'ULTOSC',       # 终极摆动指标
+    'ROC',          # 变化率 (Rate of Change)
+    'MOM_RATIO',    # 动量比率
+    'TREND_STRENGTH',  # 趋势强度
+    'LINEARREG',    # 线性回归值
+    'VAR',          # 滚动方差
+    'VOL_RATIO',    # 量比 (短均量/长均量)
+    'VOL_CHG',      # 成交量变化率
+    'VOL_REGIME',   # 成交量状态(放量/缩量)
+    'OBV',          # 能量潮 (On-Balance Volume)
+    'AVGPRICE',     # 均价 (OPEN+HIGH+LOW+CLOSE)/4
+    'WCLPRICE',     # 加权收盘价 (HIGH+LOW+2*CLOSE)/4
+    'CORREL',       # 滚动相关系数
+    'MOM_CHG',      # 动量变化
+    'UP_RATIO',     # 上涨比例
+    # ═══ 行业广度变量（预计算注入，测"市场共识"而非"价格偏离"） ═══
+    # 价格宽度 — 多少行业在涨？
+    'SECTOR_UP',           # 当日上涨行业比例 [0,1]
+    'SECTOR_MOM20',        # 20日动量>0的行业比例
+    'SECTOR_AD',           # 行业涨跌比 (adv-decl)/total
+    # 价格宽度 Z-score 标准化
+    'SECTOR_UP_Z',         # SECTOR_UP 的 Z-score
+    'SECTOR_MOM20_Z',      # SECTOR_MOM20 的 Z-score
+    # 均线宽度 — 均线上方行业密度
+    'BW_MA5',              # 5日均线以上行业比例
+    'BW_MA10',             # 10日均线以上行业比例
+    'BW_MA20',             # 20日均线以上行业比例（经典背离信号源）
+    'BW_MA20_Z',           # BW_MA20 的 Z-score
+    'BW_MOM5',             # 5日宽度变化率
+    # 离散度/轮动 — 行业有多一致？
+    'DISP',                # 行业日收益截面标准差（高=分化，低=同涨同跌）
+    'BW_MOM20',            # 20日宽度动量
+    'ROTSPD',              # 行业轮动速度（领涨行业切换频率）
+    'NHL20',               # 20日新高-新低行业净差
+    'SKEW',                # 行业收益截面偏度（>0=少数极端领涨，<0=少数暴跌拖累）
+    # 成交量结构 — 资金在往哪流？
+    'VMED',                # 行业中位数成交量
+    'VDISP',               # 行业成交量截面离散度（高=资金集中，低=均匀分布）
+    'VSKEW',               # 行业成交量截面偏度（>0=少数行业吸金）
+    # 相关性 — 市场是分散还是同步？（区别于单品种特征 CORREL）
+    'SEC_CORR',            # 行业平均两两相关系数（>0.7=系统性风险模式，<0.3=分散模式）
+    'SEC_CORRDISP',        # 行业相关性离散度
+    # 尾部风险 — 极端行情信号
+    'TAILUP',              # 右尾强度（行业极端上涨密度）
+    'TAILDOWN',            # 左尾强度（行业极端下跌密度）
+    'TAILNET',             # 尾部净强度 TAILUP - TAILDOWN
+    # 成交额
+    'AMT5',                # 5日成交额指标
+    'AMT10',               # 10日成交额指标
     # v4 因子模块自定义变量
     'BENCH', 'REL', 'SHARE', 'DOWNSIDE_VOL',
 ]
