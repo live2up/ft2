@@ -258,6 +258,37 @@ def safe_tanh(x):         return np.tanh(x)
 def safe_sigmoid(x):      return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
 def safe_relu(x):         return np.maximum(x, 0.0)
 
+def signed_power(x, exponent=2.0):
+    """带符号幂变换: sign(x) * |x|^exponent
+    保留方向，非线性放大/压缩幅度。
+    exponent>1 放大极端值，exponent<1 压缩振幅。
+    """
+    return np.sign(x) * np.power(np.abs(x), float(exponent))
+
+def safe_max(x, y):    return np.maximum(x, y)
+def safe_min(x, y):    return np.minimum(x, y)
+
+def ts_regression_residual(x, window):
+    """时序回归残差: 对时间做线性回归 x=a+b*t，返回当前值-预测值"""
+    x = np.asarray(x, float); window = int(window)
+    if window < 3:
+        return np.zeros_like(x)
+    r = np.full_like(x, 0.0)
+    for i in range(window - 1, len(x)):
+        seg = x[i - window + 1: i + 1]
+        valid = seg[~np.isnan(seg)]
+        if len(valid) < 3:
+            continue
+        t = np.arange(len(valid), dtype=float)
+        cov = np.cov(t, valid)
+        if cov[0, 0] < 1e-15:
+            continue
+        b = cov[0, 1] / cov[0, 0]
+        a = np.mean(valid) - b * np.mean(t)
+        predicted = a + b * (len(valid) - 1)
+        r[i] = valid[-1] - predicted
+    return r
+
 
 # ============================================================
 # 信号函数
@@ -452,6 +483,7 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'ts_decay_linear': ts_decay_linear,
     'ts_product':  ts_product,
     'ts_regression': ts_regression,
+    'ts_regression_residual': ts_regression_residual,
     # 扩张统计
     'expanding_mean': expanding_mean, 'expanding_median': expanding_median,
     'expanding_std':  expanding_std,  'expanding_percentile': expanding_percentile,
@@ -463,6 +495,8 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'abs': safe_abs, 'log': safe_log, 'sqrt': safe_sqrt,
     'sign': safe_sign, 'exp': safe_exp, 'tanh': safe_tanh,
     'sigmoid': safe_sigmoid, 'relu': safe_relu,
+    'signed_power': signed_power,
+    'safe_max': safe_max, 'safe_min': safe_min,
     # 信号
     'persist': persist,
     # 特征计算（从 OHLCV 实时算，无需 FeatureSpace）
@@ -500,6 +534,8 @@ VALID_VAR_PREFIXES = [
     'TREND_STRENGTH', 'LINEARREG', 'VAR',
     'VOL_RATIO', 'VOL_CHG', 'VOL_REGIME', 'OBV',
     'AVGPRICE', 'WCLPRICE', 'CORREL', 'MOM_CHG', 'UP_RATIO',
+    # v4 因子模块自定义变量
+    'BENCH', 'REL', 'SHARE', 'DOWNSIDE_VOL',
 ]
 
 def is_valid_variable(name: str) -> bool:
@@ -509,6 +545,6 @@ def is_valid_variable(name: str) -> bool:
     for pfx in VALID_VAR_PREFIXES:
         if upper.startswith(pfx + '_'):
             rest = upper[len(pfx) + 1:]
-            if rest and all(c.isdigit() or c == '_' for c in rest):
+            if rest and all(c.isascii() and (c.isalnum() or c == '_') for c in rest):
                 return True
     return False

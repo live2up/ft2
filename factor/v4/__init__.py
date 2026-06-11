@@ -31,6 +31,9 @@ from .base import (
     LibraryEntry, FactorLibrary,
 )
 
+# ── engine ──
+from .engine import V4FactorExpression
+
 # ── backtest ──
 from .backtest import FactorBacktest
 
@@ -41,6 +44,7 @@ from .validator import FactorValidator, ValidationResult
 from .cache import FactorCacheStore
 
 __all__ = [
+    'V4FactorExpression',
     'FactorBacktest',
     'FactorCategory', 'FactorMetadata', 'FactorLibrary',
     'FactorValidator', 'ValidationResult', 'FactorCacheStore',
