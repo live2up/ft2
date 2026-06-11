@@ -622,3 +622,57 @@ def is_valid_variable(name: str) -> bool:
             if rest and all(c.isascii() and (c.isalnum() or c == '_') for c in rest):
                 return True
     return False
+
+
+# ============================================================
+# 临时自定义注册 (外部模板热添加，无需修改 registry.py)
+# ============================================================
+#
+# 用法:
+#   from signals.v4.registry import register_function, register_variable
+#   register_function('my_indicator', lambda x, w: np.convolve(x, np.ones(w)/w, 'same'))
+#   register_variable('MY_VAR')
+#   expr = Expression("MY_VAR > 0 and my_indicator(CLOSE, 10) > 0")
+#
+# 注意: 注册是进程级全局操作，重复注册同名函数会覆盖。
+
+def register_function(name: str, func: Callable) -> None:
+    """临时注册自定义函数到表达式引擎。
+    
+    Args:
+        name: 函数名 (表达式中的调用名)
+        func: 函数实现，签名为 (*np.ndarray) -> np.ndarray
+    """
+    name_lower = name.lower()
+    if name_lower in FUNC_REGISTRY:
+        import warnings
+        warnings.warn(
+            f"register_function: '{name}' 已存在，将被覆盖。"
+            f"原函数: {FUNC_REGISTRY[name_lower].__name__}"
+        )
+    FUNC_REGISTRY[name_lower] = func
+
+
+def register_variable(prefix: str) -> None:
+    """临时注册自定义变量前缀到表达式引擎。
+    
+    Args:
+        prefix: 变量名前缀 (大小写不敏感)，支持 'prefix' 或 'prefix_suffix' 匹配
+    """
+    upper = prefix.upper()
+    if upper not in VALID_VAR_PREFIXES:
+        VALID_VAR_PREFIXES.append(upper)
+
+
+def unregister_function(name: str) -> bool:
+    """注销自定义函数，返回是否成功。内置函数不可注销。"""
+    return FUNC_REGISTRY.pop(name.lower(), None) is not None
+
+
+def unregister_variable(prefix: str) -> bool:
+    """注销自定义变量前缀，返回是否成功。"""
+    upper = prefix.upper()
+    if upper in VALID_VAR_PREFIXES:
+        VALID_VAR_PREFIXES.remove(upper)
+        return True
+    return False

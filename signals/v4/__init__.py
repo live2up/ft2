@@ -18,7 +18,7 @@ from .ast_dsl import (
     DSLSecurityError, DSLSyntaxError,
 )
 from .expression import Expression
-from .registry import FUNC_REGISTRY, is_valid_variable
+from .registry import FUNC_REGISTRY, is_valid_variable, register_function, register_variable, unregister_function, unregister_variable
 
 # V3 引擎（完全兼容，只依赖 core）
 from .engine import EngineCore, FastResult
@@ -29,5 +29,6 @@ __all__ = [
     'parse_expression', 'evaluate',
     'get_variables', 'get_functions',
     'FUNC_REGISTRY', 'is_valid_variable',
+    'register_function', 'register_variable',
     'DSLSecurityError', 'DSLSyntaxError',
 ]
