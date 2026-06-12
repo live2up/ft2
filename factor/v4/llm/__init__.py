@@ -7,12 +7,9 @@ factor/v4/llm — LLM 辅助因子发现内核
   - 完全复用 signals/v4 AST DSL 安全校验
 
 模块结构:
-  prompts.py    — Prompt 模板 (系统提示/few-shot/解释)
-  generator.py  — LLMGenerator (generate/mutate/explain)
+  prompts.py    — Prompt 模板 (系统提示/few-shot/解释/反馈)
+  generator.py  — LLMGenerator (generate/mutate/explain/generate_with_feedback)
   eval_utils.py — 快速评估 (IC/IR/回测)
-
-模板文件 (给 Agent 复制用):
-  factor_agent_template.py — 因子发现 Agent 模板 (复制→填IDEA→运行)
 
 快速使用:
   >>> from factor.v4.llm import LLMGenerator, quick_ic_batch
