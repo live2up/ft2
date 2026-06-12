@@ -120,28 +120,19 @@ class FactorExpression:
             )
         return result
 
-    def evaluate_ranked(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        """截面排名求值 → 0~1 排名矩阵
+    def _find_cs_rank_nodes(self):
+        """收集 AST 中所有 cs_rank Call 节点"""
+        nodes = []
+        for node in ast.walk(self._tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == 'cs_rank'
+                    and node.args):
+                nodes.append(node)
+        return nodes
 
-        AST 级别处理: 检测 cs_rank() 外层包装，剥离内层表达式求值，
-        再每日截面排名。解决逐列求值时 cs_rank 失去跨品种上下文的问题。
-
-        Returns:
-            ndarray(T,N), 每行截面排名(pct, 0~1), 值越大排名越高
-        """
-        # AST 级别剥离 cs_rank: 取 Call 的第一个参数作为内层表达式
-        if self._has_cs_rank:
-            inner_node = self._tree.body.args[0]
-            inner_tree = ast.Expression(body=inner_node)
-            inner_name = ast.unparse(inner_node)
-        else:
-            inner_tree = self._tree
-            inner_name = self.expr_str
-
-        # 对内层表达式求值 (逐列 2D)
-        inner_expr = _ExpressionFromAST(inner_tree, inner_name)
-        vals = inner_expr.evaluate(data)
-
+    def _cross_sectional_rank(self, vals: np.ndarray) -> np.ndarray:
+        """每日截面排名 → 0~1"""
         from scipy.stats import rankdata
         T, N = vals.shape
         ranked = np.full((T, N), 0.0)
@@ -153,6 +144,70 @@ class FactorExpression:
                 ranked[t, valid] = np.nan_to_num(
                     rk / valid.sum(), nan=0.5, posinf=0.5, neginf=0.5)
         return ranked
+
+    def evaluate_ranked(self, data: Dict[str, np.ndarray]) -> np.ndarray:
+        """截面排名求值 → 0~1 排名矩阵
+
+        支持三种模式:
+          cs_rank(A)          → 剥离外层, 求值内层, 截面排名
+          0.4*A + 0.3*B      → 直接逐列求值, 截面排名
+          0.4*cs_rank(A) + 0.3*cs_rank(B)  → AST检测嵌套, 各自排名, 加权组合
+
+        Returns:
+            ndarray(T,N), 每行截面排名(pct, 0~1), 值越大排名越高
+        """
+        # 模式1: 外层 cs_rank(inner) — 剥离求值
+        if self._has_cs_rank:
+            inner_node = self._tree.body.args[0]
+            inner_tree = ast.Expression(body=inner_node)
+            inner_expr = _ExpressionFromAST(inner_tree, 'inner')
+            vals = inner_expr.evaluate(data)
+            return self._cross_sectional_rank(vals)
+
+        # 查找嵌套 cs_rank 调用
+        csrank_nodes = self._find_cs_rank_nodes()
+
+        # 模式2: 无 cs_rank — 直接求值后排名
+        if not csrank_nodes:
+            vals = _ExpressionFromAST(self._tree, self.expr_str).evaluate(data)
+            return self._cross_sectional_rank(vals)
+
+        # 模式3: 含多个 cs_rank — AST 替换 + 变量注入
+        import copy
+        n_replace = 0
+        # 用 (func_id, args_hint) 作为稳定键，避免 deepcopy 后 id 变化
+        sub_arrays = []  # [(var_name, ndarray), ...] 按替换顺序
+
+        for node in csrank_nodes:
+            n_replace += 1
+            var_name = f'_CSR{n_replace}'
+            inner_tree = ast.Expression(body=node.args[0])
+            inner_expr = _ExpressionFromAST(inner_tree, f'csr{n_replace}')
+            inner_vals = inner_expr.evaluate(data)
+            ranked = self._cross_sectional_rank(inner_vals)
+            sub_arrays.append((var_name, ranked))
+
+        class _CSRTransformer(ast.NodeTransformer):
+            def __init__(self):
+                self._count = 0
+
+            def visit_Call(self, node):
+                if (isinstance(node.func, ast.Name)
+                        and node.func.id == 'cs_rank'):
+                    self._count += 1
+                    idx = self._count - 1
+                    if idx < len(sub_arrays):
+                        return ast.Name(id=sub_arrays[idx][0], ctx=ast.Load())
+                return self.generic_visit(node)
+
+        new_tree = _CSRTransformer().visit(copy.deepcopy(self._tree))
+        ast.fix_missing_locations(new_tree)
+
+        data_with = dict(data)
+        for var_name, arr in sub_arrays:
+            data_with[var_name] = arr
+
+        return _ExpressionFromAST(new_tree, self.expr_str).evaluate(data_with)
 
     def __repr__(self):
         return f"FactorExpression({self.expr_str[:60]!r})"

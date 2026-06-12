@@ -131,12 +131,12 @@ class EngineCore:
                 if len(bars) == 0:
                     return
 
-                # 判断是否调仓日 (取首个 bar 的 eob)
+                # 判断是否调仓日 (strip time from eob for comparison)
                 current_date = None
                 for b in bars:
                     dt = b.get('eob')
                     if dt is not None:
-                        current_date = dt
+                        current_date = pd.Timestamp(dt).normalize()
                         break
                 if current_date is None or current_date not in rebalance_set:
                     return
@@ -148,9 +148,9 @@ class EngineCore:
                 top_codes = set(row.nlargest(top_n).index.tolist())
 
                 # 平仓: 不在 Top N 的品种全部卖出
-                positions = ctx.account.get_positions()
+                positions = ctx.account.get_position()  # None → 所有持仓 dict
                 for code, pos in list(positions.items()):
-                    if pos.shares > 0 and code not in top_codes:
+                    if pos.get('volume', 0) > 0 and code not in top_codes:
                         try:
                             ctx.account.order_percent(
                                 code, 1.0, OrderSide.Sell,
@@ -164,7 +164,7 @@ class EngineCore:
                     weight = 1.0 / len(top_codes)
                     for code in top_codes & symbols_set:
                         pos = positions.get(code)
-                        if pos and pos.shares > 0:
+                        if pos and pos.get('volume', 0) > 0:
                             continue  # 已持有
                         try:
                             ctx.account.order_percent(
