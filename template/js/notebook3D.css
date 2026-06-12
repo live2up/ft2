@@ -786,7 +786,6 @@ body {
 
 /* 基础表格样式 */
 .ft-table {
-    width: 100%;
     border-collapse: collapse;
     font-size: 14px;
     text-align: left;
@@ -802,6 +801,7 @@ body {
     border-bottom: 1px solid #e9e9e9;
     color: #37352f;
     white-space: nowrap;
+    min-width: 100px;
 }
 
 /* 表体样式 */
@@ -809,6 +809,12 @@ body {
     padding: 10px 12px;
     border-bottom: 1px solid #eee;
     color: #333;
+    min-width: 100px;
+    max-width: 400px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: break-all;
+    overflow-wrap: break-word;
 }
 
 /* 行悬停效果 */
