@@ -98,18 +98,15 @@ class EngineCore:
         dates = panel.index.sort_values()
         symbols = panel.columns.tolist()
 
-        rebalance_dates = pd.Series(dates).resample(rebalance).last().dropna()
+        rebalance_dates = dates.to_series().resample(rebalance).last().dropna()
         rebalance_set = set(rebalance_dates)
 
         engine = Engine(init_cash=initial_capital)
         context.mode = 'backtest'
-
-        # 默认无费率 (因子轮动与指数择时一致)
         engine.account.fee_config['commission_rate'] = 0.0
         engine.account.fee_config['stamp_tax_rate'] = 0.0
         engine.account.fee_config['min_commission'] = 0.0
 
-        # 注册数据
         for code in symbols:
             if code in assets:
                 df = assets[code].copy()
@@ -215,8 +212,8 @@ class EngineCore:
         dates = panel.index.sort_values()
         symbols = panel.columns.tolist()
 
-        rebalance_dates = pd.Series(dates).resample(rebalance).last().dropna()
-        rebalance_set = set(rebalance_dates)
+        rebalance_dates = dates.to_series().resample(rebalance).last().dropna()
+        rebalance_set = {pd.Timestamp(d.date()) for d in rebalance_dates}
 
         engine = Engine(init_cash=initial_capital)
         context.mode = 'backtest'
@@ -261,12 +258,12 @@ class EngineCore:
                             total_nav += shares * b.get('close', b.get('open', 0))
                 nav_history.append(total_nav)
 
-                # 判断调仓日
+                # 判断调仓日 (strip time from eob for comparison)
                 current_date = None
                 for b in bars:
                     dt = b.get('eob')
                     if dt is not None:
-                        current_date = dt
+                        current_date = pd.Timestamp(dt).normalize()
                         break
                 if current_date is None:
                     return
