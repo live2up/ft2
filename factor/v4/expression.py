@@ -1,4 +1,4 @@
-# [重构] 2026-06-12 从 engine.py 重命名，对齐 signals/v4/expression.py
+# [重构] 2026-06-12 对齐 signals/v4/expression.py 参数规范
 """
 factor/v4/expression.py — 因子表达式引擎 (基于 signals.v4 AST DSL)
 
@@ -14,6 +14,7 @@ factor/v4/expression.py — 因子表达式引擎 (基于 signals.v4 AST DSL)
     >>> expr = FactorExpression("ts_rank((CLOSE - ts_delay(CLOSE, 20)), 10)")
     >>> panel = expr.evaluate(data_dict)  # → ndarray(T, N)
 """
+import ast
 import numpy as np
 from typing import Dict
 
@@ -26,18 +27,26 @@ _BASE_VARS = {'open', 'high', 'low', 'close', 'volume', 'amount'}
 class FactorExpression:
     """因子表达式 — 字符串 → AST → ndarray(T,N)
 
+    对齐 signals/v4 Expression 参数规范:
+      - expr_str: 表达式字符串
+      - variables: 依赖变量列表
+      - functions: 依赖函数列表
+      - complexity: AST 节点数
+
     Example:
         >>> expr = FactorExpression("cs_rank(ts_roc(CLOSE, 20))")
         >>> panel = expr.evaluate(data_dict)    # ndarray(T,N)
-        >>> print(expr.terminals)               # {'CLOSE'}
+        >>> print(expr.variables)               # ['CLOSE']
         >>> print(expr.functions)               # ['cs_rank', 'ts_roc']
     """
 
-    def __init__(self, expression: str):
-        self.source = expression
-        self._tree = dsl.parse_expression(expression)
-        self.terminals = set(dsl.get_variables(self._tree))
+    def __init__(self, expr_str: str, name: str = None):
+        self.expr_str = expr_str.strip()
+        self.name = name or expr_str[:60]
+        self._tree = dsl.parse_expression(self.expr_str)
+        self.variables = dsl.get_variables(self._tree)
         self.functions = dsl.get_functions(self._tree)
+        self.complexity = sum(1 for _ in ast.walk(self._tree.body))
 
     def evaluate(self, data: Dict[str, np.ndarray]) -> np.ndarray:
         """求值为 (T, N) ndarray。
@@ -73,7 +82,7 @@ class FactorExpression:
         return result
 
     def __repr__(self):
-        return f"FactorExpression({self.source[:60]!r})"
+        return f"FactorExpression({self.expr_str[:60]!r})"
 
     def __str__(self):
-        return self.source
+        return self.expr_str

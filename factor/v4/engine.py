@@ -59,7 +59,7 @@ class EngineCore:
                  assets: Dict[str, pd.DataFrame],
                  top_n: int = 3,
                  rebalance: str = 'W',
-                 mode: str = 'fast',
+                 mode: str = 'full',
                  initial_capital: float = 1_000_000,
                  start_date: str = None,
                  bench_label: str = None) -> Union[AccountAnalyzer, FastResult]:
