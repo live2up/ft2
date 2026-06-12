@@ -2,7 +2,8 @@
 factor/v4/llm/eval_utils.py — 快速评估工具
 
 用于人在回路的快速验证：生成表达式 → 一行求 IC/IR → 观察 → 反馈 LLM。
-依赖 signals/v4 (Expression) + factor/v4 (V4FactorExpression/Validator/Backtest)。
+依赖 signals/v4 (Expression) + factor/v4 (FactorExpression/Validator/Backtest)。
+
 """
 
 import numpy as np
@@ -11,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 from signals.v4 import Expression
-from factor.v4.engine import V4FactorExpression
+from factor.v4.expression import FactorExpression
 from factor.v4.validator import FactorValidator
 
 
@@ -48,7 +49,7 @@ def quick_ic(expression: str,
         >>> print(f"IC={ic.ic_mean:.4f}, IR={ic.icir:.2f}")
     """
     try:
-        expr = V4FactorExpression(expression)
+        expr = FactorExpression(expression)
         values = expr.evaluate(panel_data)
         fv = pd.DataFrame(values, index=returns.index, columns=returns.columns)
 
@@ -141,8 +142,8 @@ def quick_sharpe(expression: str,
     Returns:
         年化 Sharpe
     """
-    from factor.v4.backtest import FactorBacktest
+    from factor.v4.engine import EngineCore
 
     ranked = quick_rank_panel(expression, assets)
-    result = FactorBacktest.run(ranked, assets, top_n=top_n, rebalance=rebalance)
+    result = EngineCore.backtest(ranked, assets, top_n=top_n, rebalance=rebalance)
     return result.sharpe

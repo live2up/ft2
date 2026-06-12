@@ -32,10 +32,10 @@ from .base import (
 )
 
 # ── engine ──
-from .engine import V4FactorExpression
+from .engine import EngineCore, FastResult
 
-# ── backtest ──
-from .backtest import FactorBacktest
+# ── expression ──
+from .expression import FactorExpression
 
 # ── validator ──
 from .validator import FactorValidator, ValidationResult
@@ -44,8 +44,8 @@ from .validator import FactorValidator, ValidationResult
 from .cache import FactorCacheStore
 
 __all__ = [
-    'V4FactorExpression',
-    'FactorBacktest',
+    'EngineCore', 'FastResult',
+    'FactorExpression',
     'FactorCategory', 'FactorMetadata', 'FactorLibrary',
     'FactorValidator', 'ValidationResult', 'FactorCacheStore',
 ]
