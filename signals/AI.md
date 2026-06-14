@@ -10,8 +10,8 @@
 
 | 版本 | 状态 | 说明 |
 |------|------|------|
-| **v4** | **主力** | Python AST DSL, 63 原语, EngineCore, `from signals.v4 import ...` |
-| v3 | 冻结 | 自研 Parser + FeatureSpace，不再推荐使用 |
+| **v4** | **主力** | Python AST DSL, 67 原语, EngineCore, 探索灵活, `from signals.v4 import ...` |
+| v3 | 保留 | 仅供历史测试对照，自研 Parser + FeatureSpace |
 | v1/v2 | 已归档 | `signals/_archived/v1/`, `signals/_archived/v2/` |
 
 ## v4 核心变革
@@ -20,8 +20,8 @@
 v3:  FeatureSpace.precompute → 37列特征表 → 自研Parser → 0/1信号 → EngineV3
      问题: Parser 400行, 特征表1200行, LLM需学自定义语法
 
-v4:  Python ast.parse() → 63原语实时计算 → 连续/0/1信号 → EngineCore
-     优势: 零自研Parser, 原生Python语法, LLM即学即用, 特征按需算
+v4:  Python ast.parse() → 67原语实时计算 → 连续/0/1信号 → EngineCore
+     优势: 零自研Parser, 原生Python语法, LLM即学即用, 特征按需算, 探索灵活
 ```
 
 ## 架构总览
@@ -33,7 +33,7 @@ v4:  Python ast.parse() → 63原语实时计算 → 连续/0/1信号 → Engine
                    ▼                      ▼                      ▼
            signals/v4/              signals/v4/            signals/v4/
            ast_dsl.py               registry.py            engine.py
-           ast.parse()              63 原语注册表           EngineCore
+           ast.parse()              67 原语注册表           EngineCore
            安全白名单               ts_mean/rsi/atr/...    backtest(fast|full)
                    │                      │                      │
                    └──────────┬───────────┘                      │
@@ -58,14 +58,14 @@ v4:  Python ast.parse() → 63原语实时计算 → 连续/0/1信号 → Engine
 signals/
 ├── v4/                     # 主力 ←
 │   ├── ast_dsl.py          # Python ast Parser + 安全校验
-│   ├── registry.py         # 63 原语注册表
+│   ├── registry.py         # 67 原语注册表
 │   ├── expression.py       # Expression 类 (generate/evaluate_panel/rank_panel)
 │   ├── engine.py           # EngineCore (fast/full 双模式)
 │   ├── scoring.py           # 连续值打分 + 三区状态机
 │   ├── market_breadth.py   # 市场宽度
 │   ├── wf_result.py        # Walk-Forward 结果
 │   └── __init__.py         # 统一导出
-├── v3/                     # 冻结 (不再推荐使用)
+├── v3/                     # 保留 (仅供历史测试对照)
 └── _archived/              # v1 + v2 已归档
     ├── v1/
     └── v2/
@@ -316,8 +316,8 @@ ast.parse(expr) → 三层白名单校验:
 ## 注意事项
 
 - **v1/v2 已归档** (`signals/_archived/`)，不再使用
-- **v3 冻结**，不再推荐使用
-- **v4 主力**：`from signals.v4 import Expression, EngineCore`
+- **v3 保留**，仅供历史测试对照
+- **v4 主力**：`from signals.v4 import Expression, EngineCore`，探索灵活
 - FeatureSpace 仍存在于 v3，可作为兼容层（`extra_features=dict`传入），但不需要
 - `evaluate_panel()` 确保索引对齐到 data 尾部（FeatureSpace 冷启动截断）
 - `EngineCore.backtest(mode='fast')` 的 Sharpe 与 `mode='full'` 一致

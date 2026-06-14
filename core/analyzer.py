@@ -498,7 +498,7 @@ class AccountAnalyzer:
         if returns is None or len(returns) < 2:
             return None
         
-        return np.std(returns) * np.sqrt(252)
+        return np.std(returns, ddof=1) * np.sqrt(252)  # [修改] 2026-06-14 统一ddof=1(金融行业标准)
 
     @metric(name='夏普比率', group='风险', fmt='.2f', desc='每承担一单位风险获得的超额收益', order=21)
     def sharpe_ratio(self) -> Optional[float]:

@@ -21,8 +21,8 @@
 import sys; sys.path.insert(0, r'd:\01-Doc\Quant\ft2')
 from core import Engine, AccountAnalyzer, context, OrderSide, BenchHolder
 from notebook import Notebook
-from factor.v3 import FactorExpression, GPEngine, FactorDiscoveryEngine  # v3 推荐
-from signals.v2 import Expression, FeatureSpace, run_backtest_with_core  # v2.1 推荐
+from factor.v4 import FactorExpression, FactorLibrary, FactorValidator  # v4 推荐
+from signals.v4 import Expression, EngineCore  # v4 推荐 (AST DSL)
 ```
 
 ## 数据约定

@@ -1,183 +1,205 @@
-# factor 模块 - AI 快速上手
+# factor 模块 AI 助手指南
 
-> 因子挖掘体系
+> **版本：v4 | 更新日期：2026-06-14**
 
-> **版本：v3.3.0 | 更新日期：2026-06-07**
->
-> **AI 助手注意：** 如果发现实际 API 与本文档不一致，说明源码已更新但 AI.md 未同步，请提醒用户更新。
->
-> **[v3.3 新增]** 统一参数命名规范 → 见「命名规范」章节
+## 项目定位
 
----
+因子挖掘 + 因子轮动研究模块。基于 signals.v4 Python AST DSL 构建，共享 67 原语，LLM 原生友好。
 
 ## 版本说明
 
-- **v3/** — 维护中，**推荐使用**。GP 发现引擎 + 可插拔适应度 + 迭代探索 + 自增长因子库 + 持久化存档
-- **v2/** — 不再更新。保留 GP 挖掘、表达式引擎、回测管线，但无持久化
-- **v1/** — 已归档，仅作历史参考
+| 版本 | 状态 | 说明 |
+|------|------|------|
+| **v4** | **主力** | signals.v4 AST DSL + ft2.core Engine + 67 原语, 探索灵活, `from factor.v4 import ...` |
+| v3 | 保留 | 仅供历史测试对照，自研 Parser + 23 原语 + 自研回测 Pipeline |
+| v1/v2 | 已归档 | `factor/_archived/` |
+
+## v4 核心变革
+
+```
+v3:  自研Parser → 23原语 → 自研回测Pipeline → FactorExpression
+     问题: 语法自定义(add/sub/mul), 原语少, Pipeline与signals回测不统一
+
+v4:  signals.v4 AST DSL → 67原语实时计算 → ft2.core Engine回测 → FactorExpression
+     优势: 原生Python语法, 原语3倍, 回测引擎统一, 探索灵活
+```
+
+## 架构总览
+
+```
+                    面板数据 Dict[str, ndarray(T,N)]
+                                  │
+                   ┌──────────────┼──────────────────┐
+                   ▼              ▼                    ▼
+           factor/v4/      signals/v4/          factor/v4/
+           expression.py    Expression           engine.py
+           FactorExpression + rank_panel         EngineCore
+           (薄包装层)       (AST DSL)            fast/full 双模式
+                   │              │                    │
+                   └──────┬───────┘                    │
+                          ▼                            │
+                  factor/v4/                           │
+                  discover.py                          │
+                  GPEngine + FactorDiscoveryEngine      │
+                          │                            │
+                          └──────────┬─────────────────┘
+                                     ▼
+                            ┌──────────────┐
+                            │   ft2.core    │
+                            │ Engine/Account │
+                            │ Analyzer/      │
+                            │ Notebook       │
+                            └──────────────┘
+```
+
+## 目录结构
+
+```
+factor/
+├── v4/                     # 主力 ←
+│   ├── __init__.py         # 统一导出
+│   ├── expression.py       # FactorExpression (基于 signals.v4 AST DSL)
+│   ├── engine.py           # EngineCore (fast/full 双模式, ft2.core 驱动)
+│   ├── discover.py         # GPEngine + FactorDiscoveryEngine
+│   ├── validator.py        # IC/IR/Bootstrap 检验
+│   ├── search.py           # 网格搜索 + 贝叶斯优化
+│   ├── cache.py            # 因子值缓存
+│   ├── base.py             # FactorLibrary + FactorMetadata (复用 v3)
+│   ├── industry_fitness.py # 行业适应度
+│   ├── llm/                # LLM 因子生成器
+│   │   ├── generator.py
+│   │   ├── prompts.py
+│   │   └── eval_utils.py
+│   ├── formulas/           # 公式库 (V4 语法)
+│   │   ├── wq101.py        # WorldQuant 101 Alpha
+│   │   ├── gt191.py        # 国泰安 191 Alpha
+│   │   ├── industry.py     # 行业因子
+│   │   └── basic.py        # 因子原子基元
+│   └── discovered/         # GP 发现因子存档
+├── v3/                     # 保留 (仅供历史测试对照)
+└── _archived/              # v1 + v2 已归档
+```
 
 ---
 
-## 核心 API (v3)
+## 核心 API (v4)
 
-> v3 构建一个**可持续的因子发现流水线**：
-> ```
-> 种子注入(formulas) → 多策略GP并行(IC/Sharpe/多频率) → Pipeline验证 → 入库 → 持久化(discovered/)
->                                                                   ↓
->                                                          扩大的种子池 → 下一轮
-> ```
-
-### 1. 因子表达式引擎
+### 0. 导入规范
 
 ```python
-from factor.v3 import FactorExpression
+from factor.v4 import FactorExpression, EngineCore, FactorLibrary
+
+# 表达式 → 因子面板 → 回测 → 报告 (一站式)
+from signals.v4 import Expression
+expr = Expression("cs_rank(ts_roc(CLOSE, 20))")
+panel = expr.rank_panel(assets)                              # 因子排名面板
+result = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
+# result.sharpe, result.cagr, result.max_drawdown
+
+# full 模式: 验证 + 报告
+analyzer = EngineCore.backtest(panel, assets, mode='full', top_n=3,
+                               rebalance='W', bench_label='000300.SH')
+analyzer.to_notebook("因子轮动回测")
+```
+
+### 1. FactorExpression — 因子表达式
+
+```python
+from factor.v4 import FactorExpression
 
 # 字符串 → 因子值面板
-expr = FactorExpression("ts_rank(sub(close, delay(close, 20)), 10)")
-panel = expr.evaluate(data_dict)  # → ndarray(T, N)
-# expr.terminals  → {'close'}
-# expr.depth      → 4
-# expr.node_count → 9
+expr = FactorExpression("cs_rank(ts_roc(CLOSE, 20))")
+panel = expr.evaluate(data_dict)         # → ndarray(T, N)
+ranked = expr.evaluate_ranked(data_dict) # → 截面排名 0~1
+
+# 表达式自省
+expr.variables    # ['CLOSE']
+expr.functions    # ['cs_rank', 'ts_roc']
+expr.complexity   # AST 节点数
 ```
 
-**表达式语法速查：**
-```
-终端变量:   open, high, low, close, volume, amount
-            ★ 自定义变量: 任何在 data 字典中的字段都可作为终端变量
-               (如 rel_close, share, downside_vol, rel_volume, rel_amount)
-一元函数:   abs(x), sqrt(x), log(x), exp(x), neg(x), sign(x), tanh(x), not(x)
-二元函数:   add(x,y), sub(x,y), mul(x,y), div(x,y), max(x,y), min(x,y)
-            gt(x,y), lt(x,y), ge(x,y), le(x,y), eq(x,y), ne(x,y), and(x,y), or(x,y)
-时序原语:   ts_rank(x, window)      ts_zscore(x, window)
-            delay(x, window)         delta(x, window)  差分(省1层)
-            decay_linear(x, window)  ts_sum/mean/std/max/min(x, window)
-            sma(x, window, offset)   correlation/covariance/regbeta(x,y,window)
-            ts_argmin/max(x, window) ts_skew(x, window)  偏度
-截面原语:   cs_rank(x)              cs_zscore(x, window)
-            cs_mean(x)              signed_power(x, exp)
-健壮处理:   winsorize(x, n)         截尾到 ±nσ
-语法糖:     ret(window)             收益差（省2层）
-            adv(window)             均量（省1层）
-            intra_ret               日内收益（(c-o)/o）
-条件分支:   ifelse(cond, a, b)
+**表达式语法与 signals.v4 完全一致** (67 原语，详见 signals/AI.md)：
+- 数据源: `CLOSE OPEN HIGH LOW VOLUME AMOUNT`
+- 时序: `ts_mean ts_std ts_rank ts_roc ts_zscore ts_delay ts_delta ...`
+- 截面: `cs_rank cs_zscore cs_scale cs_winsorize ...`
+- 特征: `rsi atr macd ema tsf kama ...`
+- 数学: `abs log sqrt sign exp tanh sigmoid ...`
+- Python 原生: `+ - * / > < and or not a if cond else b`
 
-示例: ts_rank(winsorize(mul(delta(close, 20), adv(10)), 3), 10)
-自定义: ts_rank(rel_close, 20)      # rel_close 预计算后注入 panel_dict
-```
-
-### 2. GP 符号回归引擎（核心升级）
+### 2. EngineCore — 因子轮动回测
 
 ```python
-from factor.v3 import GPEngine, FitnessMode, Individual
+from factor.v4 import EngineCore
+
+# fast 模式: 搜索 (~0.5s/次)
+r = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
+# → FastResult(sharpe=1.16, cagr=0.148, max_drawdown=-0.10, trades=112)
+
+# full 模式: 验证 + 报告
+analyzer = EngineCore.backtest(panel, assets, mode='full', top_n=3,
+                               rebalance='W', bench_label='000300.SH')
+analyzer.to_notebook("因子轮动")
+```
+
+**EngineCore 参数说明：**
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `panel` | 因子排名面板, DataFrame(index=日期, columns=品种) | — |
+| `assets` | `{品种代码: OHLCV DataFrame}` | — |
+| `top_n` | 持仓品种数 | 3 |
+| `rebalance` | 调仓频率 'D'/'W'/'M' | 'W' |
+| `mode` | 'fast' → FastResult, 'full' → AccountAnalyzer | 'full' |
+| `initial_capital` | 初始资金 | 1_000_000 |
+| `start_date` | 回测起始日 | None=数据首位 |
+| `bench_label` | full 模式基准标签 | None |
+
+### 3. GP 符号回归引擎
+
+```python
+from factor.v4.discover import GPEngine, FitnessMode
 
 gp = GPEngine(
     data=panel_dict,            # {col: ndarray(T,N)}
     future_returns=returns_df,  # DataFrame(T,N)
-    returns=returns_df,         # 原始收益率（Sharpe/MultiFreq 模式需要）
-    fitness_mode=FitnessMode.ICIR,  # 适应度：ICIR / SHARPE / MULTI_FREQ
+    returns=returns_df,
+    fitness_mode=FitnessMode.ICIR,  # ICIR / SHARPE / MULTI_FREQ
     population_size=300,
     generations=30,
     max_depth=8,
-    # 可选：自定义原语集和终端集
-    custom_terminals=['close', 'volume', 'open'],
-    custom_primitives=[('ts_rank', 'window', [5,10,20,30])],
-    seed_expressions=[           # 已知好因子注入
-        "ts_rank(sub(close, delay(close, 20)), 10)",
-    ],
+    seed_expressions=["ts_rank(sub(close, delay(close, 20)), 10)"],
 )
 gp.run()
 best = gp.best()
-# best.expression_str  →  "ts_rank(mul(...), 10)"
-# best.fitness         →  2.34
-# best.depth, best.node_count
-
-print(gp.report())
+# best.expression_str, best.fitness, best.depth
 ```
 
-**v2 vs v3 关键差异：**
-| 项目 | v2 `FactorGPMiner` | v3 `GPEngine` |
-|------|-------------------|---------------|
-| 适应度 | 固定 ICIR | 可插拔 `ICIR/SHARPE/MULTI_FREQ` |
-| 调度器 | 全局硬编码 | 构造注入 |
-| 原语集 | 硬编码 | 构造参数传入 |
-
-### 3. 因子发现引擎（v3 核心）
+### 4. 因子发现引擎
 
 ```python
-from factor.v3 import FactorDiscoveryEngine
+from factor.v4.discover import FactorDiscoveryEngine
 
 engine = FactorDiscoveryEngine(
     data=panel_dict,
     returns=returns_df,
-    seed_formulas=ALPHA101,      # 注入公式库作初始种子
+    seed_formulas=ALPHA101,
     cost_rate=0.0,
     seed_top_n=50,
-    save_dir='./discovered',     # [新增] GP 结果持久化目录
+    save_dir='./discovered',
 )
 
-# 多轮迭代 — 每轮可配置不同的适应度策略、调仓频率、持仓数
+# 多轮迭代
 report = engine.run_pipeline(rounds=[
-    # 第一轮：ICIR 快筛，月末+Top5 验证
-    {'mode': 'icir', 'generations': 20, 'top_n': 50,
-     'freq': 'ME', 'val_top_n': 5},
-    # 第二轮：Sharpe 验证，周度+Top3
-    {'mode': 'sharpe', 'generations': 40, 'top_n': 30,
-     'freq': 'W', 'val_top_n': 3},
-    # 第三轮：多频率稳健性
-    {'mode': 'multi_freq', 'generations': 30, 'top_n': 20,
-     'freq': '10D', 'val_top_n': 10},
+    {'mode': 'icir', 'generations': 20, 'top_n': 50, 'freq': 'ME', 'val_top_n': 5},
+    {'mode': 'sharpe', 'generations': 40, 'top_n': 30, 'freq': 'W', 'val_top_n': 3},
 ])
 
-# 每轮结束后自动保存到 save_dir/gp_round_001.json
 print(f"发现 {engine.library.size()} 个因子")
-# engine.library.seed_expressions(50)  → 下一轮种子
-# engine.library.by_source('gp')       → GP 发现的因子
-# engine.library.by_time('2026-06-01') → 按时间筛选
-# engine.library.to_dataframe()        → 导出表格
 ```
 
-### 4. 适应度策略
+### 5. 因子检验
 
 ```python
-from factor.v3 import (
-    ICIRFitness,       # |IC_mean| × ICIR × 100（快筛）
-    SharpeFitness,     # Pipeline 回测 Sharpe（真实绩效）
-    MultiFreqFitness,  # ME/W/N天 多频率取最优
-    make_fitness_calculator,
-    FitnessMode,
-)
-from factor.v3 import FixedScheduler, IntervalScheduler, TopNEqualWeight
-
-# 构建自定义适应度计算器（配合自定义调度器）
-calc = SharpeFitness(data, future_returns, returns,
-    scheduler=IntervalScheduler(5),      # 每5天调仓
-    allocator=TopNEqualWeight(10),       # Top10 等权
-)
-```
-
-### 5. 因子基类
-
-```python
-from factor.v3 import Factor, FactorMetadata, FactorCategory, FactorFrequency
-
-class MomentumFactor(Factor):
-    def __init__(self, lookback=20):
-        meta = FactorMetadata(
-            name='Momentum', category=FactorCategory.MOMENTUM,
-            frequency=FactorFrequency.DAILY,
-        )
-        super().__init__(meta)
-        self.lookback = lookback
-
-    def calculate(self, data, symbols, dates):
-        close = data['close']
-        return close / close.shift(self.lookback) - 1
-```
-
-### 6. 因子检验
-
-```python
-from factor.v3 import FactorValidator
+from factor.v4 import FactorValidator, ValidationResult
 
 validator = FactorValidator(factor_values, future_returns)
 ic = validator.information_coefficient()
@@ -186,160 +208,49 @@ decay = validator.decay_rate(max_lookforward=20)
 groups = validator.group_return(n_groups=10)
 ```
 
-### 7. 回测管线
+### 6. 因子库 + 持久化
 
 ```python
-from factor.v3 import FactorPipeline, FixedScheduler, IntervalScheduler, TopNEqualWeight
-
-pipeline = FactorPipeline(
-    returns=returns_df,
-    scheduler=FixedScheduler('ME'),     # 月末调仓
-    allocator=TopNEqualWeight(top_n=3),  # v3默认Top3等权
-    cost_rate=0.0,                       # v3默认0手续费
-)
-result = pipeline.evaluate(factor_values)
-# result.sharpe_ratio, result.max_drawdown, result.annual_return
-
-# 调仓周期完全自定义：
-# FixedScheduler('W')         周度
-# IntervalScheduler(10)       每10个交易日
-# IntervalScheduler(5)        每5个交易日
-
-# 多频率对比
-results = pipeline.compare_frequencies(fv, ['ME', 'W', '5D', '10D'])
-```
-
-### 8. 网格搜索 + BO 搜索
-
-```python
-from factor.v3 import FactorGridSearch, FactorBOSearch
-
-# 网格搜索（lookback × freq × topN 全排列）
-gs = FactorGridSearch(returns)
-results = gs.search(
-    factor_name="momentum",
-    factor_fn=lambda lb: ...,       # (lookback) → DataFrame
-    lookbacks=[20, 40, 60, 80, 120],
-    freqs=['ME', 'W', '5D'],
-    top_ns=[3, 5, 10],
-)
-best = gs.best(5)
-
-# 贝叶斯优化
-bo = FactorBOSearch(returns)
-opt = bo.search("momentum", factor_fn,
-    param_space=[(5, 200, 'lookback')],
-    n_calls=30, freq='ME', top_n=3)
-```
-
-### 9. 因子组合
-
-```python
-from factor.v3 import EqualWeightCombiner, ExpandingICCombiner, cross_section_zscore
-
-norm = cross_section_zscore(factor_values)
-
-# 等权组合
-ew = EqualWeightCombiner()
-combined = ew.combine([('f1', fv1), ('f2', fv2)])
-
-# 动态 IC 加权（无前瞻偏差）
-icw = ExpandingICCombiner(min_periods=60)
-combined_dyn = icw.combine([('f1', fv1), ('f2', fv2)], returns=returns_df)
-```
-
-### 10. 自增长因子库 + 持久化
-
-```python
-from factor.v3 import FactorLibrary, LibraryEntry
+from factor.v4 import FactorLibrary
+from factor.v4.base import LibraryEntry
 
 lib = FactorLibrary()
-
-# 入库 — created_at 自动打时间戳
 lib.register(LibraryEntry('alpha001', formula, fitness=1.5, source='gp'))
 lib.register_batch(entries)
 
 # 查询
-lib.by_source('gp')              # GP 发现的因子
-lib.by_category(FactorCategory.MOMENTUM)
-lib.by_round(3)                  # 第3轮发现的
-lib.by_time('2026-06-01', '2026-06-04')  # [新增] 按时间范围筛选
-lib.seed_expressions(50)         # 取 Top 50 作下一轮种子
-lib.top(10, sort_by='sharpe')    # 按指标排名
-lib.to_dataframe()               # 导出（含 created_at 列）
+lib.by_source('gp')
+lib.seed_expressions(50)
+lib.top(10, sort_by='sharpe')
+lib.to_dataframe()
 
-# [新增] 持久化：保存到磁盘
+# 持久化
 lib.save('./discovered/gp_round_001.json')
-
-# [新增] 持久化：从磁盘加载
 lib2 = FactorLibrary.load('./discovered/gp_round_001.json')
 ```
 
-### 11. 发现结果存档
+### 7. 公式库
 
 ```python
-from factor.v3 import load_discovered, merge_discovered
+from factor.v4.formulas import ALPHA101, ALPHA191, BASIC_FACTORS
 
-# [新增] 加载 discovered/ 目录下所有 .json 文件
-lib = load_discovered('./discovered')
-# 自动扫描 gp_round_001.json, gp_round_002.json, ...
-
-# [新增] 合并到已有因子库
-existing_lib = FactorLibrary()
-n = merge_discovered(existing_lib, './discovered')
-print(f"合并了 {n} 个新因子")
-
-# 继续探索：用合并后的因子库做种子
-seeds = existing_lib.seed_expressions(100, sort_by='sharpe')
-```
-
-### 12. 公式库
-
-```python
-from factor.v3 import ALPHA101, ALPHA191, BASIC_FACTORS
-
-len(ALPHA101)       # 101   WorldQuant 101 Alpha → formulas/wq101.py
-len(ALPHA191)       # 171   国泰安 191 Alpha（含20个预留基本面缺口）→ formulas/gt191.py
-len(BASIC_FACTORS)  # 20    因子原子基元 → formulas/basic.py
-
-# 总计: 292 条公式，全部可解析求值
-# 旧 import from factor.v3.formulas 仍兼容
+len(ALPHA101)       # 101   WorldQuant 101 Alpha
+len(ALPHA191)       # 171   国泰安 191 Alpha
+len(BASIC_FACTORS)  # 20    因子原子基元
 ```
 
 ---
 
-## v3 架构速查
+## v4 vs v3 关键差异
 
-```
-factor/v3/
-├── __init__.py         统一导出
-├── base.py             FactorCategory / FactorMetadata / FactorLibrary (save/load)
-├── primitives.py       23 个原语（时序+截面+健壮+语法糖）
-├── engine.py           表达式引擎：Tokenizer → Parser → AST → FactorExpression
-├── backtest.py         回测一体化：Scheduler + Allocator + Combiner + Pipeline
-├── formulas/           公式数据库（拆分为子文件）
-│   ├── __init__.py     兼容 from factor.v3.formulas import ...
-│   ├── wq101.py        WorldQuant 101 Alpha (101条)
-│   ├── gt191.py        国泰安 191 Alpha (171条)
-│   └── basic.py        因子原子基元 (20条)
-├── discovered/         GP/ML 发现因子存档
-│   ├── __init__.py     load_discovered / merge_discovered
-│   └── gp_round_*.json 运行时自动生成（持久化）
-├── discover.py【核心】 GPEngine + 可插拔适应度 + FactorDiscoveryEngine + 自动落盘
-├── validator.py        IC/IR/Bootstrap/换手率 检验
-├── search.py           网格搜索 + 贝叶斯优化
-└── cache.py            因子值 Parquet 缓存
-```
-
-## GP 发现链路（含持久化）
-
-```
-formulas/ → engine(编译) → primitives(原语) → fitness(适应度) → gp(进化)
-                                                                     ↓
-                                             save_dir/gp_round_N.json ←── 入库
-                                                                     ↓
-                                             下次会话 load_discovered() → 扩大的种子池 → 持续探索
-```
+| 项目 | v3 | v4 |
+|------|----|----|
+| 表达式语法 | 自研 `add/sub/mul` | **Python 原生 `+ - * /`** |
+| 原语数 | 23 | **67 (与 signals 共享)** |
+| 回测引擎 | 自研 Pipeline | **ft2.core Engine (统一时间线+费率)** |
+| 因子面板回测 | FactorPipeline | **EngineCore (fast/full 双模式)** |
+| 截面排名 | cs_zscore(window) | **cs_rank / evaluate_ranked()** |
+| LLM 友好度 | 需学自定义语法 | **原生 Python，即学即用** |
 
 ---
 
@@ -347,29 +258,14 @@ formulas/ → engine(编译) → primitives(原语) → fitness(适应度) → g
 
 - **因子值面板：** `DataFrame`，index=日期，columns=股票代码，values=因子值
 - **收益率面板：** 同上，values=日收益率
-- **面板数据字典（表达式引擎）：** `Dict[str, ndarray(T,N)]`
-- **适应度计算：** ICIR 模式仅需 `future_returns`；Sharpe/MultiFreq 需额外 `returns`
-
----
-
-## v3 vs v2 关键差异
-
-| 参数 | v2 | v3 |
-|------|----|----|
-| 默认手续费 | 0.001 (0.1%) | **0.0** |
-| 默认TopN | 5 | **3** |
-| GP 适应度 | 固定 ICIR | **可插拔** |
-| 调度器/分配器 | 硬编码 | **构造注入** |
-| 因子库 | 无 | **自增长 FactorLibrary** |
-| 持久化 | 无 | **save_dir 自动落盘 + load_discovered 恢复** |
-| 时间戳 | 无 | **created_at + by_time() 按时间查询** |
-| 公式组织 | 单文件 formulas.py | **formulas/ 子包 (wq101/gt191/basic)** |
+- **面板数据字典：** `Dict[str, ndarray(T,N)]`
+- **assets 字典：** `Dict[str, DataFrame]`，品种代码 → OHLCV DataFrame
 
 ---
 
 ## 配套工具：Notebook 可视化报告
 
-因子验证结果可通过 `notebook` 模块生成交互式 HTML 报告（IC/IR 指标卡片、分组收益图、因子权重饼图等）。
+因子验证结果可通过 `notebook` 模块生成交互式 HTML 报告。
 
 详见 [`notebook/AI.md`](../notebook/AI.md)
 
@@ -377,108 +273,11 @@ formulas/ → engine(编译) → primitives(原语) → fitness(适应度) → g
 
 ## 注意事项
 
-- v1 已归档，v2 不再更新，**新开发全部走 v3**
-- `from factor.v3 import ...` 是推荐实践
-- `GPEngine` 替代了 v2 的 `FactorGPMiner`，API 不兼容
-- `FactorDiscoveryEngine.run_pipeline()` 是迭代探索的推荐入口，传入 `save_dir` 启用自动持久化
-- 调度器和分配器全部支持构造注入，无硬编码
-- 种子表达式注入仍然是 GP 搜索的关键质量保障
-- cost_rate=0.0 是 v3 默认值，如需计入交易成本请显式传入
-- `discovered/` 目录的 .json 文件可跨会话复用，重启不丢失
-
-## [新增 v3.2] 自定义终端变量
-
-表达式引擎现在支持任意预计算变量作为终端。只需将变量以 `(T,N)` ndarray 形式放入 `data` 字典，即可在表达式中按名引用。
-
-```python
-# 在 data 字典中注入自定义变量
-panel_dict['rel_close'] = close_arr / bench_close_arr   # 相对基准价格
-panel_dict['share'] = amount_arr / amount_arr.sum(axis=1, keepdims=True)  # 资金占比
-panel_dict['downside_vol'] = rolling_std(neg_ret, 20)    # 下行波动率
-
-# 表达式直接引用（无需 register_terminal）
-expr = FactorExpression("ts_rank(rel_close, 20)")
-values = expr.evaluate(panel_dict)  # ✅ 自动从 data 中查找 rel_close
-```
-
-**GP 自动发现层面：** `GPEngine` 会自动检测 `data` 中的非标准字段，将其作为终端变量纳入随机树生成。`FactorDiscoveryEngine` 通过 `custom_terminals` 参数可显式控制。
-
-**无需手动注册：** 变量查找优先级为 `VARIABLE_MAP` → `data` 字典直接查找，即放即用。
-
----
-
-## 命名规范（v3.3 新增）
-
-> **设计原则：** 同一概念在全模块内用同一参数名，避免 `period`/`lookback`/`window` 混用造成的认知负担。
-> 所有函数签名均使用 **位置参数调用** 即可，本规范定义参数名的**语义标准**。
-
-### 核心概念 → 标准参数名
-
-| 概念 | 标准参数名 | 旧名（已废弃） | 适用范围 |
-|------|-----------|---------------|---------|
-| 时序窗口/回看期数 | `window` | `period`, `lookback`, `lookforward` | primitives, discover, backtest |
-| 调仓频率字符串 | `freq` | `mode` | FixedScheduler, parse_scheduler, AlphaExplorer |
-| 表达式字符串 | `expression` | `expression_str` | FactorExpression, ExpressionFactor, LibraryEntry |
-| 因子值矩阵 | `factor_values` | — | FactorValidator, FactorPipeline, FitnessCalculator |
-| 未来收益率 | `future_returns` | — | FactorValidator, FitnessCalculator |
-| 持仓数量 | `top_n` | `n` | TopNEqualWeight, FactorLibrary, FactorDiscoveryEngine |
-| 交易费率 | `cost_rate` | — | FactorPipeline, FitnessCalculator, GPEngine |
-| 面板数据字典 | `data` | — | FactorExpression.evaluate, GPEngine, FitnessCalculator |
-| 收益率DataFrame | `returns` | — | FactorPipeline, AlphaExplorer, FactorDiscoveryEngine |
-| 日期序列 | `dates` | — | ensure_data(), loaders |
-| 标的列表 | `symbols` | — | ensure_data(), loaders |
-| GP 原始参数 key | `'window'` | `'period'` | PRIMITIVE_WITH_PARAMS, evaluate_node params |
-
-### 过去 24h 完成的改动（v3.3）
-
-| 文件 | 改动 | 影响外部？ |
-|------|------|-----------|
-| `primitives.py` | 18 个函数 `period` → `window`，`sma()` 的 `lag` → `offset` | 否（位置参数） |
-| `engine.py` | `FactorExpression(expression_str)` → `FactorExpression(expression)` | 否 |
-| `engine.py` | `ExpressionFactor(expression_str)` → `ExpressionFactor(expression)`，属性 `expression_str` → `expression` | 否 |
-| `engine.py` | `ret`/`adv` 语法糖的 params key `'period'` → `'window'` | 否 |
-| `backtest.py` | `FixedScheduler(mode)` → `FixedScheduler(freq)`，`VALID_MODES` → `VALID_FREQS` | 否 |
-| `backtest.py` | `RiskParity(lookback)` → `RiskParity(window)` | 否 |
-| `base.py` | `FactorLibrary.seed_expressions(n)` → `seed_expressions(top_n)`，`top(n)` → `top(top_n)` | 否 |
-| `base.py` | `FactorLibrary.by_time(date_from, date_to)` → `by_time(start_date, end_date)` | 否 |
-| `discover.py` | `PRIMITIVE_WITH_PARAMS` 中 `'period'` → `'window'` | 否 |
-| `discover.py` | `FactorDiscoveryEngine(seed_n)` → `FactorDiscoveryEngine(seed_top_n)` | 否 |
-
-### 未改动项（外部大量关键字调用，保留不动）
-
-以下参数在 `yinzi-3` 中大量使用**关键字参数**调用（`returns=returns, scheduler=..., allocator=..., cost_rate=0.0`），改名会直接破坏外部代码：
-
-- `FactorPipeline(returns, scheduler, allocator, cost_rate)` — 所有参数保留
-- `TopNEqualWeight(top_n)` — 保留
-- `GPEngine(data, future_returns, returns, scheduler, allocator)` — 所有参数保留
-- `FitnessCalculator(data, future_returns, returns, cost_rate, scheduler, allocator)` — 所有参数保留
-- `FactorDiscoveryEngine(data, returns, future_returns, cost_rate)` — 所有参数保留
-- `FactorValidator(factor_values, future_returns)` — 保留
-- `FactorGridSearch(returns, cost_rate)` — 保留
-- `Person.expression_str` (Individual dataclass 字段) — 保留
-
-### 外部项目（yinzi-3）变量命名约定
-
-yinzi-3 项目中的局部变量已有高度一致的约定（扫描 8 个文件）：
-
-| 变量 | 推荐命名 | 一致性 | 说明 |
-|------|---------|--------|------|
-| 面板数据 | `panel` | **完全一致** | `d['panel']` |
-| 收益率 | `returns` | **完全一致** | `d['returns']` |
-| 日期 | `dates` | **完全一致** | `d['dates']` |
-| 标的 | `symbols` | **完全一致** | `d['symbols']` |
-| 因子值 ndarray | `vals` | **高度一致** | `FactorExpression(expr).evaluate(panel)` |
-| 因子值 DataFrame | `fv` | **完全一致** | `pd.DataFrame(vals, index=dates, columns=symbols)` |
-| Pipeline 对象 | `pl_me`, `pl_w` | **基本一致** | `pl_` 前缀 + 频率后缀 |
-| 回测结果 | `r_me`, `r_w` | **基本一致** | `r_` 前缀 + 频率后缀 |
-
-**建议风格：** 新脚本参照上述约定，循环中避免用 `n`/`e` 等单字母，优先用 `factor_name`/`expr_str` 等描述性变量名。
-
-### 新增函数参数规范
-
-新增代码按以下优先顺序选择参数名：
-
-1. **查表** — 上表的「标准参数名」列
-2. **同名优先** — 如果上层已有同名参数（如 `FactorPipeline(returns=...)`），子函数同名传递
-3. **避免缩写** — 除非是外部的通用惯例（如 `fv`、`pl_` 等局部变量）
-4. **位置参数** — 新增的公开 API 优先用位置参数签名，避免外部关键字依赖
+- **v1/v2 已归档** (`factor/_archived/`)，不再使用
+- **v3 保留**，仅供历史测试对照
+- **v4 主力**：`from factor.v4 import FactorExpression, EngineCore, FactorLibrary`
+- FactorExpression 是 signals.v4 Expression 的薄包装层，语法完全一致
+- EngineCore 与 signals.v4 EngineCore 架构对齐，fast/full 双模式
+- 截面排名推荐使用 `evaluate_ranked()` 或 `Expression.rank_panel()`
+- 67 原语覆盖 WorldQuant 时序算子的 96%，截面 100%
+- 扩展新原语：`signals.v4.register_function()` 注册 → 因子模块即用
