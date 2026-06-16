@@ -541,7 +541,8 @@ class AccountAnalyzer:
         
         peak_idx = np.argmax(cumulative[:max_dd_idx + 1])
         
-        return max_dd, dates[peak_idx], dates[max_dd_idx]
+        # [调整] 2026-06-16 最大回撤改为负数输出，与收益符号一致（正=好，负=坏）
+        return -max_dd, dates[peak_idx], dates[max_dd_idx]
 
     # [新增] 2026-06-16 最大回撤持续天数 — 从波峰到波谷的交易日数
     #   回撤深度需结合持续时间才有意义，同样幅度、持续越短越好

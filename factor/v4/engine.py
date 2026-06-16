@@ -4,23 +4,21 @@ factor/v4/engine.py — 因子轮动回测引擎 (ft2.core 驱动)
 
 对齐 signals/v4 EngineCore 架构:
   full  — Engine.run() + AccountManager.order_percent() → AccountAnalyzer (完整指标/交易记录/notebook)
-  fast  — Engine.run() + 自管净值 → FastResult (~0.5s/次)
+  fast  — Engine.run() + 自管净值 → AccountAnalyzer (~0.5s/次)
 
 用法:
   from factor.v4 import EngineCore
 
+  # 两种模式统一返回 AccountAnalyzer，调用接口一致
+  analyzer = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
+  print(analyzer.sharpe_ratio(), analyzer.max_drawdown(), analyzer.metrics())
+
   # full 模式 — 验证 + 报告
   analyzer = EngineCore.backtest(panel, assets, mode='full', top_n=3, rebalance='W')
   analyzer.to_notebook("因子轮动回测")
-
-  # fast 模式 — 搜索
-  result = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
-  # result.sharpe, result.cagr, result.max_drawdown
 """
-import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional, Union
-from dataclasses import dataclass
+from typing import Dict
 
 from core.engine import Engine
 from core.account import OrderSide, BenchHolder
@@ -28,22 +26,8 @@ from core.storage import context
 from core.analyzer import AccountAnalyzer
 
 
-@dataclass
-class FastResult:
-    """fast 模式回测结果 (轻量, 对齐 signals FastResult)"""
-    sharpe: float
-    cagr: float
-    total_return: float
-    max_drawdown: float
-    annual_vol: float
-    trades: int
-    win_rate: float
-    calmar: float
-    nav: np.ndarray
 
-    def __repr__(self):
-        return (f"FastResult(SR={self.sharpe:.3f}, CAGR={self.cagr:.1%}, "
-                f"MDD={self.max_drawdown:.1%}, trades={self.trades})")
+
 
 
 class EngineCore:
@@ -62,7 +46,7 @@ class EngineCore:
                  mode: str = 'full',
                  initial_capital: float = 1_000_000,
                  start_date: str = None,
-                 bench_label: str = None) -> Union[AccountAnalyzer, FastResult]:
+                 bench_label: str = None) -> AccountAnalyzer:
         """因子轮动回测统一入口
 
         Args:
@@ -70,14 +54,13 @@ class EngineCore:
             assets: {品种代码: OHLCV DataFrame} (需含 close/high/low/open/volume)
             top_n: 持仓品种数
             rebalance: 调仓频率 'D'/'W'/'M'
-            mode: 'full' → AccountAnalyzer, 'fast' → FastResult
+            mode: 'full'/'fast', 统一返回 AccountAnalyzer (接口一致)
             initial_capital: 初始资金
             start_date: 回测起始日, None=数据首位
             bench_label: full 模式下基准标签 (自动跑 BenchHolder)
 
         Returns:
-            mode='full': AccountAnalyzer (可 to_notebook/set_benchmark)
-            mode='fast': FastResult (轻量指标)
+            AccountAnalyzer: 统一分析器 (可 sharpe_ratio()/metrics()/to_notebook())
         """
         if mode == 'fast':
             return EngineCore._run_fast(panel, assets, top_n, rebalance,
@@ -207,7 +190,7 @@ class EngineCore:
 
     @staticmethod
     def _run_fast(panel, assets, top_n, rebalance, initial_capital, start_date):
-        """fast 模式: 自管净值, 不调 order_percent (~0.5s/次)"""
+        """fast 模式: 自管净值 → AccountAnalyzer, 与 full 接口统一"""
         panel = EngineCore._prepare_panel(panel, start_date)
         dates = panel.index.sort_values()
         symbols = panel.columns.tolist()
@@ -238,27 +221,17 @@ class EngineCore:
 
         cash = float(initial_capital)
         positions: Dict[str, float] = {}  # code → shares
-        nav_history = []
-        trade_count = 0
-        wins = 0
-        last_total_cost = 0.0
+        # [重构] 2026-06-16 直接构建 daily_assets dict → AccountAnalyzer
+        daily_assets = {}
 
         class _FastRotationStrategy:
             def on_bar(self, ctx, bars):
-                nonlocal cash, positions, trade_count, wins, last_total_cost
+                nonlocal cash, positions
 
                 if len(bars) == 0:
                     return
 
-                # 计算净值
-                total_nav = cash
-                for code, shares in list(positions.items()):
-                    for b in bars:
-                        if b.get('symbol') == code:
-                            total_nav += shares * b.get('close', b.get('open', 0))
-                nav_history.append(total_nav)
-
-                # 判断调仓日 (strip time from eob for comparison)
+                # [重构] 2026-06-16 日期提取前置，确保 date/nav 一一对应
                 current_date = None
                 for b in bars:
                     dt = b.get('eob')
@@ -267,6 +240,15 @@ class EngineCore:
                         break
                 if current_date is None:
                     return
+
+                # 计算净值 (调仓日先记旧持仓净值为准，因交易不改变NAV恒等式)
+                total_nav = cash
+                for code, shares in list(positions.items()):
+                    for b in bars:
+                        if b.get('symbol') == code:
+                            total_nav += shares * b.get('close', b.get('open', 0))
+                daily_assets[current_date] = float(total_nav)
+
                 if current_date not in rebalance_set:
                     return
                 if current_date not in panel.index:
@@ -276,7 +258,6 @@ class EngineCore:
                 top_codes = set(row.nlargest(top_n).index.tolist())
 
                 # 平仓：清掉不在 Top N 的
-                buy_cost = 0.0
                 for code in list(positions.keys()):
                     if code not in top_codes:
                         for b in bars:
@@ -284,7 +265,6 @@ class EngineCore:
                                 price = b.get('close', b.get('open', 0))
                                 if price > 0:
                                     cash += positions[code] * price
-                                    trade_count += 1
                                 del positions[code]
                                 break
 
@@ -304,48 +284,14 @@ class EngineCore:
                                     if cost <= cash:
                                         cash -= cost
                                         positions[code] = shares
-                                        trade_count += 1
-                                        buy_cost += cost
                                 break
-
-                if buy_cost > 0:
-                    last_total_cost = buy_cost
 
         start_time = panel.index[0].to_pydatetime()
         end_time = panel.index[-1].to_pydatetime()
         engine.run(_FastRotationStrategy, start_time, end_time)
 
-        # 最终平仓
-        if positions:
-            final_nav = nav_history[-1] if nav_history else initial_capital
-        else:
-            final_nav = nav_history[-1] if nav_history else initial_capital
-
-        nav_arr = np.array(nav_history, dtype=float)
-        # 确保最后一点是最终净值
-        nav_arr[-1] = final_nav
-
-        total_return = final_nav / initial_capital - 1
-        n_days = len(nav_arr)
-        years = max((n_days - 1) / 252, 0.1)
-        cagr = (final_nav / initial_capital) ** (1 / years) - 1
-
-        cummax = np.maximum.accumulate(nav_arr)
-        drawdown = nav_arr / cummax - 1
-        max_dd = float(np.min(drawdown))
-
-        daily_ret = np.diff(nav_arr) / nav_arr[:-1]
-        annual_vol = float(np.std(daily_ret, ddof=1) * np.sqrt(252))
-        sharpe = (cagr - 0.02) / annual_vol if annual_vol > 0 else 0
-        calmar = cagr / abs(max_dd) if max_dd != 0 else 0
-        win_rate = wins / trade_count if trade_count > 0 else 0
-
-        return FastResult(
-            sharpe=float(sharpe), cagr=float(cagr),
-            total_return=float(total_return), max_drawdown=float(max_dd),
-            annual_vol=float(annual_vol), trades=trade_count,
-            win_rate=float(win_rate), calmar=float(calmar), nav=nav_arr,
-        )
+        # [重构] 2026-06-16 返回 AccountAnalyzer，与 full 模式接口统一
+        return AccountAnalyzer(daily_assets=daily_assets)
 
     # ============================================================
     # 工具方法
