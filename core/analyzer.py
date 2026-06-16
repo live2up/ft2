@@ -114,10 +114,13 @@ class AccountAnalyzer:
     │   ├── [收益] annualized_return    #  年化收益率
     │   ├── [风险] volatility           #  年化波动率
     │   ├── [风险] max_drawdown         #  最大回撤 (返回 Tuple[rate, peak_date, trough_date])
+    │   ├── [风险] max_dd_duration      #  最大回撤持续天数 (波峰→波谷)
+    │   ├── [风险] max_dd_recovery      #  最大回撤恢复天数 (波谷→前高, 未恢复为空)
     │   ├── [风险] sharpe_ratio         #  夏普比率
     │   ├── [风险] sortino_ratio        #  索提诺比率 (仅下行风险)
     │   ├── [风险] upi                  #  溃疡绩效指数 (Ulcer Performance Index)
     │   ├── [风险] ulcer_index          #  溃疡指数
+    │   ├── [风险] calmar_ratio         #  卡尔玛比率 (年化收益/|最大回撤|)
     │   ├── [风险] var                  #  VaR(95%)
     │   ├── [风险] cvar                 #  CVaR(95%)
     │   ├── [交易] win_rate             #  胜率
@@ -538,6 +541,65 @@ class AccountAnalyzer:
         
         return max_dd, dates[peak_idx], dates[max_dd_idx]
 
+    # [新增] 2026-06-16 最大回撤持续天数 — 从波峰到波谷的交易日数
+    #   回撤深度需结合持续时间才有意义，同样幅度、持续越短越好
+    @metric(name='最大回撤持续天数', group='风险', fmt='.0f', desc='从波峰到波谷的交易日数', order=29)
+    def max_dd_duration(self) -> Optional[int]:
+        """计算最大回撤的持续时间（交易日数）"""
+        sliced_data_info = self._ensure_sliced_data()
+        if sliced_data_info is None:
+            return None
+
+        values = sliced_data_info.get('values')
+        if values is None or len(values) < 2:
+            return None
+
+        cumulative = values / values[0]
+        running_max = np.maximum.accumulate(cumulative)
+        drawdown = (running_max - cumulative) / running_max
+
+        max_dd_idx = np.argmax(drawdown)
+        max_dd = drawdown[max_dd_idx]
+
+        if max_dd == 0:
+            return 0
+
+        peak_idx = np.argmax(cumulative[:max_dd_idx + 1])
+        return int(max_dd_idx - peak_idx)
+
+    # [新增] 2026-06-16 最大回撤恢复天数 — 从波谷回到前高所需的交易日数
+    #   若尚未恢复则返回 None，反映策略的"回本能力"
+    @metric(name='最大回撤恢复天数', group='风险', fmt='.0f', desc='从波谷恢复到前高所需的交易日数（未恢复则为空）', order=30)
+    def max_dd_recovery(self) -> Optional[int]:
+        """计算最大回撤的恢复天数（交易日数），未恢复则返回 None"""
+        sliced_data_info = self._ensure_sliced_data()
+        if sliced_data_info is None:
+            return None
+
+        values = sliced_data_info.get('values')
+        if values is None or len(values) < 2:
+            return None
+
+        cumulative = values / values[0]
+        running_max = np.maximum.accumulate(cumulative)
+        drawdown = (running_max - cumulative) / running_max
+
+        max_dd_idx = np.argmax(drawdown)
+        max_dd = drawdown[max_dd_idx]
+
+        if max_dd == 0:
+            return 0
+
+        peak_idx = np.argmax(cumulative[:max_dd_idx + 1])
+        peak_value = cumulative[peak_idx]
+
+        # 在波谷之后查找恢复到前高的日期
+        for j in range(max_dd_idx + 1, len(cumulative)):
+            if cumulative[j] >= peak_value:
+                return int(j - max_dd_idx)
+
+        return None  # 尚未恢复
+
     @metric(name='VaR(95%) / 风险价值', group='风险', fmt='.1%', desc='95% 置信度下的最大可能损失', order=24)
     def var(self, confidence: float = 0.95) -> Optional[float]:
         """计算风险价值"""
@@ -625,6 +687,23 @@ class AccountAnalyzer:
             return None
         
         return (annualized_return - risk_free_rate) / (ulcer_idx / 100)
+
+    # [新增] 2026-06-16 Calmar比率 = 年化收益率 / |最大回撤|，衡量每单位回撤的收益回报
+    #   与UPI互补: UPI用Ulcer Index(回撤平方均值)调整，Calmar用最大回撤调整
+    @metric(name='Calmar / 卡尔玛比率', group='风险', fmt='.2f', desc='年化收益率与最大回撤的比值，衡量回撤调整后收益', order=28)
+    def calmar_ratio(self) -> Optional[float]:
+        """计算卡尔玛比率 = 年化收益率 / |最大回撤|"""
+        ann_ret = self.annualized_return()
+        dd_result = self.max_drawdown()
+
+        if ann_ret is None or dd_result is None:
+            return None
+
+        max_dd_rate = dd_result[0]  # max_drawdown 返回 (rate, peak_date, trough_date)
+        if max_dd_rate == 0:
+            return None
+
+        return ann_ret / abs(max_dd_rate)
 
     @metric(name='胜率', group='交易', fmt='.1%', desc='盈利交易次数占总交易次数的比例', order=40)
     def win_rate(self) -> Optional[float]:
