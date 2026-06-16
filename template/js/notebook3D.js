@@ -305,6 +305,7 @@ const GenericChart = {
     setup(props) {
         const showDataZoom = ref(false);
         const showBarLabel = ref(true);         // Bar/柱状图：显示数值标签
+        const showScatterLabel = ref(false);    // Scatter/散点图：显示名称标签
         const intervalCompare = ref(false);  // 区间收益模式
         const intervalStart = ref(0);         // dataZoom start%（缓存当前滑块位置）
         const intervalEnd = ref(100);         // dataZoom end%
@@ -399,11 +400,55 @@ const GenericChart = {
                     });
                     
                 } else if (chartType === 'scatter') {
-                    // [重构] 2026-05-30 散点图：有 xAxis.data → category，无 → value
+                    // [修复] 2026-06-16 保留 pyecharts 输出的轴名/轴属性，前端只补 type 和 data
                     const hasXData = extracted.xAxis && extracted.xAxis.length > 0;
-                    option.xAxis = { type: hasXData ? 'category' : 'value', data: hasXData ? extracted.xAxis : [] };
-                    option.yAxis = { type: 'value' };
+                    const pyXAxis = (extracted.raw && extracted.raw.xAxis && extracted.raw.xAxis[0]) || {};
+                    const pyYAxis = (extracted.raw && extracted.raw.yAxis && extracted.raw.yAxis[0]) || {};
+                    option.xAxis = { ...pyXAxis, type: hasXData ? 'category' : 'value', data: hasXData ? extracted.xAxis : [] };
+                    option.yAxis = { ...pyYAxis, type: 'value' };
                     option.grid = CHART_AXIS_RULES.grid.build(showDataZoom.value);
+
+                    // [新增] 2026-06-16 气泡图：检测 value.length === 3 自动启用
+                    var isBubble = false;
+                    var sizeMin = Infinity, sizeMax = -Infinity;
+                    (option.series || []).forEach(function(s) {
+                        (s.data || []).forEach(function(d) {
+                            var v = (d && d.value) || d;
+                            if (Array.isArray(v) && v.length >= 3) {
+                                isBubble = true;
+                                if (v[2] < sizeMin) sizeMin = v[2];
+                                if (v[2] > sizeMax) sizeMax = v[2];
+                            }
+                        });
+                    });
+
+                    if (isBubble) {
+                        option.series.forEach(function(s) {
+                            s.symbolSize = function(val) {
+                                var size = (val && val[2]) || 0;
+                                return 8 + (size - sizeMin) / Math.max(sizeMax - sizeMin, 1) * 40;
+                            };
+                        });
+                    }
+
+                    // 散点名称标签（按钮控制）
+                    option.series.forEach(function(s) {
+                        s.label = { show: showScatterLabel.value, position: 'top', fontSize: 11, formatter: '{b}' };
+                    });
+
+                    option.tooltip = {
+                        trigger: 'item',
+                        formatter: function(p) {
+                            var v = p.data;
+                            if (v && v.name !== undefined && Array.isArray(v.value)) {
+                                return v.name + ' (' + v.value[0] + ', ' + v.value[1] + ')';
+                            }
+                            if (Array.isArray(v) && v.length >= 2) {
+                                return '(' + v[0] + ', ' + v[1] + ')';
+                            }
+                            return (p.name || '') + ': ' + p.value;
+                        }
+                    };
                 } else if (chartType === 'candlestick') {
                     // [重构] 2026-05-30 K线图：使用共享规则配置坐标
                     option.xAxis = { type: 'category', boundaryGap: CHART_AXIS_RULES.xAxis.boundaryGap('candlestick'), data: extracted.xAxis };
@@ -428,7 +473,7 @@ const GenericChart = {
             }
         });
 
-        watch([showDataZoom, showBarLabel], updateChart);
+        watch([showDataZoom, showBarLabel, showScatterLabel], updateChart);
 
         // === 区间收益逻辑 ===
         const handleDataZoom = () => {
@@ -477,6 +522,16 @@ const GenericChart = {
             const btns = [
                 { id: 'fs', label: '⛶', title: isFullscreen.value ? '退出全屏' : '全屏', active: isFullscreen.value, onClick: toggleFullscreen },
             ];
+            if (ctype === 'scatter') {
+                // 仅当数据包含 name 字段时才显示标签按钮
+                const firstData = charts?.series?.[0]?.data;
+                const hasNames = Array.isArray(firstData) && firstData.some(function(d) {
+                    return (d && d.name !== undefined) || (charts?.xAxis?.[0]?.data && charts.xAxis[0].data.length > 0);
+                });
+                if (hasNames) {
+                    btns.push({ id: 'name', label: 'N', title: '显示名称', active: showScatterLabel.value, onClick: () => showScatterLabel.value = !showScatterLabel.value });
+                }
+            }
             if (ctype === 'bar') {
                 btns.push({ id: 'val', label: 'V', title: '显示数值', active: showBarLabel.value, onClick: () => showBarLabel.value = !showBarLabel.value });
             }

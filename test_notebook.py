@@ -137,27 +137,34 @@ def test_comprehensive():
         })
         nb.chart('heatmap', df_heatmap, title="月度收益热力图（DataFrame格式：第一列=X轴）")
 
-        # [新增] 2026-05-27 散点图测试（两种格式）
-        # 类目散点图：xAxis 为标签，data 为 y 值
-        nb.chart('scatter', {
-            'xAxis': ['浦发银行', '平安银行', '万科A', '贵州茅台', '中国平安'],
-            'series': [
-                {"name": "收益率", "data": [5.2, -3.1, 8.7, 12.3, -1.5]},
-            ]
-        }, title="类目散点图（xAxis标签 + y值）")
+        # [新增] 2026-06-16 DataFrame 散点图（推荐）：第一列→名称，第二列→X，第三列→Y
+        df_scatter = pd.DataFrame({
+            '股票': ['茅台', '平安银行', '万科A', '招商银行', '宁德时代'],
+            '波动率': [15.2, 8.1, 22.3, 10.5, 28.7],
+            '收益率': [0.82, 0.45, 0.31, 0.56, -0.15],
+        })
+        nb.chart('scatter', df_scatter, title="DataFrame散点图（推荐: 名称+X+Y，tooltip显示股票名）")
 
-        # 数值散点图：xAxis 为空，data 为 [x, y] 二维数组
+        # [新增] 2026-05-27 散点图进阶格式（pyecharts 原生 dict）
+        # 数值散点图：data 为 [x, y] 二维数组
         np.random.seed(42)
         n = 30
         _sx = np.random.uniform(0, 20, n)
         _sy = _sx * 0.8 + np.random.normal(0, 2, n)
         scatter_data = [[round(x, 2), round(y, 2)] for x, y in zip(_sx, _sy)]
         nb.chart('scatter', {
-            'xAxis': [],
             'series': [
                 {"name": "波动率-收益", "data": scatter_data},
             ]
-        }, title="数值散点图（[x,y] 二维数组）")
+        }, title="数值散点图（进阶: [x,y] 二维数组）")
+
+        # 类目散点图：xAxis 为标签，data 为 y 值
+        nb.chart('scatter', {
+            'xAxis': ['浦发银行', '平安银行', '万科A', '贵州茅台', '中国平安'],
+            'series': [
+                {"name": "收益率", "data": [5.2, -3.1, 8.7, 12.3, -1.5]},
+            ]
+        }, title="类目散点图（进阶: xAxis标签 + y值）")
 
         # [新增] 2026-05-27 K线图测试（两种格式）
         # 标准格式：xAxis + series（data 为 [[开,收,低,高], ...]）

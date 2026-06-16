@@ -266,34 +266,64 @@ def _build_xy_chart(ChartClass, data, series_opts, is_area=False):
 def _build_scatter(data, series_opts):
     """
     散点图构建器
-    
-    注意：散点图不支持 DataFrame 自动转换，请使用标准格式
-    
-    支持的数据格式：
-    1. 类目散点图: {'xAxis': ['A','B','C'], 'series': [{'name': '', 'data': [10,20,30]}]}
-    2. 数值散点图: {'xAxis': [], 'series': [{'name': '', 'data': [[1,10], [2,20]]}]}
-    
+
+    推荐格式（DataFrame）— 第一列→名称, 第二列→X, 第三列→Y:
+        pd.DataFrame([名称, X值, Y值], ...)
+
+    进阶格式（pyecharts 原生 dict）:
+        类目: {'xAxis': ['A','B'], 'series': [{'data': [10, 20]}]}
+        数值: {'series': [{'data': [[1,10], [2,20]]}]}
+
     Args:
-        data: 图表数据（仅支持标准格式 dict）
-        series_opts: 系列配置选项
-    
+        data: 图表数据（DataFrame 或 pyecharts 原生 dict）
+        series_opts: 系列配置选项（对应 pyecharts add_yaxis 参数）
+
     Returns:
         pyecharts Scatter 对象
     """
     from .min_pyecharts import MinScatter
     from pyecharts import options as opts
-    
+
     chart = MinScatter()
-    
-    # 散点图仅支持标准格式
-    if not (isinstance(data, dict) and 'xAxis' in data and 'series' in data):
-        raise ValueError(
-            "散点图不支持 DataFrame 自动转换，请使用标准格式:\n"
-            "1. 类目散点图: {'xAxis': ['A','B'], 'series': [{'name': '', 'data': [10,20]}]}\n"
-            "2. 数值散点图: {'xAxis': [], 'series': [{'name': '', 'data': [[1,10], [2,20]]}]}"
-        )
-    
-    # 构建图表
+
+    # 判断格式
+    if isinstance(data, dict) and 'series' in data:
+        # pyecharts 原生 dict：xAxis 可选（缺失=数值散点）
+        data.setdefault('xAxis', [])
+    else:
+        # DataFrame 自动转换：第一列→name，第二列→x，第三列→y
+        if isinstance(data, pd.DataFrame):
+            df = data.copy()
+        else:
+            df = pd.DataFrame(data)
+
+        if len(df.columns) < 3:
+            raise ValueError(
+                "散点图 DataFrame 需要至少3列: [名称, X值, Y值]\n"
+                f"当前列数: {len(df.columns)}, 列名: {list(df.columns)}"
+            )
+
+        has_size = len(df.columns) >= 4
+        scatter_data = []
+        for _, row in df.iterrows():
+            val = [float(row.iloc[1]), float(row.iloc[2])]
+            if has_size:
+                val.append(float(row.iloc[3]))
+            scatter_data.append(opts.ScatterItem(
+                name=str(row.iloc[0]),
+                value=val
+            ))
+
+        series_name = f'{df.columns[1]} vs {df.columns[2]}'
+        data = {
+            'xAxis': [],
+            'series': [{'name': series_name, 'data': scatter_data}],
+            '_xaxis_name': str(df.columns[1]),
+            '_yaxis_name': str(df.columns[2]),
+            '_has_size': has_size,
+        }
+
+    # 构建图表：透传 pyecharts 原生格式（[[x,y]] 或 [y] 或 ScatterItem）
     chart.add_xaxis(data['xAxis'])
     for s in data['series']:
         params = {
@@ -302,7 +332,14 @@ def _build_scatter(data, series_opts):
             **series_opts
         }
         chart.add_yaxis(**params)
-    
+
+    # DataFrame 自动标注坐标轴名称
+    if '_xaxis_name' in data:
+        chart.set_global_opts(
+            xaxis_opts=opts.AxisOpts(name=data.pop('_xaxis_name')),
+            yaxis_opts=opts.AxisOpts(name=data.pop('_yaxis_name'))
+        )
+
     return chart
 
 

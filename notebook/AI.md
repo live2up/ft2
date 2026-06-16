@@ -233,7 +233,7 @@ nb.metrics(data, title='核心指标', columns=4)
 | `'line'` | 折线图 | 标准格式 / DataFrame |
 | `'area'` | 面积图 | 标准格式 / DataFrame |
 | `'bar'` | 柱状图 | 标准格式 / DataFrame |
-| `'scatter'` | 散点图 | **仅标准格式** |
+| `'scatter'` | 散点图 | 标准格式 / DataFrame |
 | `'kline'` | K线图 | 标准格式 / DataFrame |
 | `'pie'` | 饼图 | 列表格式 / DataFrame |
 | `'heatmap'` | 热力图 | 嵌套字典 / DataFrame |
@@ -260,13 +260,17 @@ nb.metrics(data, title='核心指标', columns=4)
 nb.chart('line', df, title='净值曲线')
 ```
 
-**scatter：** ❌ 不支持 DataFrame，必须用标准格式 dict
+**scatter：** 第一列→name，第二列→x，第三列→y
 
 ```python
-# 类目散点图
+# 推荐: DataFrame
+df = pd.DataFrame({'股票': ['茅台','平安'], '波动率': [15.2,8.1], '收益率': [0.82,0.45]})
+nb.chart('scatter', df, title='波动率 vs 收益率')
+
+# 进阶: pyecharts 原生 dict（类目散点）
 {'xAxis': ['A', 'B', 'C'], 'series': [{'name': '', 'data': [10, 20, 30]}]}
-# 数值散点图
-{'xAxis': [], 'series': [{'name': '', 'data': [[1, 10], [2, 20]]}]}
+# 进阶: pyecharts 原生 dict（数值散点）
+{'series': [{'name': '', 'data': [[1, 10], [2, 20]]}]}
 ```
 
 **kline：** 第一列 → xAxis（日期），需包含 open/close/low/high 字段（自动识别中英文列名）
@@ -533,7 +537,7 @@ nb.export_html()
 
 1. **xAxis 键名**：图表标准格式使用 `'xAxis'`（不是 `'x'`）
 2. **DataFrame 转换规则（按类型不同）**：line/area/bar → 第一列→xAxis其余→series；kline → 第一列→xAxis+自动识别OHLC字段；pie → 第一列→name第二列→value；heatmap → 第一列→X轴其余列名→Y轴
-3. **scatter 不支持 DataFrame**：散点图必须使用标准格式 dict
+3. **scatter DataFrame 格式**：散点图 DataFrame 第一列→名称，第二列→X，第三列→Y
 4. **chartg 自动合并**：chartg 是累加模式，在下一个非 chartg 操作时自动 flush
 5. **输入即输出原则**：xAxis 日期字符串原样传入，前端用 `category` 类型直接显示，不做时区/格式转换
 6. **Grid 高度语义**：`height` = chart 绘图区高度（px），不包含 legend 和间距，后端自动累加
