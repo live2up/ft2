@@ -6,6 +6,8 @@
  *   新增: PerfChart 业绩全景组件(超额收益/回撤/图例联动/区间选择)
  *   重构: 全屏统一 chart-zoomed、按钮统一 tool-btn
  *   优化: 布局间距紧凑化
+ * v2.2 — 2026-06-16
+ *   重构: ChartToolbar 统一渲染组件，消除6处 toolbar 模板重复
  *
  * v2.0 — 2026-05-17
  *   新增: 滚动轴(line/area/bar/kline)、全屏(五个组件)
@@ -272,6 +274,26 @@ function useFullscreen() {
     return { isFullscreen, toggleFullscreen };
 }
 
+// [重构] 2026-06-16 统一工具栏渲染组件，消除 6 处模板重复
+// Dumb 渲染模式：父组件声明 buttons 配置（含 onClick 回调），子组件纯渲染
+// 通过 <slot> 支持 chart-specific 元素（如 Heatmap 的缩放下拉框）
+const ChartToolbar = {
+    name: 'ChartToolbar',
+    props: {
+        buttons: { type: Array, required: true }
+    },
+    template: `
+        <div class="chart-toolbar">
+            <template v-for="btn in buttons" :key="btn.id">
+                <button class="tool-btn"
+                    :class="{ active: btn.active }"
+                    :title="btn.title"
+                    @click="btn.onClick">{{ btn.label }}</button>
+            </template>
+            <slot></slot>
+        </div>`
+};
+
 // =============================================================================
 // 第二部分：图表组件
 // =============================================================================
@@ -448,7 +470,24 @@ const GenericChart = {
             }
         });
 
-        return { chartRef, showDataZoom, showBarLabel, isFullscreen, toggleFullscreen, intervalCompare, chartType: computed(() => { const charts = props.cell.content?.charts; return charts?.series?.[0]?.type || 'line'; }) };
+        // [重构] 2026-06-16 声明式 toolbar 按钮配置
+        const toolbarButtons = computed(() => {
+            const charts = props.cell.content?.charts;
+            const ctype = charts?.series?.[0]?.type || 'line';
+            const btns = [
+                { id: 'fs', label: '⛶', title: isFullscreen.value ? '退出全屏' : '全屏', active: isFullscreen.value, onClick: toggleFullscreen },
+            ];
+            if (ctype === 'bar') {
+                btns.push({ id: 'val', label: 'V', title: '显示数值', active: showBarLabel.value, onClick: () => showBarLabel.value = !showBarLabel.value });
+            }
+            if (ctype === 'line' || ctype === 'area') {
+                btns.push({ id: 'pct', label: '%', title: '区间收益', active: intervalCompare.value, onClick: () => intervalCompare.value = !intervalCompare.value });
+            }
+            btns.push({ id: 'zoom', label: '⇄', title: '滚动轴', active: showDataZoom.value, onClick: () => showDataZoom.value = !showDataZoom.value });
+            return btns;
+        });
+
+        return { chartRef, showDataZoom, showBarLabel, isFullscreen, toggleFullscreen, intervalCompare, toolbarButtons, chartType: computed(() => { const charts = props.cell.content?.charts; return charts?.series?.[0]?.type || 'line'; }) };
     },
     template: `
         <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
@@ -457,15 +496,7 @@ const GenericChart = {
                 <div class="chart-wrapper">
                     <div ref="chartRef" class="chart-container chart-container-main"
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                    <div class="chart-toolbar">
-                        <!-- 上方：视图控制 -->
-                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
-                        <!-- 中间：数据操作 -->
-                        <button v-if="chartType === 'bar'" class="tool-btn" :class="{ active: showBarLabel }" @click="showBarLabel = !showBarLabel" title="显示数值">V</button>
-                        <button v-if="chartType === 'line' || chartType === 'area'" class="tool-btn" :class="{ active: intervalCompare }" @click="intervalCompare = !intervalCompare" title="区间收益">%</button>
-                        <!-- 下方：滚动轴（靠近底部滑块） -->
-                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">⇄</button>
-                    </div>
+                    <chart-toolbar :buttons="toolbarButtons" />
                 </div>
             </div>
         </div>
@@ -498,7 +529,12 @@ const PieChart = {
 
         watch([pieShowValue, pieShowPercent], refreshChart);
 
-        return { chartRef, pieShowValue, pieShowPercent };
+        const toolbarButtons = computed(() => [
+            { id: 'val', label: 'V', title: '显示数值', active: pieShowValue.value, onClick: () => pieShowValue.value = !pieShowValue.value },
+            { id: 'pct', label: '%', title: '显示百分比', active: pieShowPercent.value, onClick: () => pieShowPercent.value = !pieShowPercent.value },
+        ]);
+
+        return { chartRef, pieShowValue, pieShowPercent, toolbarButtons };
     },
     template: `
         <div class="cell-chart">
@@ -507,11 +543,7 @@ const PieChart = {
                 <div class="chart-wrapper">
                     <div ref="chartRef" class="chart-container chart-container-main"
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                    <div class="chart-toolbar">
-                        <!-- 中间：数据操作 -->
-                        <button class="tool-btn" :class="{ active: pieShowValue }" @click="pieShowValue = !pieShowValue" title="显示数值">V</button>
-                        <button class="tool-btn" :class="{ active: pieShowPercent }" @click="pieShowPercent = !pieShowPercent" title="显示百分比">%</button>
-                    </div>
+                    <chart-toolbar :buttons="toolbarButtons" />
                 </div>
             </div>
         </div>
@@ -553,7 +585,12 @@ const HeatmapChart = {
 
         watch([heatmapShowData, heatmapMultiplier], () => { updateChart(); });
 
-        return { chartRef, heatmapShowData, heatmapMultiplier, isFullscreen, toggleFullscreen };
+        const toolbarButtons = computed(() => [
+            { id: 'fs', label: '⛶', title: isFullscreen.value ? '退出全屏' : '全屏', active: isFullscreen.value, onClick: toggleFullscreen },
+            { id: 'val', label: 'V', title: '显示数值', active: heatmapShowData.value, onClick: () => heatmapShowData.value = !heatmapShowData.value },
+        ]);
+
+        return { chartRef, heatmapShowData, heatmapMultiplier, isFullscreen, toggleFullscreen, toolbarButtons };
     },
     template: `
         <div class="cell-chart heatmap" :class="{ 'chart-zoomed': isFullscreen }">
@@ -562,12 +599,7 @@ const HeatmapChart = {
                 <div class="chart-wrapper">
                     <div ref="chartRef" class="chart-container chart-container-main"
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                    <div class="chart-toolbar">
-                        <!-- 上方：视图控制 -->
-                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
-                        <!-- 中间：数据操作 -->
-                        <button class="tool-btn" :class="{ active: heatmapShowData }" @click="heatmapShowData = !heatmapShowData" title="显示数据">T</button>
-                        <!-- 下方：热力图专用 -->
+                    <chart-toolbar :buttons="toolbarButtons">
                         <select class="tool-select" v-model.number="heatmapMultiplier" title="数据缩放">
                             <option value="1000">x1000</option>
                             <option value="100">x100</option>
@@ -576,7 +608,7 @@ const HeatmapChart = {
                             <option value="0.1">1/10</option>
                             <option value="0.01">1/100</option>
                         </select>
-                    </div>
+                    </chart-toolbar>
                 </div>
             </div>
         </div>
@@ -704,7 +736,14 @@ const StackedChart = {
 
         watch([stackNormalize, stackShowRaw, stackShowPercent], updateChart);
 
-        return { chartRef, stackNormalize, stackShowRaw, stackShowPercent, isFullscreen, toggleFullscreen };
+        const toolbarButtons = computed(() => [
+            { id: 'fs', label: '⛶', title: isFullscreen.value ? '退出全屏' : '全屏', active: isFullscreen.value, onClick: toggleFullscreen },
+            { id: 'norm', label: 'N', title: '归一化', active: stackNormalize.value, onClick: () => stackNormalize.value = !stackNormalize.value },
+            { id: 'val', label: 'V', title: '显示数值', active: stackShowRaw.value, onClick: () => stackShowRaw.value = !stackShowRaw.value },
+            { id: 'pct', label: '%', title: '显示百分比', active: stackShowPercent.value, onClick: () => stackShowPercent.value = !stackShowPercent.value },
+        ]);
+
+        return { chartRef, stackNormalize, stackShowRaw, stackShowPercent, isFullscreen, toggleFullscreen, toolbarButtons };
     },
     template: `
         <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
@@ -713,14 +752,7 @@ const StackedChart = {
                 <div class="chart-wrapper">
                     <div ref="chartRef" class="chart-container chart-container-main"
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                    <div class="chart-toolbar">
-                        <!-- 上方：视图控制 -->
-                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
-                        <!-- 中间：数据操作 -->
-                        <button class="tool-btn" :class="{ active: stackNormalize }" @click="stackNormalize = !stackNormalize" title="归一化">N</button>
-                        <button class="tool-btn" :class="{ active: stackShowRaw }" @click="stackShowRaw = !stackShowRaw" title="显示数值">V</button>
-                        <button class="tool-btn" :class="{ active: stackShowPercent }" @click="stackShowPercent = !stackShowPercent" title="显示百分比">%</button>
-                    </div>
+                    <chart-toolbar :buttons="toolbarButtons" />
                 </div>
             </div>
         </div>
@@ -1047,7 +1079,9 @@ const PerfChart = {
             chartInstance?.dispose();
         });
 
-        return { chartRef, chartId, isFullscreen, toggleFullscreen, hasBenchmark, selectedRange, jumpToRange, jumpToDateRange, dateStart, dateEnd };
+        return { chartRef, chartId, isFullscreen, toggleFullscreen, hasBenchmark, selectedRange, jumpToRange, jumpToDateRange, dateStart, dateEnd, toolbarButtons: computed(() => [
+            { id: 'fs', label: '⛶', title: isFullscreen.value ? '退出全屏' : '全屏', active: isFullscreen.value, onClick: toggleFullscreen },
+        ]) };
     },
     template: `
         <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
@@ -1069,9 +1103,7 @@ const PerfChart = {
                     <div class="perf-stats-panel" :id="'perf-stats-' + chartId">
                         <span class="perf-stat"><em>拖拽选择区间查看统计</em></span>
                     </div>
-                    <div class="chart-toolbar">
-                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">⛶</button>
-                    </div>
+                    <chart-toolbar :buttons="toolbarButtons" />
                 </div>
             </div>
         </div>
@@ -1263,7 +1295,18 @@ const GridChart = {
             }
         });
 
-        return { chartRef, showDataZoom, intervalCompare, hasIntervalCompare, isFullscreen, toggleFullscreen };
+        const toolbarButtons = computed(() => {
+            const btns = [
+                { id: 'fs', label: '⛶', title: isFullscreen.value ? '退出全屏' : '全屏', active: isFullscreen.value, onClick: toggleFullscreen },
+            ];
+            if (hasIntervalCompare.value) {
+                btns.push({ id: 'pct', label: '%', title: '区间收益（仅第一图）', active: intervalCompare.value, onClick: () => intervalCompare.value = !intervalCompare.value });
+            }
+            btns.push({ id: 'zoom', label: '⇄', title: '滚动轴', active: showDataZoom.value, onClick: () => showDataZoom.value = !showDataZoom.value });
+            return btns;
+        });
+
+        return { chartRef, showDataZoom, intervalCompare, hasIntervalCompare, isFullscreen, toggleFullscreen, toolbarButtons };
     },
     template: `
         <div class="cell-chart" :class="{ 'chart-zoomed': isFullscreen }">
@@ -1272,14 +1315,7 @@ const GridChart = {
                 <div class="chart-wrapper">
                     <div ref="chartRef" class="chart-container chart-container-main"
                          :style="{ width: cell.content?.width || '100%', height: cell.content?.height || '400px' }"></div>
-                    <div class="chart-toolbar">
-                        <!-- 上方：视图控制 -->
-                        <button class="tool-btn" :class="{ active: isFullscreen }" @click="toggleFullscreen" :title="isFullscreen ? '退出全屏' : '全屏'">&#x26F6;</button>
-                        <!-- 中间：数据操作 -->
-                        <button v-if="hasIntervalCompare" class="tool-btn" :class="{ active: intervalCompare }" @click="intervalCompare = !intervalCompare" title="区间收益（仅第一图）">%</button>
-                        <!-- 下方：滚动轴（靠近底部滑块） -->
-                        <button class="tool-btn" :class="{ active: showDataZoom }" @click="showDataZoom = !showDataZoom" title="滚动轴">&#x21C4;</button>
-                    </div>
+                    <chart-toolbar :buttons="toolbarButtons" />
                 </div>
             </div>
         </div>
@@ -1684,7 +1720,7 @@ if (typeof document !== 'undefined' && !window.__fsEscInited) {
 function createNotebookApp() {
     const FtTableComponent = typeof window !== 'undefined' ? window.FtTable : null;
 
-    return createApp({
+    const app = createApp({
         components: { CellRenderer, ColorPicker, TocMenu, Toast, FtTable: FtTableComponent },
         setup() {
             const config = window.notebookConfig || { title: '未命名 Notebook', createdAt: new Date().toLocaleString(), children: [] };
@@ -1719,6 +1755,8 @@ function createNotebookApp() {
             return { title, createdAt, cells, isScreenshotMode };
         }
     });
+    app.component('ChartToolbar', ChartToolbar);
+    return app;
 }
 
 // =============================================================================
