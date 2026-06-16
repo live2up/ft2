@@ -93,7 +93,16 @@ def test_comprehensive():
             "盈利": profit_data,
             "亏损": loss_data
         })
-        nb.chart('bar', df_stack, series_opts={'stack': 'total'}, title="月度盈亏（DataFrame格式）")
+        nb.chart('bar', df_stack, series_opts={'stack': 'total'}, title="月度盈亏堆叠柱状图")
+
+        # [新增] 2026-06-16 归一化堆叠柱状图：stack 分组 + 百分比对比
+        df_norm = pd.DataFrame({
+            "月份": ['1月', '2月', '3月', '4月', '5月', '6月'],
+            "股票": [60, 55, 50, 48, 52, 58],
+            "债券": [25, 28, 30, 32, 28, 25],
+            "现金": [15, 17, 20, 20, 20, 17],
+        })
+        nb.chart('bar', df_norm, series_opts={'stack': 'group'}, title="资产配置堆叠对比（工具栏N=归一化，%=百分比）")
         
         # 嵌套：月度分析
         with nb.section("月度分析"):
@@ -165,6 +174,15 @@ def test_comprehensive():
                 {"name": "收益率", "data": [5.2, -3.1, 8.7, 12.3, -1.5]},
             ]
         }, title="类目散点图（进阶: xAxis标签 + y值）")
+
+        # [新增] 2026-06-16 气泡图：4列 DataFrame，第4列=气泡大小
+        df_bubble = pd.DataFrame({
+            '股票': ['茅台', '平安银行', '万科A', '招商银行', '宁德时代'],
+            '波动率': [15.2, 8.1, 22.3, 10.5, 28.7],
+            '收益率': [0.82, 0.45, 0.31, 0.56, -0.15],
+            '权重': [60, 30, 80, 50, 95],
+        })
+        nb.chart('scatter', df_bubble, title="气泡图（4列: 名称+X+Y+大小，大小列=气泡尺寸）")
 
         # [新增] 2026-05-27 K线图测试（两种格式）
         # 标准格式：xAxis + series（data 为 [[开,收,低,高], ...]）

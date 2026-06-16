@@ -260,17 +260,26 @@ nb.metrics(data, title='核心指标', columns=4)
 nb.chart('line', df, title='净值曲线')
 ```
 
-**scatter：** 第一列→name，第二列→x，第三列→y
+**scatter：** 第一列→名称，第二列→X，第三列→Y，第四列(可选)→气泡大小
 
 ```python
 # 推荐: DataFrame
+# 3列 → 散点图 (name, x, y)
 df = pd.DataFrame({'股票': ['茅台','平安'], '波动率': [15.2,8.1], '收益率': [0.82,0.45]})
 nb.chart('scatter', df, title='波动率 vs 收益率')
+# 自动: X轴名=波动率, Y轴名=收益率, series名=波动率 vs 收益率, tooltip=茅台 (15.2, 0.82)
 
-# 进阶: pyecharts 原生 dict（类目散点）
+# 4列 → 气泡图 (name, x, y, size)
+df = pd.DataFrame({'股票': ['茅台','平安'], '波动率': [15.2,8.1], '收益率': [0.82,0.45], '权重': [60,30]})
+nb.chart('scatter', df, title='气泡图')
+# 第4列自动映射气泡大小
+
+# 进阶: pyecharts 原生 dict（类目散点，xAxis 为标签）
 {'xAxis': ['A', 'B', 'C'], 'series': [{'name': '', 'data': [10, 20, 30]}]}
-# 进阶: pyecharts 原生 dict（数值散点）
+# 进阶: pyecharts 原生 dict（数值散点，xAxis 可选）
 {'series': [{'name': '', 'data': [[1, 10], [2, 20]]}]}
+# 进阶: pyecharts 原生 dict（气泡图）
+{'series': [{'name': '', 'data': [[1, 10, 60], [2, 20, 80]]}]}
 ```
 
 **kline：** 第一列 → xAxis（日期），需包含 open/close/low/high 字段（自动识别中英文列名）
@@ -537,7 +546,7 @@ nb.export_html()
 
 1. **xAxis 键名**：图表标准格式使用 `'xAxis'`（不是 `'x'`）
 2. **DataFrame 转换规则（按类型不同）**：line/area/bar → 第一列→xAxis其余→series；kline → 第一列→xAxis+自动识别OHLC字段；pie → 第一列→name第二列→value；heatmap → 第一列→X轴其余列名→Y轴
-3. **scatter DataFrame 格式**：散点图 DataFrame 第一列→名称，第二列→X，第三列→Y
+3. **scatter DataFrame 格式**：3列→散点(name,X,Y)，4列→气泡(第4列=大小)，自动推断轴名+series名
 4. **chartg 自动合并**：chartg 是累加模式，在下一个非 chartg 操作时自动 flush
 5. **输入即输出原则**：xAxis 日期字符串原样传入，前端用 `category` 类型直接显示，不做时区/格式转换
 6. **Grid 高度语义**：`height` = chart 绘图区高度（px），不包含 legend 和间距，后端自动累加

@@ -338,8 +338,11 @@ class AccountManager:
             symbol, volume, side, position_effect, order_type, price, order_id, note
         )
 
-        if executed_volume != 0:
-            self.take_snapshot()
+        # [优化] 2026-06-16 注释重复快照：engine.run() 在 on_bar() 之后统一 snapshot，
+        #   外层 snapshot 一定触发且一定捕获到成交后状态，此处 snapshot 冗余。
+        #   保留注释以备极少数场景（同一 bar 内下单后立即读 snapshots[-1]）。
+        # if executed_volume != 0:
+        #     self.take_snapshot()
         return order_id
 
     def _process_order(
