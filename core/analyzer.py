@@ -184,6 +184,8 @@ class AccountAnalyzer:
         """
         self.account = account
         self.risk_free_rate = 0.02
+        # [新增] 2026-06-16 统一置信水平参数，var/cvar 复用
+        self.confidence = 0.95
         self.sliced_data = None
         # [新增] 2026-06-02 基准对比支持
         #   通过 set_benchmark() 注入基准日净值数据，to_notebook() 自动生成对比 section
@@ -601,7 +603,7 @@ class AccountAnalyzer:
         return None  # 尚未恢复
 
     @metric(name='VaR(95%) / 风险价值', group='风险', fmt='.1%', desc='95% 置信度下的最大可能损失', order=24)
-    def var(self, confidence: float = 0.95) -> Optional[float]:
+    def var(self) -> Optional[float]:
         """计算风险价值"""
         sliced_data_info = self._ensure_sliced_data()
         if sliced_data_info is None:
@@ -611,10 +613,11 @@ class AccountAnalyzer:
         if returns is None or len(returns) < 2:
             return None
         
-        return -np.percentile(returns, (1 - confidence) * 100)
+        # [修复] 2026-06-16 统一使用 self.confidence 实例属性
+        return -np.percentile(returns, (1 - self.confidence) * 100)
 
     @metric(name='CVaR(95%) / 条件风险价值', group='风险', fmt='.1%', desc='超过 VaR 阈值的平均损失', order=25)
-    def cvar(self, confidence: float = 0.95) -> Optional[float]:
+    def cvar(self) -> Optional[float]:
         """计算条件风险价值"""
         sliced_data_info = self._ensure_sliced_data()
         if sliced_data_info is None:
@@ -624,7 +627,8 @@ class AccountAnalyzer:
         if returns is None or len(returns) < 2:
             return None
         
-        index = int((1 - confidence) * len(returns))
+        # [修复] 2026-06-16 统一使用 self.confidence 实例属性
+        index = int((1 - self.confidence) * len(returns))
         if index < 1:
             index = 1
         
@@ -650,7 +654,7 @@ class AccountAnalyzer:
         return np.sqrt(np.mean(drawdown_pct ** 2))
 
     @metric(name='索提诺比率', group='风险', fmt='.2f', desc='只考虑下行风险的夏普比率改进版', order=23)
-    def sortino_ratio(self, risk_free_rate: float = 0.02) -> Optional[float]:
+    def sortino_ratio(self) -> Optional[float]:
         """计算索提诺比率"""
         annualized_return = self.annualized_return()
         if annualized_return is None:
@@ -675,10 +679,11 @@ class AccountAnalyzer:
         if annualized_downside_deviation == 0:
             return float('inf')
         
-        return (annualized_return - risk_free_rate) / annualized_downside_deviation
+        # [修复] 2026-06-16 统一使用 self.risk_free_rate 实例属性
+        return (annualized_return - self.risk_free_rate) / annualized_downside_deviation
 
     @metric(name='UPI / 溃疡绩效指数', group='风险', fmt='.2f', desc='用溃疡指数调整的风险收益比', order=26)
-    def upi(self, risk_free_rate: float = 0.02) -> Optional[float]:
+    def upi(self) -> Optional[float]:
         """计算 Ulcer Performance Index"""
         annualized_return = self.annualized_return()
         ulcer_idx = self.ulcer_index()
@@ -686,7 +691,8 @@ class AccountAnalyzer:
         if annualized_return is None or ulcer_idx is None or ulcer_idx == 0:
             return None
         
-        return (annualized_return - risk_free_rate) / (ulcer_idx / 100)
+        # [修复] 2026-06-16 统一使用 self.risk_free_rate 实例属性
+        return (annualized_return - self.risk_free_rate) / (ulcer_idx / 100)
 
     # [新增] 2026-06-16 Calmar比率 = 年化收益率 / |最大回撤|，衡量每单位回撤的收益回报
     #   与UPI互补: UPI用Ulcer Index(回撤平方均值)调整，Calmar用最大回撤调整
