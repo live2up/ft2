@@ -126,6 +126,7 @@ class AccountAnalyzer:
     │   ├── [交易] win_rate             #  胜率
     │   ├── [交易] avg_profit_loss_ratio #  平均盈亏比
     │   ├── [交易] avg_holding_period   #  平均持仓天数
+    │   ├── [交易] position_holding_ratio  #  持仓天数比例
     │   ├── [交易] kelly_criterion      #  凯利最优仓位
     │   ├── [交易] kelly_fraction       #  半凯利仓位
     │   ├── avg_profit()                #  (辅助) 平均盈利, 支持 amount/percentage 模式
@@ -798,6 +799,46 @@ class AccountAnalyzer:
         
         total_days = sum((t['close_time'] - t['open_time']).days for t in self._trade_profits)
         return total_days / len(self._trade_profits)
+
+    # [新增] 2026-06-17 持仓天数比例 — 有持仓的交易日/总交易日
+    #   与 avg_holding_period 正交：前者是策略级别时间利用率，后者是单笔交易级别平均时长
+    #   高Sharpe+低持仓比例=择时型策略(挑机会)，高Sharpe+高持仓比例=持续alpha型策略
+    #   计算方式：按日聚合快照，检查每日最后快照的 positions 是否有 volume>0 的持仓
+    @metric(name='持仓天数比例', group='交易', fmt='.1%', desc='有持仓的天数占总交易日的比例，衡量策略的时间利用率', order=43)
+    def position_holding_ratio(self) -> Optional[float]:
+        """计算持仓天数比例 = 有持仓的天数 / 总交易日数"""
+        if not self.account or not self.account.snapshots:
+            return None
+        
+        sliced_data_info = self._ensure_sliced_data()
+        if sliced_data_info is None:
+            return None
+        
+        sliced_assets = sliced_data_info['daily_assets']
+        all_dates = sorted(sliced_assets.keys())
+        if len(all_dates) < 2:
+            return None
+        
+        # 按日期聚合快照，取每日最后一笔快照
+        daily_last_snap = {}
+        for s in self.account.snapshots:
+            d = s.created_at.date()
+            daily_last_snap[d] = s
+        
+        # 排除基准日（第一个日期），统计有持仓的天数
+        trading_dates = all_dates[1:]
+        holding_days = 0
+        for d in trading_dates:
+            snap = daily_last_snap.get(d)
+            if snap and snap.positions:
+                # 检查是否有任何持仓 volume > 0
+                if any(pos.volume > 0 for pos in snap.positions.values()):
+                    holding_days += 1
+        
+        if len(trading_dates) == 0:
+            return None
+        
+        return holding_days / len(trading_dates)
 
     @metric(name='凯利公式最优仓位', group='交易', fmt='.1%', desc='根据胜率和盈亏比计算的最优仓位比例', order=50)
     def kelly_criterion(self) -> Optional[float]:

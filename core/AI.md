@@ -183,12 +183,29 @@ AccountAnalyzer.to_notebook()
 
 ### 3.4 完整指标列表
 
-| group | 指标 | fmt |
-|-------|------|-----|
-| 收益 | 累计收益率、年化收益率 | `.1%` |
-| 风险 | 年化波动率、最大回撤、最大回撤持续/恢复天数、夏普比率、索提诺比率 | 混合 |
-| 风险 | VaR(95%)、CVaR(95%)、Ulcer Index、UPI、Calmar Ratio | 混合 |
-| 交易 | 胜率、平均盈亏比、平均持仓时间、凯利/半凯利 | 混合 |
+| group | 指标名 | 方法 | fmt | order |
+|-------|--------|------|-----|-------|
+| 收益 | 累计收益率 | `return_rate()` | `.1%` | 10 |
+| 收益 | 年化收益率 | `annualized_return()` | `.1%` | 11 |
+| 风险 | 最大回撤 | `max_drawdown()` | `.1%` | 20 |
+| 风险 | 夏普比率 | `sharpe_ratio()` | `.2f` | 21 |
+| 风险 | 年化波动率 | `volatility()` | `.1%` | 22 |
+| 风险 | 索提诺比率 | `sortino_ratio()` | `.2f` | 23 |
+| 风险 | VaR(95%) | `var()` | `.1%` | 24 |
+| 风险 | CVaR(95%) | `cvar()` | `.1%` | 25 |
+| 风险 | UPI / 溃疡绩效指数 | `upi()` | `.2f` | 26 |
+| 风险 | Ulcer Index | `ulcer_index()` | `.2f` | 27 |
+| 风险 | Calmar / 卡尔玛比率 | `calmar_ratio()` | `.2f` | 28 |
+| 风险 | 最大回撤持续天数 | `max_dd_duration()` | `.0f` | 29 |
+| 风险 | 最大回撤恢复天数 | `max_dd_recovery()` | `.0f` | 30 |
+| 交易 | 胜率 | `win_rate()` | `.1%` | 40 |
+| 交易 | 平均盈亏比 | `avg_profit_loss_ratio()` | `.2f` | 41 |
+| 交易 | 平均持仓天数 | `avg_holding_period()` | `.1f` | 42 |
+| 交易 | 持仓天数比例 | `position_holding_ratio()` | `.1%` | 43 |
+| 交易 | 凯利公式最优仓位 | `kelly_criterion()` | `.1%` | 50 |
+| 交易 | 半凯利仓位 | `kelly_fraction()` | `.1%` | 51 |
+
+> 每个指标返回纯数字，格式化由 `@metric(fmt=...)` 控制。新增指标只需加 `@metric`，`to_notebook/to_excel` 自动拾取。
 
 ### 3.5 时间区间切片
 
