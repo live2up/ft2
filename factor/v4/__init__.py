@@ -8,7 +8,7 @@ factor/v4 — 因子发现引擎 (基于 signals.v4 AST DSL + ft2.core Engine)
 
 模块结构:
   base.py          — FactorLibrary + FactorMetadata (复用 v3)
-  engine.py        — EngineCore + FastResult (ft2.core Engine 驱动, fast/full 双模式)
+  engine.py        — EngineCore (ft2.core Engine 驱动, fast/full 双模式, 统一返回 AccountAnalyzer)
   expression.py    — FactorExpression (基于 signals.v4 AST DSL)
   discover.py      — GP 发现引擎 (适配 signals.v4)
   validator.py     — IC/IR/Bootstrap 检验 (复用 v3)
@@ -34,7 +34,7 @@ from .base import (
 )
 
 # ── engine ──
-from .engine import EngineCore, FastResult
+from .engine import EngineCore
 
 # ── expression ──
 from .expression import FactorExpression
@@ -46,7 +46,7 @@ from .validator import FactorValidator, ValidationResult
 from .cache import FactorCacheStore
 
 __all__ = [
-    'EngineCore', 'FastResult',
+    'EngineCore',
     'FactorExpression',
     'FactorCategory', 'FactorMetadata', 'FactorLibrary',
     'FactorValidator', 'ValidationResult', 'FactorCacheStore',

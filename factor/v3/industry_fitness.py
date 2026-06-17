@@ -24,7 +24,8 @@ import pandas as pd
 from typing import Dict, List, Optional, Tuple
 
 from .discover import FitnessCalculator, _compute_daily_ics
-from .backtest import FixedScheduler, TopNEqualWeight
+from .backtest import FixedScheduler, TopNEqualWeight  # [保留] Scheduler/Allocator 仍用于参数
+from .engine_core import FactorEngineCore  # [新增] 2026-06-17 ft2.core 回测引擎
 
 logger = logging.getLogger(__name__)
 
@@ -93,28 +94,26 @@ class IndustryFitness(FitnessCalculator):
         self._N = self._shape[1]  # 截面宽度
 
     def _pipeline_sharpe(self, factor_values: np.ndarray) -> float:
-        """Pipeline Sharpe计算 — 复用FactorPipeline确保结果严格一致
+        """Pipeline Sharpe计算 — 使用 FactorEngineCore (ft2.core)
 
-        调用Pipeline.evaluate()保证:
-        1. 日期+标的交集对齐
-        2. NaN→0处理
-        3. 逐日累乘净值
-        4. √252年化Sharpe
+        [重构] 2026-06-17 从 FactorPipeline 迁移到 ft2.core Engine
         """
         if self.returns is None:
             return -999.0
 
         T, N = factor_values.shape
         try:
-            from .backtest import FactorPipeline
             fv_df = pd.DataFrame(factor_values,
                                  index=self.returns.index[:T],
                                  columns=self.returns.columns[:N])
             scheduler = self.scheduler or self._default_scheduler
             allocator = self.allocator or self._default_allocator
-            pipeline = FactorPipeline(self.returns, scheduler, allocator, self.cost_rate)
-            result = pipeline.evaluate(fv_df)
-            return float(result.sharpe_ratio)
+            top_n = allocator.top_n if hasattr(allocator, 'top_n') else self.top_n
+            analyzer = FactorEngineCore.backtest(
+                fv_df, self.returns, top_n=top_n, rebalance=scheduler,
+                cost_rate=self.cost_rate)
+            sr = analyzer.sharpe_ratio()
+            return float(sr) if sr is not None else -999.0
         except Exception as e:
             logger.debug(f"IndustryFitness Pipeline Sharpe失败: {e}")
             return -999.0

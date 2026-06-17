@@ -658,13 +658,12 @@ class AlphaExplorer:
         """批量探索因子"""
         # Lazy import to avoid circular
         from .validator import FactorValidator
-        from .backtest import FactorPipeline, FixedScheduler, TopNEqualWeight
+        from .engine_core import FactorEngineCore  # [重构] 2026-06-17 ft2.core 替代 FactorPipeline
 
         if alpha_ids is None:
             alpha_ids = list(self.formulas.keys())
         self.results = []
         scheduler = FixedScheduler(self.freq)
-        allocator = TopNEqualWeight(self.top_n)
 
         for i, aid in enumerate(alpha_ids):
             if verbose:
@@ -690,18 +689,20 @@ class AlphaExplorer:
                     if verbose:
                         print("IC=NaN")
                     continue
-                pipeline = FactorPipeline(returns=self.returns, scheduler=scheduler,
-                                          allocator=allocator, cost_rate=self.cost_rate)
-                bt = pipeline.evaluate(fv)
+                analyzer = FactorEngineCore.backtest(
+                    fv, self.returns, top_n=self.top_n, rebalance=scheduler,
+                    cost_rate=self.cost_rate)
+                sr = analyzer.sharpe_ratio()
                 result = AlphaResult(alpha_id=aid, ic_mean=float(ic_mean),
                                      ic_ir=float(ic_ir) if not np.isnan(ic_ir) else 0.0,
-                                     sharpe=bt.sharpe_ratio, annual_return=bt.annual_return,
-                                     max_drawdown=bt.max_drawdown,
+                                     sharpe=float(sr) if sr is not None else 0.0,
+                                     annual_return=analyzer.annualized_return() or 0.0,
+                                     max_drawdown=analyzer.max_drawdown() or 0.0,
                                      hit_rate=float(hr) if not np.isnan(hr) else 0.0,
                                      expression=formula)
                 self.results.append(result)
                 if verbose:
-                    print(f"IC={ic_mean:.4f} IR={ic_ir:.2f} Sharpe={bt.sharpe_ratio:.2f}")
+                    print(f"IC={ic_mean:.4f} IR={ic_ir:.2f} Sharpe={(sr if sr is not None else 0):.2f}")
             except Exception as e:
                 if verbose:
                     print(f"失败: {e}")

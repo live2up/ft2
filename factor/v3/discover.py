@@ -31,7 +31,8 @@ from .engine import (
     FactorExpression, ASTNode, NodeType, evaluate_node,
 )
 from .base import FactorCategory, LibraryEntry, FactorLibrary
-from .backtest import FixedScheduler, IntervalScheduler, TopNEqualWeight
+from .backtest import FixedScheduler, IntervalScheduler, TopNEqualWeight  # [保留] Scheduler/Allocator 仍用于参数定义
+from .engine_core import FactorEngineCore  # [新增] 2026-06-17 ft2.core 回测引擎
 
 logger = logging.getLogger(__name__)
 
@@ -215,16 +216,18 @@ class SharpeFitness(FitnessCalculator):
         if self.returns is None:
             return -999.0
         try:
-            from .backtest import FactorPipeline, FixedScheduler, TopNEqualWeight
             T, N = self._shape
             fv_df = pd.DataFrame(factor_values, index=self.returns.index[:T],
                                  columns=self.returns.columns[:N])
-            # [重构] 2026-06-01 使用注入参数，否则用安全默认值
+            # [重构] 2026-06-17 使用 FactorEngineCore (ft2.core) 替代 FactorPipeline
             scheduler = self.scheduler if self.scheduler is not None else FixedScheduler('ME')
             allocator = self.allocator if self.allocator is not None else TopNEqualWeight(3)
-            pipeline = FactorPipeline(self.returns, scheduler, allocator, self.cost_rate)
-            result = pipeline.evaluate(fv_df)
-            return float(result.sharpe_ratio)
+            top_n = allocator.top_n if hasattr(allocator, 'top_n') else 3
+            analyzer = FactorEngineCore.backtest(
+                fv_df, self.returns, top_n=top_n, rebalance=scheduler,
+                cost_rate=self.cost_rate)
+            sr = analyzer.sharpe_ratio()
+            return float(sr) if sr is not None else -999.0
         except Exception as e:
             logger.debug(f"SharpeFitness 计算失败: {e}")
             return -999.0
@@ -262,16 +265,19 @@ class MultiFreqFitness(FitnessCalculator):
         if self.returns is None:
             return -999.0
         try:
-            from .backtest import FactorPipeline, TopNEqualWeight
             T, N = self._shape
             fv_df = pd.DataFrame(factor_values, index=self.returns.index[:T],
                                  columns=self.returns.columns[:N])
             allocator = self.allocator if self.allocator is not None else TopNEqualWeight(3)
+            top_n = allocator.top_n if hasattr(allocator, 'top_n') else 3
             sharpes = []
             for sched in self.scheduler_list:
-                pipeline = FactorPipeline(self.returns, sched, allocator, self.cost_rate)
-                result = pipeline.evaluate(fv_df)
-                sharpes.append(result.sharpe_ratio)
+                analyzer = FactorEngineCore.backtest(
+                    fv_df, self.returns, top_n=top_n, rebalance=sched,
+                    cost_rate=self.cost_rate)
+                sr = analyzer.sharpe_ratio()
+                if sr is not None:
+                    sharpes.append(sr)
             return float(max(sharpes)) if sharpes else -999.0
         except Exception as e:
             logger.debug(f"MultiFreqFitness 计算失败: {e}")
@@ -347,17 +353,19 @@ class WQBFitness(FitnessCalculator):
                 'yearly_stability': yearly_stability, 'pass': pass_stage1}
 
     def _quick_backtest(self, factor_values: np.ndarray) -> float:
-        """Stage 2: 单频率Pipeline回测"""
-        from .backtest import FactorPipeline, FixedScheduler, TopNEqualWeight
+        """Stage 2: 单频率回测 (ft2.core)"""
         T, N = self._shape
         fv_df = pd.DataFrame(factor_values,
                              index=self.returns.index[:T],
                              columns=self.returns.columns[:N])
         scheduler = self.scheduler if self.scheduler is not None else FixedScheduler('ME')
         allocator = self.allocator if self.allocator is not None else TopNEqualWeight(3)
-        pipeline = FactorPipeline(self.returns, scheduler, allocator, self.cost_rate)
-        result = pipeline.evaluate(fv_df)
-        return float(result.sharpe_ratio)
+        top_n = allocator.top_n if hasattr(allocator, 'top_n') else 3
+        analyzer = FactorEngineCore.backtest(
+            fv_df, self.returns, top_n=top_n, rebalance=scheduler,
+            cost_rate=self.cost_rate)
+        sr = analyzer.sharpe_ratio()
+        return float(sr) if sr is not None else -999.0
 
     def compute(self, factor_values: np.ndarray) -> float:
         """主入口: IC过滤器 → 快速回测 → 返回Sharpe"""
@@ -871,7 +879,7 @@ class FactorDiscoveryEngine:
         self.report.rounds = []
         self.report.total_discovered = 0
 
-        from .backtest import FactorPipeline, TopNEqualWeight, parse_scheduler
+        from .backtest import parse_scheduler  # [保留] freq 字符串解析
 
         for round_idx, config in enumerate(rounds):
             mode_str = config.get('mode', 'icir')
@@ -934,11 +942,13 @@ class FactorDiscoveryEngine:
                     T, N = factor_values.shape[:2]
                     fv_df = pd.DataFrame(factor_values, index=self.returns.index[:T],
                                          columns=self.returns.columns[:N])
-                    # [重构] 2026-06-01 使用可配置的调度器和分配器
-                    pipeline = FactorPipeline(self.returns, val_scheduler,
-                                              val_allocator, self.cost_rate)
-                    bt = pipeline.evaluate(fv_df)
-                    validated.append((ind, bt.sharpe_ratio, expr_str))
+                    # [重构] 2026-06-17 使用 FactorEngineCore (ft2.core) 替代 FactorPipeline
+                    analyzer = FactorEngineCore.backtest(
+                        fv_df, self.returns, top_n=val_top_n,
+                        rebalance=val_scheduler, cost_rate=self.cost_rate)
+                    sr = analyzer.sharpe_ratio()
+                    if sr is not None:
+                        validated.append((ind, sr, expr_str))
                 except Exception as e:
                     logger.debug(f"候选 {i} 验证失败: {e}")
 

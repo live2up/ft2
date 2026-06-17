@@ -133,7 +133,7 @@ from factor.v4 import EngineCore
 
 # fast 模式: 搜索 (~0.5s/次)
 r = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
-# → FastResult(sharpe=1.16, cagr=0.148, max_drawdown=-0.10, trades=112)
+# → FastResult(sharpe=1.16, cagr=0.148, max_drawdown=0.10, trades=112)  # [修复] 2026-06-16 MDD 正值对齐 full
 
 # full 模式: 验证 + 报告
 analyzer = EngineCore.backtest(panel, assets, mode='full', top_n=3,
