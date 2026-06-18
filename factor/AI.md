@@ -39,8 +39,8 @@ v4:  signals.v4 AST DSL → 67原语实时计算 → ft2.core Engine回测 → F
                    └──────┬───────┘                    │
                           ▼                            │
                   factor/v4/                           │
-                  discover.py                          │
-                  GPEngine + FactorDiscoveryEngine      │
+                  gp_engine.py                         │
+                  GPEngine (种子驱动组合优化)           │
                           │                            │
                           └──────────┬─────────────────┘
                                      ▼
@@ -60,12 +60,12 @@ factor/
 │   ├── __init__.py         # 统一导出
 │   ├── expression.py       # FactorExpression (基于 signals.v4 AST DSL)
 │   ├── engine.py           # EngineCore (fast/full 双模式, ft2.core 驱动)
-│   ├── discover.py         # GPEngine + FactorDiscoveryEngine
+│   ├── gp_engine.py       # GP 因子组合优化引擎 (Python AST 原生, 种子驱动)
 │   ├── validator.py        # IC/IR/Bootstrap 检验
 │   ├── search.py           # 网格搜索 + 贝叶斯优化
 │   ├── cache.py            # 因子值缓存
 │   ├── base.py             # FactorLibrary + FactorMetadata (复用 v3)
-│   ├── industry_fitness.py # 行业适应度
+│   ├── industry_fitness.py # 行业适应度 + FitnessCalculator 基类
 │   ├── llm/                # LLM 因子生成器
 │   │   ├── generator.py
 │   │   ├── prompts.py
@@ -153,47 +153,44 @@ analyzer.to_notebook("因子轮动")
 | `start_date` | 回测起始日 | None=数据首位 |
 | `bench_label` | full 模式基准标签 | None |
 
-### 3. GP 符号回归引擎
+### 3. GP 因子组合优化引擎
 
 ```python
-from factor.v4.discover import GPEngine, FitnessMode
+from factor.v4 import GPEngine
 
 gp = GPEngine(
     data=panel_dict,            # {col: ndarray(T,N)}
-    future_returns=returns_df,  # DataFrame(T,N)
-    returns=returns_df,
-    fitness_mode=FitnessMode.ICIR,  # ICIR / SHARPE / MULTI_FREQ
-    population_size=300,
-    generations=30,
-    max_depth=8,
-    seed_expressions=["ts_rank(sub(close, delay(close, 20)), 10)"],
+    fitness_calculator=fitness_calc,  # 可插拔适应度
+    seed_expressions=[
+        'ts_zscore(CLOSE, 20) > 0 and amt_ratio(AMOUNT, 5, 20) > 1',
+        'persist(ts_roc(CLOSE, 5) > 0, 2)',
+    ],
+    config={'population_size': 200, 'generations': 20},
 )
 gp.run()
 best = gp.best()
 # best.expression_str, best.fitness, best.depth
 ```
 
-### 4. 因子发现引擎
+### 4. 行业适应度
 
 ```python
-from factor.v4.discover import FactorDiscoveryEngine
+from factor.v4.industry_fitness import IndustryFitness, FitnessCalculator
 
-engine = FactorDiscoveryEngine(
+# 行业轮动自适应适应度
+fitness = IndustryFitness(
     data=panel_dict,
+    future_returns=returns_df,
     returns=returns_df,
-    seed_formulas=ALPHA101,
-    cost_rate=0.0,
-    seed_top_n=50,
-    save_dir='./discovered',
+    top_n=3,
 )
 
-# 多轮迭代
-report = engine.run_pipeline(rounds=[
-    {'mode': 'icir', 'generations': 20, 'top_n': 50, 'freq': 'ME', 'val_top_n': 5},
-    {'mode': 'sharpe', 'generations': 40, 'top_n': 30, 'freq': 'W', 'val_top_n': 3},
-])
-
-print(f"发现 {engine.library.size()} 个因子")
+# GPEngine 中使用
+gp = GPEngine(
+    data=panel_dict,
+    fitness_calculator=fitness,
+    seed_expressions=[...],
+)
 ```
 
 ### 5. 因子检验

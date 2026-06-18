@@ -12,11 +12,10 @@ factor/v4 — 因子发现引擎 (基于 signals.v4 AST DSL + ft2.core Engine)
   engine.py        — EngineCore (ft2.core Engine 驱动, fast/full 双模式, 统一返回 AccountAnalyzer)
   expression.py    — FactorExpression (基于 signals.v4 AST DSL)
   gp_engine.py     — GP 因子组合优化引擎 (Python AST 原生, 种子驱动)
-  discover.py      — 发现流水线 (适配 signals.v4)
   validator.py     — IC/IR/Bootstrap 检验 (复用 v3)
   search.py        — 网格搜索 + BO (适配 signals.v4)
   cache.py         — 因子值缓存 (复用 v3)
-  industry_fitness.py — 行业适应度 (复用 v3)
+  industry_fitness.py — 行业适应度 + FitnessCalculator 基类
   llm/             — LLM 因子生成器
   formulas/        — 公式库 (WQ101/GT191，语法适配 V4)
 

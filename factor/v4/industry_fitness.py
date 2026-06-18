@@ -24,7 +24,66 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
 
-from .discover import FitnessCalculator, _compute_daily_ics
+# [迁移] 2026-06-18 从 discover.py 迁入 FitnessCalculator + _compute_daily_ics (discover.py 已删除)
+
+
+class FitnessCalculator:
+    """适应度计算器基类
+
+    [迁移] 2026-06-18 从 discover.py 迁入，仅保留 industry_fitness 所需的基类。
+    """
+
+    def __init__(self, data: Dict[str, np.ndarray], future_returns: pd.DataFrame,
+                 returns: pd.DataFrame = None, cost_rate: float = 0.0,
+                 scheduler=None, allocator=None):
+        self.data = data
+        self.future_returns = future_returns
+        self.returns = returns
+        self.cost_rate = cost_rate
+        self.scheduler = scheduler
+        self.allocator = allocator
+        self._shape = self._infer_shape(data)
+
+    @staticmethod
+    def _infer_shape(data) -> Tuple[int, int]:
+        for arr in data.values():
+            if isinstance(arr, np.ndarray) and arr.ndim == 2:
+                return arr.shape
+        return (1, 1)
+
+    def compute(self, factor_values: np.ndarray) -> float:
+        raise NotImplementedError
+
+    def _validate(self, factor_values: np.ndarray) -> bool:
+        if np.all(np.isnan(factor_values)):
+            return False
+        if np.nanstd(factor_values) < 1e-10:
+            return False
+        return True
+
+
+def _compute_daily_ics(factor_values: np.ndarray, future_returns: pd.DataFrame
+                       ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """计算日频 IC 序列 + 有效日索引
+
+    [迁移] 2026-06-18 从 discover.py 迁入
+    """
+    T = factor_values.shape[0]
+    daily_ics = []
+    valid_indices = []
+    for t in range(T):
+        fv = factor_values[t, :]
+        rv = future_returns.iloc[t].values
+        mask = ~np.isnan(fv) & ~np.isnan(rv)
+        if mask.sum() < 5:
+            continue
+        corr = np.corrcoef(fv[mask], rv[mask])[0, 1]
+        if not np.isnan(corr):
+            daily_ics.append(corr)
+            valid_indices.append(t)
+    if len(daily_ics) < 30:
+        return None, None
+    return np.array(daily_ics), np.array(valid_indices, dtype=int)
 
 logger = logging.getLogger(__name__)
 
