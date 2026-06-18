@@ -785,7 +785,7 @@ body {
 }
 
 /* 基础表格样式 */
-/* [修复] 2026-06-18 min-width:100% 让小表格撑满宽度，大表格自然溢出滚动 */
+/* [修复] 2026-06-18 width:100% 让小表格撑满宽度，大表格自然溢出滚动 */
 /*        去掉单元格 min-width:100px，保留 max-width:400px 防止长公式列独占空间 */
 .ft-table {
     border-collapse: collapse;
@@ -793,7 +793,7 @@ body {
     text-align: left;
     background: #fff;
     border-radius: 6px;
-    min-width: 100%;
+    width: 100%;
 }
 
 /* 表头样式 - Notion 风格：无背景色，只有底部分隔线 */
