@@ -785,12 +785,15 @@ body {
 }
 
 /* 基础表格样式 */
+/* [修复] 2026-06-18 min-width:100% 让小表格撑满宽度，大表格自然溢出滚动 */
+/*        去掉单元格 min-width:100px，保留 max-width:400px 防止长公式列独占空间 */
 .ft-table {
     border-collapse: collapse;
     font-size: 14px;
     text-align: left;
     background: #fff;
     border-radius: 6px;
+    min-width: 100%;
 }
 
 /* 表头样式 - Notion 风格：无背景色，只有底部分隔线 */
@@ -801,7 +804,9 @@ body {
     border-bottom: 1px solid #e9e9e9;
     color: #37352f;
     white-space: nowrap;
-    min-width: 100px;
+    max-width: 500px;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* 表体样式 */
@@ -809,7 +814,6 @@ body {
     padding: 10px 12px;
     border-bottom: 1px solid #eee;
     color: #333;
-    min-width: 100px;
     max-width: 400px;
     overflow: hidden;
     text-overflow: ellipsis;
