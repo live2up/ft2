@@ -1,5 +1,5 @@
 """
-factor/v3/discover.py — 因子发现引擎（v3 核心创新）
+factor/v4/discover.py — 因子发现引擎
 =============================================================================
 
 将 v2 的 gp_miner.py + gp_evaluator.py 重构为可插拔适应度 + 迭代发现流水线。
@@ -15,6 +15,7 @@ factor/v3/discover.py — 因子发现引擎（v3 核心创新）
   - FactorLibrary 自增长，发现越多种子越多
 
 [新增] 2026-06-01 v3 核心模块
+[重构] 2026-06-18 FactorPipeline → ft2.core EngineCore (fast 模式)
 =============================================================================
 """
 
@@ -28,6 +29,7 @@ from enum import Enum
 from datetime import datetime
 
 from signals.v4 import Expression
+from factor.v3.engine import ASTNode, NodeType, evaluate_node  # [修复] 2026-06-18 补充缺失的 GP 树结构导入
 from .base import FactorCategory, LibraryEntry, FactorLibrary
 
 logger = logging.getLogger(__name__)
@@ -201,9 +203,9 @@ def _compute_daily_ics(factor_values: np.ndarray, future_returns: pd.DataFrame
 class SharpeFitness(FitnessCalculator):
     """Pipeline Sharpe 适应度：真实回测绩效
 
-    使用 self.scheduler / self.allocator（构造注入），不为空时优先于默认值。
+    使用 ft2.core EngineCore (fast 模式) 替代 FactorPipeline。
 
-    [重构] 2026-06-01 用注入参数替代硬编码 FixedScheduler('ME') + TopNEqualWeight(3)
+    [重构] 2026-06-18 FactorPipeline → EngineCore.backtest(mode='fast')
     """
 
     def compute(self, factor_values: np.ndarray) -> float:
@@ -212,16 +214,15 @@ class SharpeFitness(FitnessCalculator):
         if self.returns is None:
             return -999.0
         try:
-            from .backtest import FactorPipeline, FixedScheduler, TopNEqualWeight
+            from .engine import EngineCore
             T, N = self._shape
             fv_df = pd.DataFrame(factor_values, index=self.returns.index[:T],
                                  columns=self.returns.columns[:N])
-            # [重构] 2026-06-01 使用注入参数，否则用安全默认值
-            scheduler = self.scheduler if self.scheduler is not None else FixedScheduler('ME')
-            allocator = self.allocator if self.allocator is not None else TopNEqualWeight(3)
-            pipeline = FactorPipeline(self.returns, scheduler, allocator, self.cost_rate)
-            result = pipeline.evaluate(fv_df)
-            return float(result.sharpe_ratio)
+            top_n = getattr(self.allocator, 'top_n', 3) if self.allocator is not None else 3
+            rebalance = self.scheduler if self.scheduler is not None else 'ME'
+            analyzer = EngineCore.backtest(fv_df, returns=self.returns,
+                                           top_n=top_n, rebalance=rebalance, mode='fast')
+            return float(analyzer.sharpe_ratio())
         except Exception as e:
             logger.debug(f"SharpeFitness 计算失败: {e}")
             return -999.0
@@ -259,16 +260,17 @@ class MultiFreqFitness(FitnessCalculator):
         if self.returns is None:
             return -999.0
         try:
-            from .backtest import FactorPipeline, TopNEqualWeight
+            from .engine import EngineCore
             T, N = self._shape
             fv_df = pd.DataFrame(factor_values, index=self.returns.index[:T],
                                  columns=self.returns.columns[:N])
+            top_n = getattr(self.allocator, 'top_n', 3) if self.allocator is not None else 3
             allocator = self.allocator if self.allocator is not None else TopNEqualWeight(3)
             sharpes = []
             for sched in self.scheduler_list:
-                pipeline = FactorPipeline(self.returns, sched, allocator, self.cost_rate)
-                result = pipeline.evaluate(fv_df)
-                sharpes.append(result.sharpe_ratio)
+                analyzer = EngineCore.backtest(fv_df, returns=self.returns,
+                                               top_n=top_n, rebalance=sched, mode='fast')
+                sharpes.append(analyzer.sharpe_ratio())
             return float(max(sharpes)) if sharpes else -999.0
         except Exception as e:
             logger.debug(f"MultiFreqFitness 计算失败: {e}")
@@ -344,17 +346,17 @@ class WQBFitness(FitnessCalculator):
                 'yearly_stability': yearly_stability, 'pass': pass_stage1}
 
     def _quick_backtest(self, factor_values: np.ndarray) -> float:
-        """Stage 2: 单频率Pipeline回测"""
-        from .backtest import FactorPipeline, FixedScheduler, TopNEqualWeight
+        """Stage 2: 单频率快速回测 (EngineCore fast 模式)"""
+        from .engine import EngineCore
         T, N = self._shape
         fv_df = pd.DataFrame(factor_values,
                              index=self.returns.index[:T],
                              columns=self.returns.columns[:N])
-        scheduler = self.scheduler if self.scheduler is not None else FixedScheduler('ME')
-        allocator = self.allocator if self.allocator is not None else TopNEqualWeight(3)
-        pipeline = FactorPipeline(self.returns, scheduler, allocator, self.cost_rate)
-        result = pipeline.evaluate(fv_df)
-        return float(result.sharpe_ratio)
+        top_n = getattr(self.allocator, 'top_n', 3) if self.allocator is not None else 3
+        rebalance = self.scheduler if self.scheduler is not None else 'ME'
+        analyzer = EngineCore.backtest(fv_df, returns=self.returns,
+                                       top_n=top_n, rebalance=rebalance, mode='fast')
+        return float(analyzer.sharpe_ratio())
 
     def compute(self, factor_values: np.ndarray) -> float:
         """主入口: IC过滤器 → 快速回测 → 返回Sharpe"""
@@ -868,7 +870,7 @@ class FactorDiscoveryEngine:
         self.report.rounds = []
         self.report.total_discovered = 0
 
-        from .backtest import FactorPipeline, TopNEqualWeight, parse_scheduler
+        from .backtest import TopNEqualWeight, parse_scheduler
 
         for round_idx, config in enumerate(rounds):
             mode_str = config.get('mode', 'icir')
@@ -920,7 +922,8 @@ class FactorDiscoveryEngine:
                 print(f"\nGP 完成，Top {top_n} 候选: "
                       f"best_fitness={candidates[0].fitness:.3f}")
 
-            # 5. Pipeline validation for each candidate
+            # 5. EngineCore fast validation for each candidate
+            from .engine import EngineCore
             validated = []
             for i, ind in enumerate(candidates[:top_n]):
                 try:
@@ -931,11 +934,11 @@ class FactorDiscoveryEngine:
                     T, N = factor_values.shape[:2]
                     fv_df = pd.DataFrame(factor_values, index=self.returns.index[:T],
                                          columns=self.returns.columns[:N])
-                    # [重构] 2026-06-01 使用可配置的调度器和分配器
-                    pipeline = FactorPipeline(self.returns, val_scheduler,
-                                              val_allocator, self.cost_rate)
-                    bt = pipeline.evaluate(fv_df)
-                    validated.append((ind, bt.sharpe_ratio, expr_str))
+                    # [重构] 2026-06-18 FactorPipeline → EngineCore.backtest(mode='fast')
+                    analyzer = EngineCore.backtest(fv_df, returns=self.returns,
+                                                   top_n=val_top_n, rebalance=val_scheduler,
+                                                   mode='fast')
+                    validated.append((ind, analyzer.sharpe_ratio(), expr_str))
                 except Exception as e:
                     logger.debug(f"候选 {i} 验证失败: {e}")
 

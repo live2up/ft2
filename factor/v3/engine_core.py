@@ -78,7 +78,7 @@ class FactorEngineCore:
             rebalance: 'D'/'W'/'ME' 或 RebalanceScheduler 对象
             mode: 'full'/'fast'
             initial_capital: 初始资金
-            cost_rate: 单边交易费率 (仅 fast 模式)
+            cost_rate: [废弃] 保留参数兼容旧调用, 实际忽略 (统一零费率)
             start_date: 回测起始日
             bench_label: full 模式基准标签
 
@@ -95,7 +95,7 @@ class FactorEngineCore:
 
         if mode == 'fast':
             return FactorEngineCore._run_fast(panel, asset_dict, top_n, rebalance,
-                                             initial_capital, cost_rate, start_date)
+                                             initial_capital, start_date)
         else:
             return FactorEngineCore._run_full(panel, asset_dict, top_n, rebalance,
                                              initial_capital, start_date, bench_label)
@@ -106,7 +106,7 @@ class FactorEngineCore:
 
     @staticmethod
     def _run_fast(panel, assets, top_n, rebalance, initial_capital,
-                  cost_rate=0.0, start_date=None):
+                  start_date=None):
         """fast 模式: Engine.run() + 自管持仓/净值, 对齐 v4 EngineCore._run_fast
 
         与 v4 完全一致:
@@ -148,12 +148,9 @@ class FactorEngineCore:
         positions: Dict[str, float] = {}  # code → shares
         daily_assets = {}
 
-        # 前次权重 (用于换手率计算)
-        prev_weights: Dict[str, float] = {}
-
         class _FastRotationStrategy:
             def on_bar(self, ctx, bars):
-                nonlocal cash, positions, prev_weights
+                nonlocal cash, positions
 
                 if len(bars) == 0:
                     return
@@ -185,25 +182,6 @@ class FactorEngineCore:
                 row = panel.loc[current_date]
                 top_codes = set(row.nlargest(top_n).index.tolist())
 
-                # 换手费 (v3 特有: 从旧权重计算后再平仓)
-                if cost_rate > 0 and prev_weights:
-                    current_weights = {}
-                    for code, shares in positions.items():
-                        for b in bars:
-                            if b.get('symbol') == code:
-                                price = b.get('close', b.get('open', 0))
-                                current_weights[code] = shares * price / max(total_nav, 1e-10)
-                                break
-                    # 新权重
-                    new_weights = {c: 1.0 / len(top_codes) for c in top_codes} if top_codes else {}
-                    # 换手率
-                    all_codes = set(list(current_weights.keys()) + list(new_weights.keys()))
-                    turnover = 0.0
-                    for c in all_codes:
-                        turnover += abs(current_weights.get(c, 0) - new_weights.get(c, 0))
-                    turnover /= 2.0
-                    cash -= total_nav * turnover * cost_rate
-
                 # 平仓 (与 v4 一致)
                 for code in list(positions.keys()):
                     if code not in top_codes:
@@ -231,17 +209,6 @@ class FactorEngineCore:
                                     if cost <= cash:
                                         cash -= cost
                                         positions[code] = shares
-                                break
-
-                # 记录权重供下次换手计算
-                prev_weights.clear()
-                if top_codes:
-                    for code in top_codes & set(symbols):
-                        for b in bars:
-                            if b.get('symbol') == code:
-                                price = b.get('close', b.get('open', 0))
-                                val = positions.get(code, 0) * price
-                                prev_weights[code] = val / max(total_nav, 1e-10)
                                 break
 
         start_time = panel.index[0].to_pydatetime()

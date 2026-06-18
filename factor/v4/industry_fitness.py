@@ -1,14 +1,14 @@
 """
-factor/v3/industry_fitness.py — 行业轮动自适应适应度
+factor/v4/industry_fitness.py — 行业轮动自适应适应度
 
 核心设计:
   N < 50:   Pipeline Sharpe做fitness (IC不可信, 跳过IC门控)
   N 50~100: 宽松IC门控 + Pipeline Sharpe (IC半可信)
   N ≥ 100:  WQB风格IC门控 + Pipeline Sharpe (IC可信)
 
-Sharpe计算: 直接复用FactorPipeline.evaluate(), 确保与手动回测完全一致
+Sharpe计算: 使用 ft2.core EngineCore (fast 模式) 替代 FactorPipeline
   - 日期+标的交集对齐、NaN→0、逐日累乘净值、√252年化
-  - 调仓周期由scheduler控制(FixedScheduler/IntervalScheduler)
+  - 调仓周期由scheduler/rebalance参数控制
 
 IC门控: 根据截面宽度N自适应
   N < 50:   跳过(IC统计量噪声大, 会误杀好因子)
@@ -16,6 +16,7 @@ IC门控: 根据截面宽度N自适应
   N ≥ 100:  ICIR + HR + 分年度稳定性(严格, WQB风格)
 
 [新增] 2026-06-05
+[重构] 2026-06-18 FactorPipeline → EngineCore.backtest(mode='fast')
 """
 
 import logging
@@ -24,7 +25,6 @@ import pandas as pd
 from typing import Dict, List, Optional, Tuple
 
 from .discover import FitnessCalculator, _compute_daily_ics
-from .backtest import FixedScheduler, TopNEqualWeight
 
 logger = logging.getLogger(__name__)
 
@@ -86,37 +86,29 @@ class IndustryFitness(FitnessCalculator):
         self.min_yearly = min_yearly
         self.icir_threshold = icir_threshold
 
-        # 内部默认: 未传scheduler时用月末, 未传allocator时用TopN等权
-        self._default_scheduler = FixedScheduler('ME')
-        self._default_allocator = TopNEqualWeight(top_n)
-
         self._N = self._shape[1]  # 截面宽度
 
     def _pipeline_sharpe(self, factor_values: np.ndarray) -> float:
-        """Pipeline Sharpe计算 — 复用FactorPipeline确保结果严格一致
+        """EngineCore fast Sharpe — 替代 FactorPipeline
 
-        调用Pipeline.evaluate()保证:
-        1. 日期+标的交集对齐
-        2. NaN→0处理
-        3. 逐日累乘净值
-        4. √252年化Sharpe
+        [重构] 2026-06-18 FactorPipeline → EngineCore.backtest(mode='fast')
         """
         if self.returns is None:
             return -999.0
 
         T, N = factor_values.shape
         try:
-            from .backtest import FactorPipeline
+            from .engine import EngineCore
             fv_df = pd.DataFrame(factor_values,
                                  index=self.returns.index[:T],
                                  columns=self.returns.columns[:N])
-            scheduler = self.scheduler or self._default_scheduler
-            allocator = self.allocator or self._default_allocator
-            pipeline = FactorPipeline(self.returns, scheduler, allocator, self.cost_rate)
-            result = pipeline.evaluate(fv_df)
-            return float(result.sharpe_ratio)
+            rebalance = self.scheduler if self.scheduler is not None else 'ME'
+            _top_n = getattr(self.allocator, 'top_n', self.top_n) if self.allocator is not None else self.top_n
+            analyzer = EngineCore.backtest(fv_df, returns=self.returns,
+                                           top_n=_top_n, rebalance=rebalance, mode='fast')
+            return float(analyzer.sharpe_ratio())
         except Exception as e:
-            logger.debug(f"IndustryFitness Pipeline Sharpe失败: {e}")
+            logger.debug(f"IndustryFitness EngineCore Sharpe失败: {e}")
             return -999.0
 
     def _ic_gate(self, factor_values: np.ndarray) -> Tuple[bool, Dict[str, float]]:
@@ -261,8 +253,8 @@ class IndustryFitness(FitnessCalculator):
                         row['yearly_stability'] = float(np.mean(
                             [1.0 for ym in yearly_means if np.sign(ym) == main_dir]))
 
-            # 快速Sharpe
-            row['quick_sharpe'] = self._quick_sharpe(fv)
+            # [修复] 2026-06-18 原引用不存在的 _quick_sharpe，改用 _pipeline_sharpe
+            row['quick_sharpe'] = self._pipeline_sharpe(fv)
 
             rows.append(row)
 

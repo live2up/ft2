@@ -82,7 +82,8 @@ class FactorGridSearch:
             List[GridSearchResult]: 按 Sharpe 降序排列的结果
         """
         from .validator import FactorValidator
-        from .backtest import FactorPipeline, TopNEqualWeight, parse_scheduler
+        from .backtest import TopNEqualWeight, parse_scheduler
+        from .engine import EngineCore
 
         if freqs is None:
             freqs = ['ME', 'W']
@@ -123,19 +124,18 @@ class FactorGridSearch:
             if ic_mean is None or np.isnan(ic_mean):
                 continue
 
-            # Pipeline backtest
-            allocator = TopNEqualWeight(top_n)
-            pipeline = FactorPipeline(self.returns, scheduler, allocator, self.cost_rate)
-            bt = pipeline.evaluate(fv)
+            # [重构] 2026-06-18 FactorPipeline → EngineCore.backtest(mode='fast')
+            analyzer = EngineCore.backtest(fv, returns=self.returns,
+                                           top_n=top_n, rebalance=scheduler, mode='fast')
 
             result = GridSearchResult(
                 param_name=f"{factor_name}_L{lookback}",
                 lookback=lookback, freq=freq, top_n=top_n,
                 ic_mean=float(ic_mean),
                 ic_ir=float(ic_ir) if not np.isnan(ic_ir) else 0.0,
-                sharpe=bt.sharpe_ratio,
-                annual_return=bt.annual_return,
-                max_drawdown=bt.max_drawdown,
+                sharpe=analyzer.sharpe_ratio(),
+                annual_return=analyzer.annualized_return() or 0.0,
+                max_drawdown=float(analyzer.max_drawdown()[0]) if analyzer.max_drawdown() else 0.0,
                 hit_rate=float(hr) if not np.isnan(hr) else 0.0,
             )
             self.results.append(result)
@@ -208,12 +208,10 @@ class FactorBOSearch:
         Returns:
             Dict: {'best_params', 'best_score', 'all_results'}
         """
-        from .validator import FactorValidator
-        from .backtest import FactorPipeline, TopNEqualWeight, parse_scheduler
+        from .engine import EngineCore
 
         # [重构] 2026-06-05 使用 parse_scheduler 统一入口
         scheduler = parse_scheduler(freq)
-        allocator = TopNEqualWeight(top_n)
 
         # [修复] 2026-06-01 失败值从 1e10 改为 999.0 与 FitnessCalculator 一致
         FAILURE_PENALTY = 999.0
@@ -222,9 +220,10 @@ class FactorBOSearch:
             fv = factor_fn(*params_tuple)
             if fv is None:
                 return FAILURE_PENALTY
-            pipeline = FactorPipeline(self.returns, scheduler, allocator, self.cost_rate)
-            bt = pipeline.evaluate(fv)
-            return -bt.sharpe_ratio  # minimize negative Sharpe
+            # [重构] 2026-06-18 FactorPipeline → EngineCore.backtest(mode='fast')
+            analyzer = EngineCore.backtest(fv, returns=self.returns,
+                                           top_n=top_n, rebalance=scheduler, mode='fast')
+            return -analyzer.sharpe_ratio()  # minimize negative Sharpe
 
         if self._use_skopt:
             from skopt import gp_minimize

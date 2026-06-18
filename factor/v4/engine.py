@@ -17,8 +17,9 @@ factor/v4/engine.py — 因子轮动回测引擎 (ft2.core 驱动)
   analyzer = EngineCore.backtest(panel, assets, mode='full', top_n=3, rebalance='W')
   analyzer.to_notebook("因子轮动回测")
 """
+import numpy as np
 import pandas as pd
-from typing import Dict
+from typing import Dict, Union
 
 from core.engine import Engine
 from core.account import OrderSide, BenchHolder
@@ -40,10 +41,11 @@ class EngineCore:
 
     @staticmethod
     def backtest(panel: pd.DataFrame,
-                 assets: Dict[str, pd.DataFrame],
+                 assets: Dict[str, pd.DataFrame] = None,
+                 returns: pd.DataFrame = None,
                  top_n: int = 3,
-                 rebalance: str = 'W',
-                 mode: str = 'full',
+                 rebalance: Union[str, object] = 'W',
+                 mode: str = 'fast',
                  initial_capital: float = 1_000_000,
                  start_date: str = None,
                  bench_label: str = None,
@@ -52,10 +54,11 @@ class EngineCore:
 
         Args:
             panel: 因子排名面板, index=日期, columns=品种, 值越大越好
-            assets: {品种代码: OHLCV DataFrame} (需含 close/high/low/open/volume)
+            assets: {品种代码: OHLCV DataFrame} (优先于 returns)
+            returns: 日收益率 DataFrame (自动合成 OHLCV assets)
             top_n: 持仓品种数
-            rebalance: 调仓频率 'D'/'W'/'M'
-            mode: 'full'/'fast', 统一返回 AccountAnalyzer (接口一致)
+            rebalance: 调仓频率 'D'/'W'/'M'/'ME'/'5D' 或 RebalanceScheduler 对象
+            mode: 'fast'/'fast', 统一返回 AccountAnalyzer (接口一致)
             initial_capital: 初始资金
             start_date: 回测起始日, None=数据首位
             bench_label: full 模式下基准标签 (自动跑 BenchHolder)
@@ -65,7 +68,15 @@ class EngineCore:
 
         Returns:
             AccountAnalyzer: 统一分析器 (可 sharpe_ratio()/metrics()/to_notebook())
+
+        [重构] 2026-06-18 新增 returns 参数 (自动合成 OHLCV), rebalance 支持 Scheduler 对象
         """
+        # 数据源: assets 优先, 否则从 returns 合成
+        if assets is None and returns is not None:
+            assets = EngineCore._synthetic_assets(returns)
+        elif assets is None:
+            raise ValueError("需要 assets 或 returns 参数")
+
         if mode == 'fast':
             return EngineCore._run_fast(panel, assets, top_n, rebalance,
                                        initial_capital, start_date, buffer)
@@ -85,8 +96,7 @@ class EngineCore:
         dates = panel.index.sort_values()
         symbols = panel.columns.tolist()
 
-        rebalance_dates = dates.to_series().resample(rebalance).last().dropna()
-        rebalance_set = set(rebalance_dates)
+        rebalance_set = EngineCore._make_rebalance_set(dates, rebalance)
 
         engine = Engine(init_cash=initial_capital)
         context.mode = 'backtest'
@@ -221,8 +231,7 @@ class EngineCore:
         dates = panel.index.sort_values()
         symbols = panel.columns.tolist()
 
-        rebalance_dates = dates.to_series().resample(rebalance).last().dropna()
-        rebalance_set = {pd.Timestamp(d.date()) for d in rebalance_dates}
+        rebalance_set = EngineCore._make_rebalance_set(dates, rebalance)
 
         engine = Engine(init_cash=initial_capital)
         context.mode = 'backtest'
@@ -347,3 +356,57 @@ class EngineCore:
         if start_date is not None:
             panel = panel.loc[panel.index >= pd.Timestamp(start_date)]
         return panel
+
+    @staticmethod
+    def _synthetic_assets(returns: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+        """从日收益率 DataFrame 合成 OHLCV assets dict
+
+        close = cumprod(1+r), open/high/low = close, volume = 1。
+        Engine 的 order_percent/自管持仓只看 close 价格，不影响回测结果。
+
+        [新增] 2026-06-18 从 v3 engine_core 上移，v4 自包含
+        """
+        assets = {}
+        dates = returns.index
+        for code in returns.columns:
+            ret_col = returns[code].values
+            close_prices = np.cumprod(1.0 + np.nan_to_num(ret_col, nan=0.0))
+            df = pd.DataFrame({
+                'open': close_prices,
+                'high': close_prices,
+                'low': close_prices,
+                'close': close_prices,
+                'volume': 1.0,
+            }, index=dates)
+            df['eob'] = dates
+            assets[code] = df
+        return assets
+
+    @staticmethod
+    def _make_rebalance_set(dates: pd.DatetimeIndex,
+                            rebalance: Union[str, object]) -> set:
+        """生成调仓日集合，兼容字符串和 v3 RebalanceScheduler 对象
+
+        字符串: 使用 pd.resample (与 v4 原逻辑一致)
+        Scheduler: 调用 generate() (保持 v3 兼容)
+
+        [新增] 2026-06-18 统一调仓日生成，支持 Scheduler 对象透传
+        """
+        # Scheduler 对象 → 调用 generate
+        if hasattr(rebalance, 'generate'):
+            rb_dates = rebalance.generate(dates)
+            return {pd.Timestamp(d.date()) for d in rb_dates}
+
+        # 字符串
+        rebalance = str(rebalance)
+        if rebalance.endswith('D') and rebalance[:-1].isdigit():
+            # 固定间隔: '5D' → 每5个交易日
+            interval = int(rebalance[:-1])
+            rb_dates = [dates[i] for i in range(interval - 1, len(dates), interval)]
+            return {pd.Timestamp(d.date()) for d in rb_dates}
+
+        # 标准频率: 'D' / 'W' / 'M' / 'ME'
+        freq_map = {'M': 'MS', 'ME': 'ME'}
+        freq = freq_map.get(rebalance, rebalance)
+        rebalance_series = dates.to_series().resample(freq).last().dropna()
+        return {pd.Timestamp(d.date()) for d in rebalance_series}
