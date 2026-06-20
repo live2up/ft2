@@ -42,6 +42,8 @@ v3 现在是完全独立的包——复制了 v2 中所有被依赖的模块，
  │  fast → Engine.run() + 自管净值              │
  │  full → Engine.run() + AccountManager      │
  │         → AccountAnalyzer → to_notebook    │
+ │                                            │
+ │  两种模式统一返回 AccountAnalyzer             │
  └────────────────────────────────────────────┘
 
 ============================================================================
@@ -51,8 +53,8 @@ v3 现在是完全独立的包——复制了 v2 中所有被依赖的模块，
 from signals.v3 import EngineV3
 
 # 探索 (fast)
-result = EngineV3.backtest(signal, data, mode='fast')
-# → FastResult(sharpe=1.13, cagr=0.148, ...)
+analyzer = EngineV3.backtest(signal, data, mode='fast')
+# → AccountAnalyzer (sharpe_ratio()/annualized_return()/max_drawdown()/...)
 
 # 验证 (full)
 analyzer = EngineV3.backtest(signal, data, mode='full',
@@ -89,7 +91,7 @@ from .presets import (
 )
 
 # ── v3 核心引擎 ──
-from .engine import EngineV3, FastResult
+from .engine import EngineV3
 
 # ── v3 搜索 ──
 from .search import GPSearch, GridSearch
@@ -106,7 +108,7 @@ from .monitor import Explainer, ExplanationReport, RegimePerformance, explain_si
 
 __all__ = [
     # v3 引擎
-    'EngineV3', 'FastResult',
+    'EngineV3',
     # 搜索
     'GPSearch', 'GridSearch',
     # 验证

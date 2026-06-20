@@ -43,13 +43,15 @@ class GPSearch(GPOptimizer):
         try:
             # 构造隐式 data (fast 模式只需 close)
             df = pd.DataFrame({'close': prices.values}, index=prices.index)
-            result = EngineV3.backtest(
+            analyzer = EngineV3.backtest(
                 signals, df, mode='fast', start_date=self._start_date)
+            dd_result = analyzer.max_drawdown()
             return {
-                'sharpe': result.sharpe,
-                'annual_return': result.cagr * 100,    # 转百分比 对齐 v2 接口
-                'max_drawdown': abs(result.max_drawdown) * 100,
-                'trade_count': result.trades,
+                'sharpe': analyzer.sharpe_ratio() or 0,
+                # GPOptimizer 基类 report() 用 {:.1f}% 格式化, 需传百分比值
+                'annual_return': (analyzer.annualized_return() or 0) * 100,
+                'max_drawdown': abs(dd_result[0]) * 100 if dd_result else 100,
+                'trade_count': len(analyzer.trade_profits),
             }
         except Exception:
             return {'sharpe': 0, 'annual_return': 0, 'max_drawdown': 100, 'trade_count': 0}

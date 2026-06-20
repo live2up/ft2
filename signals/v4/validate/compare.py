@@ -13,15 +13,6 @@ from ..expression import Expression
 from ..engine import EngineCore
 
 
-def _m(md, name, default=0):
-    for k, v in md.items():
-        if isinstance(v, dict) and v.get('name') == name:
-            val = v['value']
-            r = val[0] if isinstance(val, tuple) else val
-            return r if r is not None else default
-    return default
-
-
 def compare_signals(signals: list, data: pd.DataFrame,
                     symbol: str = '399317.SZ',
                     start_date: str = None,
@@ -48,24 +39,15 @@ def compare_signals(signals: list, data: pd.DataFrame,
             signal = expr.generate(data)
             result = EngineCore.backtest(signal, data, mode=mode,
                                          symbol=symbol, start_date=start_date)
-            if mode == 'fast':
-                sr = round(result.sharpe, 3)
-                cagr = result.cagr
-                mdd = result.max_drawdown
-                wr = 0
-                trades = result.trades
-            else:
-                m = result.metrics()
-                sr = round(float(_m(m, '夏普比率') or 0), 3)
-                cagr = float(_m(m, '年化收益率') or 0)
-                mdd = float(_m(m, '最大回撤') or 0)
-                wr = float(_m(m, '胜率') or 0)
-                trades = len(result.account.trade_records) // 2 if result.account else 0
-
+            # full/fast 统一返回 AccountAnalyzer，直接调方法
+            dd = result.max_drawdown()
             results.append({
                 '名称': name, '表达式': expr_str,
-                'Sharpe': sr, '年化': cagr, '最大回撤': mdd,
-                '胜率': wr, '交易': trades,
+                'Sharpe': round(result.sharpe_ratio() or 0, 3),
+                '年化': result.annualized_return() or 0,
+                '最大回撤': dd[0] if dd else 0,
+                '胜率': result.win_rate() or 0,
+                '交易': len(result.trade_profits),
             })
         except Exception as e:
             results.append({

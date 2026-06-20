@@ -53,12 +53,13 @@ def walkforward_validate(expr_str: str, data: pd.DataFrame,
             test_signal = signal[test_start:test_end]
             r = EngineCore.backtest(test_signal, data[test_start:test_end],
                                     mode='fast', symbol=symbol)
+            dd_result = r.max_drawdown()
             results.append({
                 'window': f"{test_start.strftime('%Y-%m')} ~ {test_end.strftime('%Y-%m')}",
-                'sharpe': r.sharpe,
-                'cagr': r.cagr,
-                'mdd': r.max_drawdown,
-                'trades': r.trades,
+                'sharpe': r.sharpe_ratio() or 0,
+                'cagr': r.annualized_return() or 0,
+                'mdd': dd_result[0] if dd_result else 0,
+                'trades': len(r.trade_profits),
             })
         except Exception as e:
             results.append({

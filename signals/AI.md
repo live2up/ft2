@@ -113,8 +113,8 @@ expr.complexity   # 5
 from signals.v4 import EngineCore
 
 # fast 模式: 搜索 (~0.5s/次)
-r = EngineCore.backtest(signal, data, mode='fast', start_date='2020-01-01')
-# → FastResult(sharpe=1.16, cagr=0.148, max_drawdown=-0.10, trades=112)
+analyzer = EngineCore.backtest(signal, data, mode='fast', start_date='2020-01-01')
+# → AccountAnalyzer (sharpe_ratio()=1.16, annualized_return()=0.148, max_drawdown()=(-0.10, ...))
 
 # full 模式: 验证 + 报告
 analyzer = EngineCore.backtest(signal, data, mode='full',

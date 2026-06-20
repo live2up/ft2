@@ -110,7 +110,7 @@ class ExplanationReport:
             f"表达式: {self.expression_str}",
             f"使用特征: {', '.join(self.features_used)}",
             "",
-            f"总体表现: IC={self.overall_ic:.4f} 年化={self.overall_annual_return:.1f}% 夏普={self.overall_sharpe:.2f} 回撤={self.overall_max_dd:.1f}%",
+            f"总体表现: IC={self.overall_ic:.4f} 年化={self.overall_annual_return:.1%} 夏普={self.overall_sharpe:.2f} 回撤={self.overall_max_dd:.1%}",
             "",
             "--- 市场状态分解 ---",
         ]
@@ -191,17 +191,20 @@ class Explainer:
 
         overall_ic = signal_clean.corr(target) if len(signal_clean) > 10 else 0.0
 
-        daily_ret = data['close'].pct_change().reindex(signal.index)
-        positions = (signal_clean > signal_clean.median()).astype(float)
-        strategy_ret = daily_ret * positions.shift(1).fillna(0)
-        nav = (1 + strategy_ret.fillna(0)).cumprod()
-        total = nav.iloc[-1] - 1
-        years = max((nav.index[-1] - nav.index[0]).days / 365.25, 0.1)
-        ann = (1 + total) ** (1 / years) - 1 if years > 0 else 0
-        vol = strategy_ret.std() * np.sqrt(252)
-        sharpe = ann / vol if vol > 0 else 0
-        dd = (nav / nav.cummax() - 1).min()
-        win_rate = (strategy_ret > 0).mean()
+        # [修复] 2026-06-20 自研回测改走 EngineV3.backtest(mode='fast')
+        # 旧实现用 pct_change+cumprod 手动算净值, 且 signal_clean.median() 含前向偏差
+        from ..engine import EngineV3
+        # 用 expanding median 作阈值, 消除前向偏差
+        expanding_med = signal_clean.expanding(min_periods=20).median()
+        positions = (signal_clean > expanding_med).astype(float)
+        position_signal = pd.Series(positions, index=signal.index, name='signal')
+        analyzer = EngineV3.backtest(position_signal, data, mode='fast')
+        ann = analyzer.annualized_return() or 0
+        sharpe = analyzer.sharpe_ratio() or 0
+        dd_result = analyzer.max_drawdown()
+        dd = dd_result[0] if dd_result else 0  # 小数, 如 -0.105
+        win_rate_result = analyzer.win_rate()
+        win_rate = win_rate_result or 0
 
         regimes = self._segment_regimes(data, signal)
         regime_perfs = self._evaluate_regimes(regimes, signal_clean, target)
@@ -217,10 +220,10 @@ class Explainer:
             expression_str=expression,
             features_used=expr.features_used,
             overall_ic=overall_ic,
-            overall_annual_return=ann * 100,
+            overall_annual_return=ann,
             overall_sharpe=sharpe,
-            overall_max_dd=dd * 100,
-            overall_win_rate=win_rate * 100,
+            overall_max_dd=dd,
+            overall_win_rate=win_rate,
             regime_performances=regime_perfs,
             best_regime=best,
             worst_regime=worst,
@@ -285,7 +288,9 @@ class Explainer:
             sig_sub = signal.loc[idx]
             tgt_sub = target.loc[idx]
             ic = sig_sub.corr(tgt_sub) if len(sig_sub) > 10 else 0.0
-            pred_dir = (sig_sub > sig_sub.median()).astype(int)
+            # [修复] 2026-06-20 用 expanding median 替代全序列 median, 消除前向偏差
+            expanding_med = sig_sub.expanding(min_periods=10).median()
+            pred_dir = (sig_sub > expanding_med).astype(int).fillna(0).astype(int)
             actual_dir = (tgt_sub > 0).astype(int)
             correct = (pred_dir == actual_dir).mean()
             results.append(RegimePerformance(

@@ -272,13 +272,13 @@ def three_zone_backtest(score: pd.Series,
     signal = pd.Series(position, index=score.index, name='signal')
 
     # 走 EngineV3 fast 模式
-    fast = EngineV3.backtest(
+    analyzer = EngineV3.backtest(
         signal, data, symbol=symbol, mode='fast',
         initial_capital=initial_capital, start_date=start_date,
         with_fees=with_fees)
 
     return BacktestResult(
-        fast_result=fast,
+        analyzer=analyzer,
         position=pd.Series(position, index=score.index, name='position'),
         score=score_vals,
     )
@@ -288,57 +288,69 @@ def three_zone_backtest(score: pd.Series,
 # 回测结果容器
 # ============================================================
 class BacktestResult:
-    """三区回测结果 — 包装 FastResult"""
+    """三区回测结果 — 包装 AccountAnalyzer
 
-    def __init__(self, fast_result, position, score):
-        self._fast = fast_result
+    所有指标返回小数 (与 AccountAnalyzer 一致):
+      sharpe=1.23, cagr=0.085, max_drawdown=-0.105, win_rate=0.55
+    展示时用 .1% 格式化自动转百分比。
+    """
+
+    def __init__(self, analyzer, position, score):
+        self._analyzer = analyzer
         self.position = position
         self.score = score
 
     @property
     def sharpe(self):
-        return self._fast.sharpe
+        return self._analyzer.sharpe_ratio() or 0
 
     @property
     def cagr(self):
-        return self._fast.cagr
+        return self._analyzer.annualized_return() or 0
 
     @property
     def total_return(self):
-        return self._fast.total_return
+        return self._analyzer.return_rate() or 0
 
     @property
     def max_drawdown(self):
-        return self._fast.max_drawdown * 100  # 百分比，如 -10.5
+        dd = self._analyzer.max_drawdown()
+        return dd[0] if dd else 0  # 小数, 如 -0.105
 
     @property
     def annual_vol(self):
-        return self._fast.annual_vol
+        return self._analyzer.volatility() or 0
 
     @property
     def trades(self):
-        return self._fast.trades
+        return len(self._analyzer.trade_profits)
 
     @property
     def win_rate(self):
-        return self._fast.win_rate
+        return self._analyzer.win_rate() or 0
 
     @property
     def calmar(self):
-        return self._fast.calmar
+        return self._analyzer.calmar_ratio() or 0
 
     @property
     def nav(self):
-        return pd.Series(self._fast.nav, index=self.position.index, name='nav')
+        assets = self._analyzer.daily_assets
+        dates_sorted = sorted(assets.keys())
+        return pd.Series(
+            [assets[d] for d in dates_sorted],
+            index=pd.DatetimeIndex(dates_sorted),
+            name='nav'
+        )
 
-    # 兼容旧属性名
+    # 兼容旧属性名 (量纲与 cagr 一致, 均为小数)
     @property
     def annual_return(self):
-        return self._fast.cagr * 100
+        return self._analyzer.annualized_return() or 0
 
     @property
     def trade_count(self):
-        return self._fast.trades  # 语义变更: 旧=仓位变化次数, 新=交易回合数(买入计数)
+        return len(self._analyzer.trade_profits)  # fast模式=0, full模式=交易回合数
 
     def __repr__(self):
         return (f"BacktestResult(SR={self.sharpe:.3f}, CAGR={self.cagr:.1%}, "

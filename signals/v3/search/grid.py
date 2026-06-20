@@ -74,37 +74,29 @@ class GridSearch:
                         bt = EngineV3.backtest(
                             signal, self.data, symbol=self.symbol,
                             mode='fast', start_date=self.start_date)
+                        dd = bt.max_drawdown()
                         results.append({
                             '表达式': expr_str,
                             '参数': str(params),
-                            'Sharpe': bt.sharpe,
-                            '年化': bt.cagr,
-                            '最大回撤': bt.max_drawdown,
-                            '交易': bt.trades,
+                            'Sharpe': round(bt.sharpe_ratio() or 0, 3),
+                            '年化': bt.annualized_return() or 0,
+                            '最大回撤': dd[0] if dd else 0,
+                            '交易': len(bt.trade_profits),
                         })
                         success = True
                         break
                     else:
-                        from core.analyzer import AccountAnalyzer
                         analyzer = EngineV3.backtest(
                             signal, self.data, symbol=self.symbol,
                             mode='full', start_date=self.start_date)
-                        m = analyzer.metrics()
-
-                        def _v(name, d=0):
-                            for k, v in m.items():
-                                if isinstance(v, dict) and v.get('name') == name:
-                                    val = v['value']
-                                    return val[0] if isinstance(val, tuple) else val
-                            return d
-
+                        dd = analyzer.max_drawdown()
                         results.append({
                             '表达式': expr_str,
                             '参数': str(params),
-                            'Sharpe': _v('夏普比率'),
-                            '年化': _v('年化收益率'),
-                            '最大回撤': _v('最大回撤'),
-                            '交易': len(analyzer.account.trade_records) // 2,
+                            'Sharpe': round(analyzer.sharpe_ratio() or 0, 3),
+                            '年化': analyzer.annualized_return() or 0,
+                            '最大回撤': dd[0] if dd else 0,
+                            '交易': len(analyzer.trade_profits),
                         })
                         success = True
                         break

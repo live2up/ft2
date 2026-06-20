@@ -285,7 +285,8 @@ class EngineCore:
                     for b in bars:
                         if b.get('symbol') == code:
                             total_nav += shares * b.get('close', b.get('open', 0))
-                daily_assets[current_date] = float(total_nav)
+                # [修复] 2026-06-20 key 用 datetime.date, 与 full 模式 _aggregate_daily_assets 一致
+                daily_assets[current_date.date()] = float(total_nav)
 
                 if current_date not in rebalance_set:
                     return

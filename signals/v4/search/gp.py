@@ -288,8 +288,8 @@ class GPSearch:
             signal = expr.generate(self.raw_data)
             r = EngineCore.backtest(signal, self.raw_data, mode='fast',
                                      start_date=self.start_date)
-            ind.fitness = r.sharpe
-            ind.sharpe = r.sharpe
+            ind.fitness = r.sharpe_ratio() or 0
+            ind.sharpe = r.sharpe_ratio() or 0
         except Exception:
             ind.fitness = -1.0
 
