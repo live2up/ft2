@@ -545,7 +545,7 @@ class FactorPipeline:
         top_n = getattr(self.allocator, 'top_n', 3)
         analyzer = FactorEngineCore.backtest(
             factor_values, self.returns, top_n=top_n,
-            rebalance=self.scheduler, cost_rate=self.cost_rate)
+            rebalance=self.scheduler)
 
         sr = analyzer.sharpe_ratio()
         mdd = analyzer.max_drawdown()

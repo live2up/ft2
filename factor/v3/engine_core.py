@@ -59,31 +59,33 @@ class FactorEngineCore:
 
     @staticmethod
     def backtest(panel: pd.DataFrame,
-                 returns: pd.DataFrame = None,
                  assets: Dict[str, pd.DataFrame] = None,
+                 returns: pd.DataFrame = None,
                  top_n: int = 3,
                  rebalance: Union[str, object] = 'W',
                  mode: str = 'fast',
                  initial_capital: float = 1_000_000,
-                 cost_rate: float = 0.0,
                  start_date: str = None,
-                 bench_label: str = None) -> AccountAnalyzer:
+                 bench_label: str = None,
+                 buffer: int = 0) -> AccountAnalyzer:           # [对齐] 2026-06-20 v4 对齐
         """因子轮动回测统一入口
 
         Args:
             panel: 因子排名面板, index=日期, columns=品种, 值越大越好
-            returns: 日收益率 DataFrame (自动合成 OHLCV assets)
             assets: {品种代码: OHLCV DataFrame} (优先于 returns)
+            returns: 日收益率 DataFrame (自动合成 OHLCV assets)
             top_n: 持仓品种数
-            rebalance: 'D'/'W'/'ME' 或 RebalanceScheduler 对象
-            mode: 'full'/'fast'
+            rebalance: 调仓频率 'D'/'W'/'M'/'ME'/'5D' 或 RebalanceScheduler 对象
+            mode: 'full'/'fast', 统一返回 AccountAnalyzer
             initial_capital: 初始资金
-            cost_rate: [废弃] 保留参数兼容旧调用, 实际忽略 (统一零费率)
-            start_date: 回测起始日
-            bench_label: full 模式基准标签
+            start_date: 回测起始日, None=数据首位
+            bench_label: full 模式下基准标签 (自动跑 BenchHolder)
+            buffer: 排名缓冲数, 持仓品种排名滑出 top_n+buffer 名才剔除。
+                    0=无缓冲(严格Top-N), >0=容忍滑出buffer个名次。
+                    例: top_n=3, buffer=2 → 持仓排名在6名及以下才卖出
 
         Returns:
-            AccountAnalyzer: 统一分析器
+            AccountAnalyzer: 统一分析器 (可 sharpe_ratio()/metrics()/to_notebook())
         """
         # 数据源: assets 优先, 否则从 returns 合成
         if assets is not None:
@@ -91,14 +93,15 @@ class FactorEngineCore:
         elif returns is not None:
             asset_dict = FactorEngineCore._synthetic_assets(returns)
         else:
-            raise ValueError("需要 returns 或 assets 参数")
+            raise ValueError("需要 assets 或 returns 参数")
 
         if mode == 'fast':
             return FactorEngineCore._run_fast(panel, asset_dict, top_n, rebalance,
-                                             initial_capital, start_date)
+                                             initial_capital, start_date, buffer)
         else:
             return FactorEngineCore._run_full(panel, asset_dict, top_n, rebalance,
-                                             initial_capital, start_date, bench_label)
+                                             initial_capital, start_date, bench_label,
+                                             buffer)
 
     # ============================================================
     # fast 模式 — Engine.run() + 自管净值 (对齐 v4 _run_fast)
@@ -106,7 +109,7 @@ class FactorEngineCore:
 
     @staticmethod
     def _run_fast(panel, assets, top_n, rebalance, initial_capital,
-                  start_date=None):
+                  start_date=None, buffer=0):                    # [对齐] 2026-06-20 v4 对齐
         """fast 模式: Engine.run() + 自管持仓/净值, 对齐 v4 EngineCore._run_fast
 
         与 v4 完全一致:
@@ -146,7 +149,11 @@ class FactorEngineCore:
         # 自管状态 (与 v4 一致)
         cash = float(initial_capital)
         positions: Dict[str, float] = {}  # code → shares
+        # [对齐] 2026-06-20 直接构建 daily_assets dict → AccountAnalyzer
         daily_assets = {}
+        # [对齐] 2026-06-20 buffer: 相对偏移量, >0启用缓冲
+        _use_buffer = buffer > 0
+        _buffer_rank = top_n + buffer
 
         class _FastRotationStrategy:
             def on_bar(self, ctx, bars):
@@ -155,7 +162,7 @@ class FactorEngineCore:
                 if len(bars) == 0:
                     return
 
-                # 日期提取 (与 v4 一致)
+                # [对齐] 2026-06-20 日期提取前置，确保 date/nav 一一对应
                 current_date = None
                 for b in bars:
                     dt = b.get('eob')
@@ -165,15 +172,15 @@ class FactorEngineCore:
                 if current_date is None:
                     return
 
-                # 计算净值 (与 v4 一致)
+                # 计算净值 (调仓日先记旧持仓净值为准)
                 total_nav = cash
                 for code, shares in list(positions.items()):
                     for b in bars:
                         if b.get('symbol') == code:
                             total_nav += shares * b.get('close', b.get('open', 0))
-                daily_assets[current_date] = float(total_nav)
+                # [修复] 2026-06-20 key 用 datetime.date, 与 full 模式 _aggregate_daily_assets 一致
+                daily_assets[current_date.date()] = float(total_nav)
 
-                # 非调仓日退出 (与 v4 一致)
                 if current_date not in rebalance_set:
                     return
                 if current_date not in panel.index:
@@ -182,9 +189,15 @@ class FactorEngineCore:
                 row = panel.loc[current_date]
                 top_codes = set(row.nlargest(top_n).index.tolist())
 
-                # 平仓 (与 v4 一致)
+                # [对齐] 2026-06-20 缓冲区逻辑：持仓排名滑出 top_n+buffer 名才剔除
+                if _use_buffer:
+                    buffer_codes = set(row.nlargest(_buffer_rank).index.tolist())
+                else:
+                    buffer_codes = top_codes
+
+                # 平仓：清掉不在缓冲区内的
                 for code in list(positions.keys()):
-                    if code not in top_codes:
+                    if code not in buffer_codes:
                         for b in bars:
                             if b.get('symbol') == code:
                                 price = b.get('close', b.get('open', 0))
@@ -193,10 +206,15 @@ class FactorEngineCore:
                                 del positions[code]
                                 break
 
-                # 开仓 (与 v4 一致)
-                if top_codes:
+                # 开仓：买入新 Top N (等权)
+                # [对齐] 2026-06-20 卖出后持仓数已更新，限制总持仓不超过top_n
+                n_slots = top_n - len(positions)  # 可补买的空位数
+                if top_codes and n_slots > 0:
                     weight = 1.0 / len(top_codes)
+                    n_bought = 0
                     for code in top_codes & set(symbols):
+                        if n_bought >= n_slots:
+                            break  # 空位已用完
                         if code in positions:
                             continue
                         for b in bars:
@@ -209,6 +227,7 @@ class FactorEngineCore:
                                     if cost <= cash:
                                         cash -= cost
                                         positions[code] = shares
+                                        n_bought += 1
                                 break
 
         start_time = panel.index[0].to_pydatetime()
@@ -223,7 +242,7 @@ class FactorEngineCore:
 
     @staticmethod
     def _run_full(panel, assets, top_n, rebalance,
-                  initial_capital, start_date, bench_label):
+                  initial_capital, start_date, bench_label, buffer=0):  # [对齐] 2026-06-20 v4 对齐
         """full 模式: Engine.run() + AccountManager.order_percent(), 对齐 v4"""
         panel = FactorEngineCore._prepare_panel(panel, start_date)
 
@@ -254,6 +273,9 @@ class FactorEngineCore:
             engine.add_data(code, '1d', df)
 
         symbols_set = set(symbols)
+        # [对齐] 2026-06-20 buffer: 相对偏移量, >0启用缓冲, 0=严格Top-N
+        _use_buffer = buffer > 0
+        _buffer_rank = top_n + buffer  # 缓冲截断排名
 
         class _FullRotationStrategy:
             def on_bar(self, ctx, bars):
@@ -274,30 +296,45 @@ class FactorEngineCore:
                 row = panel.loc[current_date]
                 top_codes = set(row.nlargest(top_n).index.tolist())
 
-                # 平仓
+                # [对齐] 2026-06-20 缓冲区逻辑：持仓排名滑出 top_n+buffer 名才剔除
+                if _use_buffer:
+                    buffer_codes = set(row.nlargest(_buffer_rank).index.tolist())
+                else:
+                    buffer_codes = top_codes
+
+                # 平仓: 不在缓冲区内的品种全部卖出
                 positions = ctx.account.get_position()
+                # [对齐] 2026-06-20 卖出前预计算保留品种数，避免卖出后positions未及时更新
+                n_keep = sum(1 for code, pos in positions.items()
+                            if pos.get('volume', 0) > 0 and code in buffer_codes)
                 for code, pos in list(positions.items()):
-                    if pos.get('volume', 0) > 0 and code not in top_codes:
+                    if pos.get('volume', 0) > 0 and code not in buffer_codes:
                         try:
                             ctx.account.order_percent(
                                 code, 1.0, OrderSide.Sell,
-                                note=f"rebalance: out of Top{top_n}",
+                                note=f"rebalance: rank > {_buffer_rank}",
                             )
                         except (ValueError, RuntimeError):
                             pass
 
-                # 开仓
-                if top_codes:
+                # 开仓: 买入 Top N 中未持有的品种 (等权分配)
+                # 持仓总数不超过top_n：缓冲保留的品种占位，只补买空位
+                n_slots = top_n - n_keep  # 可补买的空位数
+                if top_codes and n_slots > 0:
                     weight = 1.0 / len(top_codes)
+                    n_bought = 0
                     for code in top_codes & symbols_set:
+                        if n_bought >= n_slots:
+                            break  # 空位已用完
                         pos = positions.get(code)
                         if pos and pos.get('volume', 0) > 0:
-                            continue
+                            continue  # 已持有（包括缓冲保留的）
                         try:
                             ctx.account.order_percent(
                                 code, weight, OrderSide.Buy,
                                 note=f"rebalance: Top{top_n}",
                             )
+                            n_bought += 1
                         except (ValueError, RuntimeError):
                             pass
 

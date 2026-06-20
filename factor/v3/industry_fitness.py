@@ -110,8 +110,7 @@ class IndustryFitness(FitnessCalculator):
             allocator = self.allocator or self._default_allocator
             top_n = allocator.top_n if hasattr(allocator, 'top_n') else self.top_n
             analyzer = FactorEngineCore.backtest(
-                fv_df, self.returns, top_n=top_n, rebalance=scheduler,
-                cost_rate=self.cost_rate)
+                fv_df, self.returns, top_n=top_n, rebalance=scheduler)
             sr = analyzer.sharpe_ratio()
             return float(sr) if sr is not None else -999.0
         except Exception as e:

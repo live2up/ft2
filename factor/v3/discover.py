@@ -224,8 +224,7 @@ class SharpeFitness(FitnessCalculator):
             allocator = self.allocator if self.allocator is not None else TopNEqualWeight(3)
             top_n = allocator.top_n if hasattr(allocator, 'top_n') else 3
             analyzer = FactorEngineCore.backtest(
-                fv_df, self.returns, top_n=top_n, rebalance=scheduler,
-                cost_rate=self.cost_rate)
+                fv_df, self.returns, top_n=top_n, rebalance=scheduler)
             sr = analyzer.sharpe_ratio()
             return float(sr) if sr is not None else -999.0
         except Exception as e:
@@ -273,8 +272,7 @@ class MultiFreqFitness(FitnessCalculator):
             sharpes = []
             for sched in self.scheduler_list:
                 analyzer = FactorEngineCore.backtest(
-                    fv_df, self.returns, top_n=top_n, rebalance=sched,
-                    cost_rate=self.cost_rate)
+                    fv_df, self.returns, top_n=top_n, rebalance=sched)
                 sr = analyzer.sharpe_ratio()
                 if sr is not None:
                     sharpes.append(sr)
@@ -362,8 +360,7 @@ class WQBFitness(FitnessCalculator):
         allocator = self.allocator if self.allocator is not None else TopNEqualWeight(3)
         top_n = allocator.top_n if hasattr(allocator, 'top_n') else 3
         analyzer = FactorEngineCore.backtest(
-            fv_df, self.returns, top_n=top_n, rebalance=scheduler,
-            cost_rate=self.cost_rate)
+            fv_df, self.returns, top_n=top_n, rebalance=scheduler)
         sr = analyzer.sharpe_ratio()
         return float(sr) if sr is not None else -999.0
 
@@ -945,7 +942,7 @@ class FactorDiscoveryEngine:
                     # [重构] 2026-06-17 使用 FactorEngineCore (ft2.core) 替代 FactorPipeline
                     analyzer = FactorEngineCore.backtest(
                         fv_df, self.returns, top_n=val_top_n,
-                        rebalance=val_scheduler, cost_rate=self.cost_rate)
+                        rebalance=val_scheduler)
                     sr = analyzer.sharpe_ratio()
                     if sr is not None:
                         validated.append((ind, sr, expr_str))

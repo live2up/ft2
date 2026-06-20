@@ -127,8 +127,7 @@ class FactorGridSearch:
             # Pipeline backtest
             # [重构] 2026-06-17 使用 FactorEngineCore (ft2.core) 替代 FactorPipeline
             analyzer = FactorEngineCore.backtest(
-                fv, self.returns, top_n=top_n, rebalance=scheduler,
-                cost_rate=self.cost_rate)
+                fv, self.returns, top_n=top_n, rebalance=scheduler)
             sr = analyzer.sharpe_ratio()
 
             result = GridSearchResult(
@@ -226,8 +225,7 @@ class FactorBOSearch:
             if fv is None:
                 return FAILURE_PENALTY
             analyzer = FactorEngineCore.backtest(
-                fv, self.returns, top_n=top_n, rebalance=scheduler,
-                cost_rate=self.cost_rate)
+                fv, self.returns, top_n=top_n, rebalance=scheduler)
             sr = analyzer.sharpe_ratio()
             return -(float(sr) if sr is not None else 0.0)
 

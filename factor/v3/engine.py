@@ -690,8 +690,7 @@ class AlphaExplorer:
                         print("IC=NaN")
                     continue
                 analyzer = FactorEngineCore.backtest(
-                    fv, self.returns, top_n=self.top_n, rebalance=scheduler,
-                    cost_rate=self.cost_rate)
+                    fv, self.returns, top_n=self.top_n, rebalance=scheduler)
                 sr = analyzer.sharpe_ratio()
                 result = AlphaResult(alpha_id=aid, ic_mean=float(ic_mean),
                                      ic_ir=float(ic_ir) if not np.isnan(ic_ir) else 0.0,

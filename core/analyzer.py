@@ -1,34 +1,70 @@
-#通过 account 的快照，分析结果
 """
-账户分析器模块
+账户分析器模块 — 统一回测绩效分析入口
 
-设计思路:
----------
-1. 数据初始化
-   - 传入 AccountManager 实例，自动聚合快照为日数据(_daily_assets)
-   - 计算交易盈亏记录(_trade_profits)
-   - 数据在初始化时固化，后续计算基于此数据
+══════════════════════════════════════════════════════════════════════════════
+构造方式（两种输入路径，最终对齐到 Dict[date, float]）
+══════════════════════════════════════════════════════════════════════════════
 
-2. 时间区间切片
-   - sliced_data: 缓存当前区间的切片数据
-   - getTimeRange(period): 设置时间区间，更新缓存
-   - _ensure_sliced_data(): 确保切片数据已初始化
+Path 1 — 快照模式（full 回测）:
+    Engine.run() 每 bar 后调用 take_snapshot() → 逐日 AccountSnapshot
+    → AccountAnalyzer(account=engine.account)
+    → _aggregate_daily_assets(snapshots) → _daily_assets (Dict[date, float])
+    → _calculate_profit(trade_records)   → _trade_profits (FIFO 逐笔盈亏)
+    可用指标: 收益 + 风险 + 交易（全部）
 
-3. 使用方式
-   - 默认使用全数据: 直接调用指标方法，自动初始化
-   - 指定区间: 先调用 getTimeRange('3m')，再调用指标方法
-   - 切换区间: 再次调用 getTimeRange() 即可
+Path 2 — 净值模式（fast 回测 / 外部数据）:
+    Engine.run() + 策略自管持仓 → 手动记录 daily_assets dict
+    → AccountAnalyzer(daily_assets={date: nav, ...})
+    → _daily_assets 直接赋值, _trade_profits = []
+    可用指标: 收益 + 风险（交易类返回 None）
 
-   示例:
-   >>> analyzer = AccountAnalyzer(account=my_account)
-   >>> analyzer.volatility()           # 使用全数据
-   >>> analyzer.getTimeRange('3m')     # 设置近3月区间
-   >>> analyzer.volatility()           # 使用近3月数据
-   >>> analyzer.sharpe_ratio()         # 复用缓存的近3月数据
+数据一致性:
+    两条路径的 _daily_assets 均为逐日净值 (cash + Σ持仓市值)，
+    Engine.run() 每 bar 触发 on_bar + take_snapshot，密度一致。
 
-4. 指标分类
-   - 资产类指标: 支持区间切片（收益率、波动率、夏普比率等）
-   - 交易类指标: 暂不支持区间切片（胜率、盈亏比等）
+══════════════════════════════════════════════════════════════════════════════
+内部数据流
+══════════════════════════════════════════════════════════════════════════════
+
+    __init__
+      ├─ _daily_assets (Dict[date, float])     ← 核心: 所有资产指标依赖此数据
+      └─ _trade_profits (List[Dict])           ← 仅 Path 1: 交易指标来源
+
+    getTimeRange(period) → sliced_data (惰性缓存)
+      ├─ 'values'   (np.array)  → max_drawdown / ulcer_index
+      ├─ 'returns'  (np.array)  → volatility / var / cvar / sortino
+      └─ 'daily_assets' (dict)  → return_rate
+
+    @metric 方法 → 资产指标 (12个) + 交易指标 (7个)
+
+    _build_report_data() → to_notebook() / to_excel()
+      ├─ 无基准 → 基础信息 + 收益 + 风险
+      └─ 有基准 → 临时 AccountAnalyzer(daily_assets=aligned) 跑同构 metrics → 对比表
+
+══════════════════════════════════════════════════════════════════════════════
+使用示例
+══════════════════════════════════════════════════════════════════════════════
+
+    # full 模式 — 完整分析（含交易指标）
+    >>> analyzer = AccountAnalyzer(account=engine.account)
+    >>> analyzer.sharpe_ratio()        # 0.85
+    >>> analyzer.win_rate()            # 0.62（仅 Path 1 可用）
+    >>> analyzer.to_notebook("回测报告")
+
+    # fast 模式 — 轻量分析（仅资产指标）
+    >>> analyzer = AccountAnalyzer(daily_assets={date(2024,1,2): 1e6, ...})
+    >>> analyzer.sharpe_ratio()        # 0.85
+    >>> analyzer.win_rate()            # None（Path 2 无交易记录）
+    >>> analyzer.to_notebook("回测报告")  # 无交易记录段
+
+    # 时间区间切片
+    >>> analyzer.getTimeRange('3m')    # 切到近 3 月
+    >>> analyzer.volatility()          # 近 3 月波动率
+    >>> analyzer.getTimeRange()        # 恢复全区间
+
+    # 基准对比
+    >>> analyzer.set_benchmark(bench_daily_assets, '沪深300')
+    >>> analyzer.to_notebook("策略 vs 基准")
 """
 from collections import defaultdict
 from dateutil.relativedelta import relativedelta
