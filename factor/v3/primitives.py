@@ -20,6 +20,67 @@ factor/v3/primitives.py — GP 符号回归原语集
 
 import numpy as np
 from typing import Optional
+from functools import wraps
+
+
+# ============================================================================
+# 维度处理装饰器（统一 1D/2D 分发逻辑）
+# ============================================================================
+
+def handle_dimension(func):
+    """
+    时序原语维度分发装饰器
+
+    自动处理 1D/2D numpy 数组的输入分发：
+    - 1D: 直接调用被装饰函数
+    - 2D: 沿 axis=1 逐列调用，结果沿原 shape 拼接
+
+    此外自动处理 window/int 类型的标量参数转换，避免 range() 报错。
+
+    消除 19 个时序函数中重复的 if/else 分支代码（约 120-150 行重复样板），
+    让核心计算逻辑成为函数主体，提升可读性和可维护性。
+
+    使用方式:
+        @handle_dimension
+        def ts_mean_1d(x: np.ndarray, window: int) -> np.ndarray:
+            # 只关心 1D 计算逻辑，无需处理 2D 分支
+            ...
+
+        # 调用方仍按原签名使用，自动支持 1D/2D
+        ts_mean_1d(x_1d, window=20)        # OK
+        ts_mean_1d(x_2d, window=20)        # OK，自动逐列计算
+
+    Args:
+        func: 接收 1D ndarray 作为第一参数的时序计算函数
+
+    Returns:
+        wrapper: 与 func 输入/输出一致的包装函数
+    """
+    @wraps(func)
+    def wrapper(x, *args, **kwargs):
+        x = np.asarray(x, dtype=float)
+        # 自动转换 window 等 int 标量参数（从 float/int 表达式参数）
+        new_args = []
+        for i, arg in enumerate(args):
+            if isinstance(arg, (int, np.integer)) or (isinstance(arg, float) and arg.is_integer()):
+                new_args.append(int(arg))
+            else:
+                new_args.append(arg)
+        # 同时处理 kwargs 中常见的 window 参数
+        new_kwargs = {}
+        for k, v in kwargs.items():
+            if isinstance(v, (int, np.integer)) or (isinstance(v, float) and v.is_integer()):
+                new_kwargs[k] = int(v)
+            else:
+                new_kwargs[k] = v
+        if x.ndim == 1:
+            return func(x, *new_args, **new_kwargs)
+        # 2D: 沿 axis=1 逐列计算
+        result = np.full_like(x, np.nan)
+        for j in range(x.shape[1]):
+            result[:, j] = func(x[:, j], *new_args, **new_kwargs)
+        return result
+    return wrapper
 
 
 # ============================================================================
@@ -29,18 +90,12 @@ from typing import Optional
 
 def ts_rank(x: np.ndarray, window: int = 10) -> np.ndarray:
     """时序排名：值在过去 window 日的百分位排位"""
-    x = np.asarray(x, dtype=float)
-    window = int(window)
-    if x.ndim == 1:
-        return _ts_rank_1d(x, window)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _ts_rank_1d(x[:, j], window)
-        return result
+    return _ts_rank_impl(x, window)
 
 
-def _ts_rank_1d(x: np.ndarray, window: int) -> np.ndarray:
+@handle_dimension
+def _ts_rank_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """时序排名 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -57,18 +112,12 @@ def _ts_rank_1d(x: np.ndarray, window: int) -> np.ndarray:
 
 def ts_zscore(x: np.ndarray, window: int = 20) -> np.ndarray:
     """时序标准化：过去 window 日的 Z-score"""
-    x = np.asarray(x, dtype=float)
-    window = int(window)
-    if x.ndim == 1:
-        return _ts_zscore_1d(x, window)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _ts_zscore_1d(x[:, j], window)
-        return result
+    return _ts_zscore_impl(x, window)
 
 
-def _ts_zscore_1d(x: np.ndarray, window: int) -> np.ndarray:
+@handle_dimension
+def _ts_zscore_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """时序标准化 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -119,15 +168,16 @@ def correlation(x: np.ndarray, y: np.ndarray, window: int = 20) -> np.ndarray:
     if x.shape != y.shape:
         raise ValueError(f"x.shape={x.shape} 与 y.shape={y.shape} 不匹配")
     if x.ndim == 1:
-        return _correlation_1d(x, y, window)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _correlation_1d(x[:, j], y[:, j], window)
-        return result
+        return _correlation_impl(x, y, window)
+    result = np.full_like(x, np.nan)
+    for j in range(x.shape[1]):
+        result[:, j] = _correlation_impl(x[:, j], y[:, j], window)
+    return result
 
 
-def _correlation_1d(x: np.ndarray, y: np.ndarray, window: int) -> np.ndarray:
+@handle_dimension
+def _correlation_impl(x: np.ndarray, y: np.ndarray, window: int) -> np.ndarray:
+    """滚动相关性 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -144,20 +194,14 @@ def _correlation_1d(x: np.ndarray, y: np.ndarray, window: int) -> np.ndarray:
 
 def decay_linear(x: np.ndarray, window: int = 10) -> np.ndarray:
     """线性衰减加权平均：最近值权重大"""
-    x = np.asarray(x, dtype=float)
-    window = int(window)
+    return _decay_linear_impl(x, window)
+
+
+@handle_dimension
+def _decay_linear_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """线性衰减加权平均 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     weights = np.arange(1, window + 1, dtype=float)
     weights = weights / weights.sum()
-    if x.ndim == 1:
-        return _decay_linear_1d(x, window, weights)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _decay_linear_1d(x[:, j], window, weights)
-        return result
-
-
-def _decay_linear_1d(x: np.ndarray, window: int, weights: np.ndarray) -> np.ndarray:
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -271,18 +315,12 @@ def cs_mean(x: np.ndarray) -> np.ndarray:
 
 def ts_sum(x: np.ndarray, window: int = 10) -> np.ndarray:
     """滚动求和：过去 window 日的累加和"""
-    x = np.asarray(x, dtype=float)
-    window = int(window)
-    if x.ndim == 1:
-        return _ts_sum_1d(x, window)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _ts_sum_1d(x[:, j], window)
-        return result
+    return _ts_sum_impl(x, window)
 
 
-def _ts_sum_1d(x: np.ndarray, window: int) -> np.ndarray:
+@handle_dimension
+def _ts_sum_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """滚动求和 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     if n < window:
@@ -301,18 +339,12 @@ def _ts_sum_1d(x: np.ndarray, window: int) -> np.ndarray:
 
 def ts_mean(x: np.ndarray, window: int = 10) -> np.ndarray:
     """滚动均值：过去 window 日的算术平均"""
-    x = np.asarray(x, dtype=float)
-    window = int(window)
-    if x.ndim == 1:
-        return _ts_mean_1d(x, window)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _ts_mean_1d(x[:, j], window)
-        return result
+    return _ts_mean_impl(x, window)
 
 
-def _ts_mean_1d(x: np.ndarray, window: int) -> np.ndarray:
+@handle_dimension
+def _ts_mean_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """滚动均值 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -325,18 +357,12 @@ def _ts_mean_1d(x: np.ndarray, window: int) -> np.ndarray:
 
 def ts_std(x: np.ndarray, window: int = 20) -> np.ndarray:
     """滚动标准差：过去 window 日的标准差"""
-    x = np.asarray(x, dtype=float)
-    window = int(window)
-    if x.ndim == 1:
-        return _ts_std_1d(x, window)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _ts_std_1d(x[:, j], window)
-        return result
+    return _ts_std_impl(x, window)
 
 
-def _ts_std_1d(x: np.ndarray, window: int) -> np.ndarray:
+@handle_dimension
+def _ts_std_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """滚动标准差 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -350,31 +376,12 @@ def _ts_std_1d(x: np.ndarray, window: int) -> np.ndarray:
 
 def ts_max(x: np.ndarray, window: int = 10) -> np.ndarray:
     """滚动最大值：过去 window 日的最大值"""
-    x = np.asarray(x, dtype=float)
-    window = int(window)
-    if x.ndim == 1:
-        return _ts_extreme_1d(x, window, np.nanmax)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _ts_extreme_1d(x[:, j], window, np.nanmax)
-        return result
+    return _ts_max_impl(x, window)
 
 
-def ts_min(x: np.ndarray, window: int = 10) -> np.ndarray:
-    """滚动最小值：过去 window 日的最小值"""
-    x = np.asarray(x, dtype=float)
-    window = int(window)
-    if x.ndim == 1:
-        return _ts_extreme_1d(x, window, np.nanmin)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _ts_extreme_1d(x[:, j], window, np.nanmin)
-        return result
-
-
-def _ts_extreme_1d(x: np.ndarray, window: int, fn) -> np.ndarray:
+@handle_dimension
+def _ts_max_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """滚动最大值 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -382,7 +389,26 @@ def _ts_extreme_1d(x: np.ndarray, window: int, fn) -> np.ndarray:
         valid = seg[~np.isnan(seg)]
         if len(valid) == 0:
             continue
-        result[i] = fn(valid)
+        result[i] = np.nanmax(valid)
+    return result
+
+
+def ts_min(x: np.ndarray, window: int = 10) -> np.ndarray:
+    """滚动最小值：过去 window 日的最小值"""
+    return _ts_min_impl(x, window)
+
+
+@handle_dimension
+def _ts_min_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """滚动最小值 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
+    n = len(x)
+    result = np.full(n, np.nan)
+    for i in range(window - 1, n):
+        seg = x[max(0, i - window + 1): i + 1]
+        valid = seg[~np.isnan(seg)]
+        if len(valid) == 0:
+            continue
+        result[i] = np.nanmin(valid)
     return result
 
 
@@ -393,19 +419,12 @@ def _ts_extreme_1d(x: np.ndarray, window: int, fn) -> np.ndarray:
 
 def sma(x: np.ndarray, window: int = 10, offset: int = 0) -> np.ndarray:
     """简单移动平均（含延迟）"""
-    x = np.asarray(x, dtype=float)
-    window = int(window)
-    offset = int(offset)
-    if x.ndim == 1:
-        return _sma_1d(x, window, offset)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _sma_1d(x[:, j], window, offset)
-        return result
+    return _sma_impl(x, window, offset)
 
 
-def _sma_1d(x: np.ndarray, window: int, offset: int) -> np.ndarray:
+@handle_dimension
+def _sma_impl(x: np.ndarray, window: int, offset: int) -> np.ndarray:
+    """简单移动平均 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     start = window - 1 + offset
@@ -428,15 +447,16 @@ def covariance(x: np.ndarray, y: np.ndarray, window: int = 20) -> np.ndarray:
     if x.shape != y.shape:
         raise ValueError(f"x.shape={x.shape} 与 y.shape={y.shape} 不匹配")
     if x.ndim == 1:
-        return _covariance_1d(x, y, window)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _covariance_1d(x[:, j], y[:, j], window)
-        return result
+        return _covariance_impl(x, y, window)
+    result = np.full_like(x, np.nan)
+    for j in range(x.shape[1]):
+        result[:, j] = _covariance_impl(x[:, j], y[:, j], window)
+    return result
 
 
-def _covariance_1d(x: np.ndarray, y: np.ndarray, window: int) -> np.ndarray:
+@handle_dimension
+def _covariance_impl(x: np.ndarray, y: np.ndarray, window: int) -> np.ndarray:
+    """滚动协方差 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -457,15 +477,16 @@ def regbeta(x: np.ndarray, y: np.ndarray, window: int = 20) -> np.ndarray:
     if x.shape != y.shape:
         raise ValueError(f"x.shape={x.shape} 与 y.shape={y.shape} 不匹配")
     if x.ndim == 1:
-        return _regbeta_1d(x, y, window)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _regbeta_1d(x[:, j], y[:, j], window)
-        return result
+        return _regbeta_impl(x, y, window)
+    result = np.full_like(x, np.nan)
+    for j in range(x.shape[1]):
+        result[:, j] = _regbeta_impl(x[:, j], y[:, j], window)
+    return result
 
 
-def _regbeta_1d(x: np.ndarray, y: np.ndarray, window: int) -> np.ndarray:
+@handle_dimension
+def _regbeta_impl(x: np.ndarray, y: np.ndarray, window: int) -> np.ndarray:
+    """滚动回归 Beta 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -484,31 +505,27 @@ def _regbeta_1d(x: np.ndarray, y: np.ndarray, window: int) -> np.ndarray:
 
 def ts_argmin(x: np.ndarray, window: int = 10) -> np.ndarray:
     """距 N 日最低点的天数"""
-    x = np.asarray(x, dtype=float)
-    window = int(window)
-    if x.ndim == 1:
-        return _ts_argextreme_1d(x, window, np.nanargmin)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _ts_argextreme_1d(x[:, j], window, np.nanargmin)
-        return result
+    return _ts_argmin_impl(x, window)
+
+
+@handle_dimension
+def _ts_argmin_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """距 N 日最低点 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
+    return _ts_argextreme(x, window, np.nanargmin)
 
 
 def ts_argmax(x: np.ndarray, window: int = 10) -> np.ndarray:
     """距 N 日最高点的天数"""
-    x = np.asarray(x, dtype=float)
-    window = int(window)
-    if x.ndim == 1:
-        return _ts_argextreme_1d(x, window, np.nanargmax)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _ts_argextreme_1d(x[:, j], window, np.nanargmax)
-        return result
+    return _ts_argmax_impl(x, window)
 
 
-def _ts_argextreme_1d(x: np.ndarray, window: int, fn) -> np.ndarray:
+@handle_dimension
+def _ts_argmax_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """距 N 日最高点 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
+    return _ts_argextreme(x, window, np.nanargmax)
+
+
+def _ts_argextreme(x: np.ndarray, window: int, fn) -> np.ndarray:
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -541,19 +558,12 @@ def ts_skew(x: np.ndarray, window: int = 20) -> np.ndarray:
 
     [新增] 2026-06-01 v3
     """
-    x = np.asarray(x, dtype=float)
-    window = int(window)
-    if x.ndim == 1:
-        return _ts_skew_1d(x, window)
-    else:
-        result = np.full_like(x, np.nan)
-        for j in range(x.shape[1]):
-            result[:, j] = _ts_skew_1d(x[:, j], window)
-        return result
+    return _ts_skew_impl(x, window)
 
 
-def _ts_skew_1d(x: np.ndarray, window: int) -> np.ndarray:
-    """单列滚动偏度"""
+@handle_dimension
+def _ts_skew_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """滚动偏度 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -610,15 +620,16 @@ def ts_regression_residual(x: np.ndarray, window: int | float = 20) -> np.ndarra
     if window < 3:
         return np.zeros_like(x)
     if x.ndim == 1:
-        return _ts_regression_residual_1d(x, window)
+        return _ts_regression_residual_impl(x, window)
     result = np.full_like(x, np.nan)
     for j in range(x.shape[1]):
-        result[:, j] = _ts_regression_residual_1d(x[:, j], window)
+        result[:, j] = _ts_regression_residual_impl(x[:, j], window)
     return result
 
 
-def _ts_regression_residual_1d(x: np.ndarray, window: int) -> np.ndarray:
-    """单列滚动线性回归残差"""
+@handle_dimension
+def _ts_regression_residual_impl(x: np.ndarray, window: int) -> np.ndarray:
+    """滚动线性回归残差 1D 实现（由 handle_dimension 自动分发 1D/2D）"""
     n = len(x)
     result = np.full(n, np.nan)
     for i in range(window - 1, n):
@@ -683,3 +694,31 @@ def list_primitives() -> list:
         {'name': name, 'arity': info[1]}
         for name, info in EXTENDED_PRIMITIVES.items()
     ]
+
+
+# ============================================================================
+# 向后兼容别名 (deprecation-safe migration)
+# ============================================================================
+# [重构] 2026-06-19 handle_dimension 装饰器引入后，旧的 _xxx_1d 私有函数
+# 名称被重命名为 _xxx_impl。保留 _xxx_1d 别名指向新实现，避免破坏任何
+# 直接引用旧名称的外部代码（虽然按 Python 约定 _ 前缀属模块私有）。
+#
+# 何时删除：下个大版本（v4.0）可移除这些别名。
+
+_ts_rank_1d = _ts_rank_impl
+_ts_zscore_1d = _ts_zscore_impl
+_correlation_1d = _correlation_impl
+_decay_linear_1d = _decay_linear_impl
+_ts_sum_1d = _ts_sum_impl
+_ts_mean_1d = _ts_mean_impl
+_ts_std_1d = _ts_std_impl
+_ts_max_1d = _ts_max_impl
+_ts_min_1d = _ts_min_impl
+_sma_1d = _sma_impl
+_covariance_1d = _covariance_impl
+_regbeta_1d = _regbeta_impl
+_ts_argmin_1d = _ts_argmin_impl
+_ts_argmax_1d = _ts_argmax_impl
+_ts_argextreme_1d = _ts_argextreme
+_ts_skew_1d = _ts_skew_impl
+_ts_regression_residual_1d = _ts_regression_residual_impl
