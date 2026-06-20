@@ -107,22 +107,77 @@ class Engine:
     def run(self, strategy, start_time, end_time):
         if isinstance(strategy, type):
             strategy = strategy()
+        self._drive_timeline(strategy, start_time, end_time, snapshot=True)
+
+    def run_fast(self, strategy, start_time, end_time):
+        """快速回测：策略自管持仓/净值，不生成 TradeRecord/snapshots。
+
+        跑完时间线后直接从策略对象读取 daily_assets 构造 AccountAnalyzer，
+        跳过快照聚合和 FIFO 交易匹配，约 6x 快于 full 模式。
+
+        策略契约：
+        - 策略类必须在 on_bar() 中将每日净值写入 self.daily_assets[date] = nav
+        - date 必须是 datetime.date（不可用 pd.Timestamp）
+        - 策略类自行管理持仓/现金（不依赖 ctx.account）
+
+        Returns:
+            AccountAnalyzer: 统一分析器 (仅资产指标可用，交易指标返回 None)
+        """
+        from .analyzer import AccountAnalyzer
+        if isinstance(strategy, type):
+            strategy = strategy()
+        # [核心] 不生成快照 — 传 snapshot=False 跳过 take_snapshot
+        self._drive_timeline(strategy, start_time, end_time, snapshot=False)
+        daily = getattr(strategy, 'daily_assets', None)
+        if daily is None:
+            raise RuntimeError(
+                "fast 模式要求策略类暴露 self.daily_assets 属性。"
+                "请在 on_bar 中将每日净值记录到 self.daily_assets[date] = nav，"
+                "key 必须是 datetime.date 类型。"
+            )
+        return AccountAnalyzer(daily_assets=daily)
+
+    # ── 内部时间线驱动 (run/run_fast 共用) ──
+    def _drive_timeline(self, strategy, start_time, end_time, snapshot=True):
+        """时间线驱动循环：逐 bar → on_bar → (可选)take_snapshot
+
+        start/end 取传入值与时间线边界的交集：传入超出范围自动 clamp。
+        init_snapshot 锚定时间线上 start_time 之前的最后一根 bar（而非日历-1天）。
+        """
+        sorted_times = sorted(self.timeline.keys())
+        if not sorted_times:
+            return
 
         start_time = pd.Timestamp(start_time)
         end_time = pd.Timestamp(end_time)
         if end_time.hour == 0 and end_time.minute == 0 and end_time.second == 0:
             end_time = end_time.replace(hour=23, minute=59, second=59)
 
-        # [重构] 2026-06-09 注册为活跃引擎，context.data() / context.account 委托到本实例
+        # clamp 到时间线范围
+        t_min, t_max = sorted_times[0], sorted_times[-1]
+        if start_time < t_min:
+            start_time = t_min
+        if end_time > t_max:
+            end_time = t_max
+        if start_time > end_time:
+            return
+
         prev_engine = context._active_engine
         context._active_engine = self
 
         try:
             _add_bar = self._add_bar2bar_data_cache
-            _snapshot = self.account.take_snapshot
+            _snapshot = self.account.take_snapshot if snapshot else None
 
-            from datetime import timedelta
-            self.account.init_snapshot(start_time - timedelta(days=1))
+            if snapshot:
+                # init_snapshot = 时间线上 start 之前的最后一根 bar
+                # 若无更早 bar（start_time 即首根），fallback 到日历前一日
+                prev = [t for t in sorted_times if t < start_time]
+                if prev:
+                    init_date = prev[-1]
+                else:
+                    init_date = start_time - pd.Timedelta(days=1)
+                self.account.init_snapshot(init_date)
 
             for current_time, bars in sorted(self.timeline.items()):
                 context._current_time = current_time
@@ -132,7 +187,8 @@ class Engine:
 
                 if start_time <= current_time <= end_time:
                     strategy.on_bar(context, bars)
-                    _snapshot()
+                    if _snapshot:
+                        _snapshot()
         finally:
             context._active_engine = prev_engine
 

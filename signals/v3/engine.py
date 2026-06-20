@@ -196,15 +196,14 @@ class EngineV3:
         context.subscribe(symbol, freq, count=300)
         engine.add_data(symbol, freq, df)
 
-        # 策略本地状态
-        cash = float(initial_capital)
-        shares = 0.0           # 持仓份额
-        daily_assets = {}      # Dict[date, float] 每日净值
-
+        # 策略本地状态 (改为实例属性, run_fast() 读取 self.daily_assets)
         class _FastStrategy:
-            def on_bar(self, ctx, bars):
-                nonlocal cash, shares
+            def __init__(self):
+                self.cash = float(initial_capital)
+                self.shares = 0.0
+                self.daily_assets = {}
 
+            def on_bar(self, ctx, bars):
                 bar = bars[0]
                 sig = bar.get('_signal', 0)
                 price = bar.get('close', bar.get('open', 0))
@@ -218,51 +217,35 @@ class EngineV3:
                 current_date = pd.Timestamp(dt).normalize().date()
 
                 # 当前净值 = 现金 + 持仓市值
-                current_nav = cash + shares * price
-                daily_assets[current_date] = float(current_nav)
+                current_nav = self.cash + self.shares * price
+                self.daily_assets[current_date] = float(current_nav)
 
-                if sig > 0 and shares == 0:
+                if sig > 0 and self.shares == 0:
                     # 买入: 全部现金 → 份额 (扣除佣金)
                     if with_fees:
-                        commission = max(cash * COMMISSION_RATE, MIN_COMMISSION)
-                        investable = cash - commission
+                        commission = max(self.cash * COMMISSION_RATE, MIN_COMMISSION)
+                        investable = self.cash - commission
                     else:
-                        investable = cash
+                        investable = self.cash
                     if investable > 0 and price > 0:
-                        shares = investable / price
-                        cash = 0.0
-                        daily_assets[current_date] = float(shares * price)
+                        self.shares = investable / price
+                        self.cash = 0.0
+                        self.daily_assets[current_date] = float(self.shares * price)
 
-                elif sig <= 0 and shares > 0:
+                elif sig <= 0 and self.shares > 0:
                     # 卖出: 全部份额 → 现金 (扣除佣金+印花税)
-                    sell_value = shares * price
+                    sell_value = self.shares * price
                     if with_fees:
                         commission = max(sell_value * COMMISSION_RATE, MIN_COMMISSION)
                         stamp = sell_value * STAMP_DUTY
-                        cash = sell_value - commission - stamp
+                        self.cash = sell_value - commission - stamp
                     else:
-                        cash = sell_value
-                    shares = 0.0
-                    daily_assets[current_date] = float(cash)
+                        self.cash = sell_value
+                    self.shares = 0.0
+                    self.daily_assets[current_date] = float(self.cash)
 
-        engine.run(_FastStrategy, df['eob'].iloc[0], df['eob'].iloc[-1])
-
-        # 最终仍持仓 → 按最后价平仓 (更新最后一天的净值)
-        if shares > 0:
-            last_price = df['close'].iloc[-1]
-            sell_value = shares * last_price
-            if with_fees:
-                commission = max(sell_value * COMMISSION_RATE, MIN_COMMISSION)
-                stamp = sell_value * STAMP_DUTY
-                final_nav = sell_value - commission - stamp
-            else:
-                final_nav = sell_value
-            last_date = max(daily_assets.keys()) if daily_assets else None
-            if last_date is not None:
-                daily_assets[last_date] = float(final_nav)
-
-        # [重构] 2026-06-20 返回 AccountAnalyzer，与 full 模式接口统一
-        return AccountAnalyzer(daily_assets=daily_assets)
+        # [重构] 2026-06-20 使用 Engine.run_fast(), 统一 daily_assets → AccountAnalyzer
+        return engine.run_fast(_FastStrategy(), df['eob'].iloc[0], df['eob'].iloc[-1])
 
     # ============================================================
     # 数据准备

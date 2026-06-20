@@ -146,23 +146,20 @@ class FactorEngineCore:
                 context.subscribe(code, '1d', count=300)
                 engine.add_data(code, '1d', df)
 
-        # 自管状态 (与 v4 一致)
-        cash = float(initial_capital)
-        positions: Dict[str, float] = {}  # code → shares
-        # [对齐] 2026-06-20 直接构建 daily_assets dict → AccountAnalyzer
-        daily_assets = {}
-        # [对齐] 2026-06-20 buffer: 相对偏移量, >0启用缓冲
-        _use_buffer = buffer > 0
-        _buffer_rank = top_n + buffer
-
+        # [重构] 2026-06-20 策略状态改为实例属性, Engine.run_fast() 读取 self.daily_assets
         class _FastRotationStrategy:
-            def on_bar(self, ctx, bars):
-                nonlocal cash, positions
+            def __init__(self):
+                self.cash = float(initial_capital)
+                self.positions: Dict[str, float] = {}
+                self.daily_assets = {}
+                self.use_buffer = buffer > 0
+                self.buffer_rank = top_n + buffer
 
+            def on_bar(self, ctx, bars):
                 if len(bars) == 0:
                     return
 
-                # [对齐] 2026-06-20 日期提取前置，确保 date/nav 一一对应
+                # 日期提取前置，确保 date/nav 一一对应
                 current_date = None
                 for b in bars:
                     dt = b.get('eob')
@@ -173,13 +170,12 @@ class FactorEngineCore:
                     return
 
                 # 计算净值 (调仓日先记旧持仓净值为准)
-                total_nav = cash
-                for code, shares in list(positions.items()):
+                total_nav = self.cash
+                for code, shares in list(self.positions.items()):
                     for b in bars:
                         if b.get('symbol') == code:
                             total_nav += shares * b.get('close', b.get('open', 0))
-                # [修复] 2026-06-20 key 用 datetime.date, 与 full 模式 _aggregate_daily_assets 一致
-                daily_assets[current_date.date()] = float(total_nav)
+                self.daily_assets[current_date.date()] = float(total_nav)
 
                 if current_date not in rebalance_set:
                     return
@@ -189,33 +185,32 @@ class FactorEngineCore:
                 row = panel.loc[current_date]
                 top_codes = set(row.nlargest(top_n).index.tolist())
 
-                # [对齐] 2026-06-20 缓冲区逻辑：持仓排名滑出 top_n+buffer 名才剔除
-                if _use_buffer:
-                    buffer_codes = set(row.nlargest(_buffer_rank).index.tolist())
+                # 缓冲区逻辑：持仓排名滑出 top_n+buffer 名才剔除
+                if self.use_buffer:
+                    buffer_codes = set(row.nlargest(self.buffer_rank).index.tolist())
                 else:
                     buffer_codes = top_codes
 
                 # 平仓：清掉不在缓冲区内的
-                for code in list(positions.keys()):
+                for code in list(self.positions.keys()):
                     if code not in buffer_codes:
                         for b in bars:
                             if b.get('symbol') == code:
                                 price = b.get('close', b.get('open', 0))
                                 if price > 0:
-                                    cash += positions[code] * price
-                                del positions[code]
+                                    self.cash += self.positions[code] * price
+                                del self.positions[code]
                                 break
 
                 # 开仓：买入新 Top N (等权)
-                # [对齐] 2026-06-20 卖出后持仓数已更新，限制总持仓不超过top_n
-                n_slots = top_n - len(positions)  # 可补买的空位数
+                n_slots = top_n - len(self.positions)
                 if top_codes and n_slots > 0:
                     weight = 1.0 / len(top_codes)
                     n_bought = 0
                     for code in top_codes & set(symbols):
                         if n_bought >= n_slots:
-                            break  # 空位已用完
-                        if code in positions:
+                            break
+                        if code in self.positions:
                             continue
                         for b in bars:
                             if b.get('symbol') == code:
@@ -224,17 +219,16 @@ class FactorEngineCore:
                                     target_value = total_nav * weight
                                     shares = target_value / price
                                     cost = shares * price
-                                    if cost <= cash:
-                                        cash -= cost
-                                        positions[code] = shares
+                                    if cost <= self.cash:
+                                        self.cash -= cost
+                                        self.positions[code] = shares
                                         n_bought += 1
                                 break
 
         start_time = panel.index[0].to_pydatetime()
         end_time = panel.index[-1].to_pydatetime()
-        engine.run(_FastRotationStrategy, start_time, end_time)
-
-        return AccountAnalyzer(daily_assets=daily_assets)
+        # [重构] 2026-06-20 使用 Engine.run_fast()
+        return engine.run_fast(_FastRotationStrategy(), start_time, end_time)
 
     # ============================================================
     # full 模式 — Engine.run() + order_percent() → AccountAnalyzer
