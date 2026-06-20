@@ -8,6 +8,11 @@ v3 独立版本。将多个连续信号加权合成为复合分数，通过三�
   - rank: expanding percentile rank (t时刻只统计历史)
   旧实现用 np.nanmean/np.nanstd 全序列 → score[i] 含未来信息 → 虚高 Sharpe
 
+[修复] 2026-06-20 three_zone_backtest 改走 EngineV3.backtest(mode='fast'):
+  - 三区状态机只生成 position 信号 (1.0=持仓, 0.0=空仓)
+  - 撮合/费率/指标计算全部由 ft2.core Engine 驱动
+  - 与 EngineV3.backtest 结果完全一致，无自研回测偏差
+
 =============================================================================
 """
 import numpy as np
@@ -142,8 +147,10 @@ class ScoredSignal:
 
         if self.transform == 'neg_log':
             v = np.clip(values, 0.0, None)
-            mx = v.max()
-            return np.where(v > 1e-10, -np.log(v / (mx + 1e-10)), 0.0) if mx > 1e-10 else np.zeros_like(v)
+            # [修复] 2026-06-20 用 expanding max 替代全序列 max，消除前向偏差
+            expanding_max = np.maximum.accumulate(v)
+            expanding_max = np.where(expanding_max > 1e-10, expanding_max, 1e-10)
+            return np.where(v > 1e-10, -np.log(v / expanding_max), 0.0)
 
         if callable(self.transform):
             return self.transform(values)
@@ -194,42 +201,65 @@ class CompositeScorer:
 # 三区状态机
 # ============================================================
 def three_zone_backtest(score: pd.Series,
-                        prices: pd.Series,
+                        data: pd.DataFrame,
                         entry_threshold: float = 0.3,
-                        exit_threshold: float = -0.3) -> 'BacktestResult':
+                        exit_threshold: float = -0.3,
+                        symbol: str = '399317.SZ',
+                        initial_capital: float = 1_000_000,
+                        start_date: str = None,
+                        with_fees: bool = False) -> 'BacktestResult':
     """
-    三区状态机回测 — 无前向偏差（状态机只依赖历史）
+    三区状态机回测 — ft2.core Engine 驱动
 
-    复合分数通过三区逻辑转为持仓:
-      score >  entry_thr  →  开多仓
-      score <  exit_thr   →  清仓
+    复合分数通过三区逻辑转为持仓信号:
+      score >  entry_thr  →  开多仓 (signal=1)
+      score <  exit_thr   →  清仓 (signal=0)
       其余情况            →  保持原持仓
+
+    生成 position 信号后交给 EngineV3.backtest(mode='fast') 做撮合，
+    与 ft2.core 结果完全一致。
 
     Parameters
     ----------
     score : pd.Series
         复合分数序列（index=日期）
-    prices : pd.Series
-        价格序列（index=日期，用于计算收益）
+    data : pd.DataFrame
+        OHLCV DataFrame (index=DatetimeIndex)
     entry_threshold : float
         开多阈值
     exit_threshold : float
         清仓阈值
+    symbol : str
+        交易标的
+    initial_capital : float
+        初始资金
+    start_date : str
+        回测起始日
+    with_fees : bool
+        是否扣除费率
 
     Returns
     -------
     BacktestResult
-        含 nav / sharpe / annual_return / max_drawdown / trade_count 等属性
+        含 sharpe / cagr / max_drawdown / trades / nav / position / score
     """
-    score = score.fillna(0).values
-    prices = prices.reindex(score.index).fillna(method='ffill').values
+    from .engine import EngineV3
 
-    n = len(score)
+    # [修复] 2026-06-20 检查 score 与 data index 对齐
+    if not score.index.equals(data.index):
+        common = score.index.intersection(data.index)
+        if len(common) < len(score) * 0.9:
+            import warnings
+            warnings.warn(f"score.index 与 data.index 仅 {len(common)}/{len(score)} 重叠，回测可能不准确")
+
+    # 三区状态机 → position 信号
+    score_vals = score.fillna(0).values
+    n = len(score_vals)
     position = np.zeros(n)
     prev_pos = 0.0
 
     for i in range(n):
-        s = score[i]
+        s = score_vals[i]
         if s > entry_threshold:
             position[i] = 1.0
         elif s < exit_threshold:
@@ -238,28 +268,19 @@ def three_zone_backtest(score: pd.Series,
             position[i] = prev_pos
         prev_pos = position[i]
 
-    # 绩效计算
-    ret = pd.Series(prices).pct_change().shift(-1).fillna(0).values
-    strategy_ret = position * ret
-    nav = (1 + strategy_ret).cumprod()
-    nav[0] = 1.0
+    # position 信号 → pd.Series (与 data index 对齐)
+    signal = pd.Series(position, index=score.index, name='signal')
 
-    trades = int((np.diff(position, prepend=0) != 0).sum())
-    sharpe = float(np.mean(strategy_ret) / (np.std(strategy_ret) + 1e-10) * np.sqrt(252))
-    dd = np.minimum.accumulate(nav / np.maximum.accumulate(nav)) - 1
-    max_dd = float(np.min(dd))
-    ann = float(nav[-1] ** (252 / n) - 1) if n > 0 else 0.0
-
-    pos_series = pd.Series(position, index=score.index, name='position')
+    # 走 EngineV3 fast 模式
+    fast = EngineV3.backtest(
+        signal, data, symbol=symbol, mode='fast',
+        initial_capital=initial_capital, start_date=start_date,
+        with_fees=with_fees)
 
     return BacktestResult(
-        nav=pd.Series(nav, index=score.index, name='nav'),
-        position=pos_series,
-        sharpe=sharpe,
-        annual_return=ann * 100,
-        max_drawdown=max_dd * 100,
-        trade_count=trades,
-        score=score,
+        fast_result=fast,
+        position=pd.Series(position, index=score.index, name='position'),
+        score=score_vals,
     )
 
 
@@ -267,20 +288,58 @@ def three_zone_backtest(score: pd.Series,
 # 回测结果容器
 # ============================================================
 class BacktestResult:
-    """三区回测结果"""
+    """三区回测结果 — 包装 FastResult"""
 
-    def __init__(self, nav, position, sharpe, annual_return,
-                 max_drawdown, trade_count, score):
-        self.nav = nav
+    def __init__(self, fast_result, position, score):
+        self._fast = fast_result
         self.position = position
-        self.sharpe = sharpe
-        self.annual_return = annual_return
-        self.max_drawdown = max_drawdown
-        self.trade_count = trade_count
         self.score = score
 
+    @property
+    def sharpe(self):
+        return self._fast.sharpe
+
+    @property
+    def cagr(self):
+        return self._fast.cagr
+
+    @property
+    def total_return(self):
+        return self._fast.total_return
+
+    @property
+    def max_drawdown(self):
+        return self._fast.max_drawdown * 100  # 百分比，如 -10.5
+
+    @property
+    def annual_vol(self):
+        return self._fast.annual_vol
+
+    @property
+    def trades(self):
+        return self._fast.trades
+
+    @property
+    def win_rate(self):
+        return self._fast.win_rate
+
+    @property
+    def calmar(self):
+        return self._fast.calmar
+
+    @property
+    def nav(self):
+        return pd.Series(self._fast.nav, index=self.position.index, name='nav')
+
+    # 兼容旧属性名
+    @property
+    def annual_return(self):
+        return self._fast.cagr * 100
+
+    @property
+    def trade_count(self):
+        return self._fast.trades  # 语义变更: 旧=仓位变化次数, 新=交易回合数(买入计数)
+
     def __repr__(self):
-        return (f"BacktestResult(sharpe={self.sharpe:.3f}, "
-                f"annual={self.annual_return:.1f}%, "
-                f"max_dd={self.max_drawdown:.1f}%, "
-                f"trades={self.trade_count})")
+        return (f"BacktestResult(SR={self.sharpe:.3f}, CAGR={self.cagr:.1%}, "
+                f"MDD={self.max_drawdown:.1%}, trades={self.trades})")
