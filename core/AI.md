@@ -2,31 +2,30 @@
 
 > 回测引擎核心 + HTML 报告（已融合 notebook 模块）
 >
-> **版本：v2.4 | 更新日期：2026-06-09**
+> **版本：v2.5 | 更新日期：2026-06-21**
 
 ---
 
 ## 架构概览
 
 ```
-Engine → AccountManager → AccountAnalyzer → Notebook → HTML
-  │           │                 │               │
-  │ 时间线驱动  │ 订单/持仓/费用   │ 指标计算       │ 渲染层(Jinja2+Vue3+ECharts)
-  ▼           ▼                 ▼               ▼
-run()       ctx.account.     @metric 收集     nb.export_html()
-全快照       order_percent()  .to_notebook()   ─→ template/notebook.html
-                              .to_excel()       ─→ template/js/(Vue3/ECharts/ft-table)
-run_fast()
-零快照, 策略自管净值 → AccountAnalyzer(daily_assets)
+Engine → AccountManager / FastAccount → AccountAnalyzer → Notebook → HTML
+  │           │     │                           │               │
+  │ 时间线驱动  │     │ 自动扣费+记录净值          │ 指标计算       │ 渲染层
+  ▼           ▼     ▼                           ▼               ▼
+run() →  AccountManager      run_fast() → FastAccount
+全快照  ctx.account.         零快照  ctx.account.  (替换 self.account)
+       order_percent()              order_percent() → 接口完全一致
+                                      mark() 记录净值
+  → AccountAnalyzer(account)        → AccountAnalyzer(daily_assets)
 ```
 
-**v2.4 重构要点（2026-06-09）：**
-- `_cache`、`bar_data_set`、`account` 全部归 Engine 实例所有，多引擎天然隔离
-- `context.account` 委托到 `context._active_engine.account`，策略统一用 `ctx.account`
-- 移除全局 `account` 实例，不再需要 `account.reset()`
-- `context.subscribe()` 自动补 `eob` 字段到缓存，fields 支持逗号分隔字符串
-- ⚠️ `context.data()` 的 `fields` 参数是二次过滤：即使缓存里有 `eob`，不显式请求就不返回。
-  需要用 `eob` 时必须写 `ctx.data(symbol, freq, count, fields='close,eob')`，不能只写 `fields='close'`
+**v2.5 重构要点（2026-06-21）：**
+- 新增 `FastAccount` 轻量账户：走 `context.data()` 缓存取价，无快照/TradeRecord
+- `run_fast()` 替换 `self.account` 为 `FastAccount`，策略统一用 `ctx.account` 下单
+- fast/full 下单接口完全一致：`ctx.account.order_percent(symbol, 1.0, OrderSide.Buy)`
+- `Engine(fee_config={...})` 构造时传入费率，full/fast 共享同一费源
+- 默认费率改为零 (commission_rate=0, stamp_tax_rate=0, min_commission=0)
 
 ---
 
@@ -37,19 +36,22 @@ from core.engine import Engine
 from core.storage import context
 from core.account import OrderSide
 
-engine = Engine(init_cash=1e6)  # 每实例独立账户，初始资金在构造时指定
+engine = Engine(init_cash=1e6)  # 默认零费率
+# 或自定义费率:
+engine = Engine(init_cash=1e6, fee_config={'commission_rate': 0.0003, 'stamp_tax_rate': 0.001, 'min_commission': 5.0})
 context.mode = 'backtest'
 context.subscribe('399317.SZ', '1d', count=300)
 
 # 加载数据（DataFrame 需有 eob, symbol 列）
 engine.add_data('399317.SZ', '1d', df)
 
-# ── full 模式: 产生 TradeRecord + Snapshot → AccountAnalyzer(account) ──
+# ── full 模式: AccountManager → TradeRecord + Snapshot → AccountAnalyzer(account) ──
 engine.run(MyStrategy, start_time, end_time)
 from core.analyzer import AccountAnalyzer
 analyzer = AccountAnalyzer(engine.account)       # Path 1: 快照模式 (全部指标)
 
-# ── fast 模式: 无快照, 策略自管净值 → AccountAnalyzer(daily_assets) ──
+# ── fast 模式: FastAccount → 零快照 → AccountAnalyzer(daily_assets) ──
+# run_fast() 内部将 self.account 替换为 FastAccount，策略 ctx.account 透明切换
 analyzer = engine.run_fast(FastStrategy(), start_time, end_time)
                                                   # Path 2: 净值模式 (仅资产指标)
 ```
@@ -57,34 +59,41 @@ analyzer = engine.run_fast(FastStrategy(), start_time, end_time)
 - `Engine.timeline` 是 `OrderedDict[eob → List[bar]]`，按时间排序驱动；多频率数据共线
 - 每个 bar 先入缓存（`_add_bar`），再调 `on_bar`
 - `run()` / `run_fast()` 共用 `_drive_timeline()` 时间线循环，差异只在 `snapshot=True/False`
-- `run_fast()` 不生成 TradeRecord/snapshots，约 6x 快于 full，适合批量搜索
-- fast 策略契约：`on_bar` 中将每日净值写入 `self.daily_assets[date] = nav`，key 必须是 `datetime.date`
+- `run_fast()` 不生成 TradeRecord/snapshots，FastAccount 自动管理仓位+费率+净值，约 6x 快于 full
+- `ctx.account` 在 fast 模式下指向 FastAccount，接口兼容 AccountManager（order_percent/order_volume/get_position）
+- 非交易日策略调用 `ctx.account.mark()` 记录净值到 FastAccount.daily_assets
 - `start/end` 自动 clamp 到时间线边界，`init_snapshot` 锚定时间线上 start 之前的真实 bar
-- 策略实例化在 `run()`/`run_fast()` 内完成，`context.data()` 只能看到 ≤当前时间的数据
 - `run()`/`run_fast()` 入口注册 `_active_engine`，退出时恢复，支持嵌套多引擎
 
 ---
 
-## 2. AccountManager — 账户管理
+## 2. AccountManager / FastAccount — 账户管理
 
 ```python
 # 策略内部通过 context.account 访问（委托到活跃 Engine 的账户）
+# full 模式 → AccountManager (快照+TradeRecord)
+# fast 模式 → FastAccount (零快照, 缓存取价, 自动记录净值)
 def on_bar(self, context, bars):
     account = context.account
 
-    # 下单（可选 note 记录信号备注）
-    account.order_percent('399317.SZ', 1.0, OrderSide.Buy, note="温度计75度")
+    # 下单（接口完全一致）
+    account.order_percent('399317.SZ', 1.0, OrderSide.Buy, note="金叉买入")
     account.order_volume('399317.SZ', 100, OrderSide.Sell)
 
     # 查询
-    account.get_account()        # {'cash': ..., 'nav': ...}
-    account.get_position(symbol) # {'volume': ..., 'cost_price': ...}
+    account.get_position(symbol)  # {'volume': ..., 'cost_price': ...}
+
+    # fast 模式专用: 非交易日记录净值
+    account.mark()
 ```
 
-- 费用计算：佣金 0.03% + 印花税 0.1%（卖）+ 最低 5 元
-- 交易单位：默认自动识别（stock/etf→100股，index→1，其他→0.1）
-- 策略层可覆盖：`engine.account.fee_config['lot_size'] = 100`
-- `TradeRecord.note`：追溯每笔交易触发原因
+- **AccountManager**: 完整账户，快照聚合 + TradeRecord + FIFO 平仓匹配
+- **FastAccount**: 轻量账户，通过 `context.data()` 缓存获取价格，自动扣费+记录净值
+- `run_fast()` 时将 `self.account` 替换为 `FastAccount`，`ctx.account` 透明切换
+- 费用配置：通过 `Engine(fee_config={...})` 构造时传入，full/fast 共享同一费源
+- 默认费率：零费（commission_rate=0, stamp_tax_rate=0, min_commission=0）
+- 交易单位：full 模式自动识别（stock/etf→100，index→1）；fast 模式简化处理
+- `TradeRecord.note`：仅 full 模式，追溯每笔交易触发原因
 
 ---
 
@@ -348,7 +357,7 @@ nb.export_html()  # → 输出到当前脚本所在目录
 2. **`@metric` 声明式驱动** — 指标元数据集中管理，输出层零硬编码
 3. **引擎天然防未来** — `eob` 时间线 + `context.now` 保证每时刻只能看到 ≤当前的数据
 4. **频率无限制** — `freq` 是纯字符串 key，支持 `'1d'`/`'m10'`/`'my_signal'` 等任意自定义频率；多频数据共线推进
-5. **fast/full 双模式** — `run()` 全快照 + 交易记录，`run_fast()` 零快照 + 策略自管净值，共用 `_drive_timeline()` 时间线循环
+5. **fast/full 双模式** — `run()` 全快照 + AccountManager，`run_fast()` 替换为 FastAccount，接口一致，共用 `_drive_timeline()` 时间线循环
 6. **初始快照独立** — `init_snapshot(start_time前一根真实bar)` 作为 `snapshots[0]`，分析层零推断、零补偿
 7. **缓存实例化隔离** — `_cache`/`bar_data_set`/`account` 归 Engine 实例所有，多引擎天然隔离，无需 `account.reset()`
 8. **基准＝真实策略** — `BenchHolder` 走与主策略相同的引擎+数据+账户通道，对比结果无偏差
@@ -360,8 +369,8 @@ nb.export_html()  # → 输出到当前脚本所在目录
 
 ```
 core/
-├── engine.py          # 回测引擎 (Engine + timeline 驱动，无全局实例)
-├── account.py         # 账户管理 (AccountManager + OrderSide + BenchHolder，无全局实例)
+├── engine.py          # 回测引擎 (Engine + timeline 驱动，run/run_fast)
+├── account.py         # 账户管理 (AccountManager + FastAccount + OrderSide + BenchHolder)
 ├── analyzer.py        # 分析器 (AccountAnalyzer + @metric + to_notebook/to_excel)
 ├── storage.py         # 数据存储 (context 上下文)
 ├── symbol_classifier.py # 品种分类

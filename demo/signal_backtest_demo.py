@@ -139,7 +139,7 @@ def add_footer(nb):
         nb.markdown(
             "### EngineV3 (signals.v3) 特点\n"
             "- **统一入口**: `EngineV3.backtest()` 替代 v2 的多个回测函数\n"
-            "- **双模式**: `full` → AccountAnalyzer / `fast` → FastResult (GP搜索用)\n"
+            "- **双模式**: `full` / `fast` 统一返回 AccountAnalyzer\n"
             "- **自动基准**: `bench_label='399317.SZ'` 参数自动跑买入持有基准\n"
             "- **费率控制**: `fee_config` 参数配置，None=零费率\n"
             "\n"

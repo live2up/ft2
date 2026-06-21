@@ -129,11 +129,11 @@ expr.complexity   # AST 节点数
 ```python
 from factor.v4 import EngineCore
 
-# fast 模式: 搜索 (~0.5s/次) — 引擎内部走 Engine.run_fast(), 不生成快照
+# fast 模式: 搜索 (~0.5s/次) — 引擎内部走 Engine.run_fast() + FastAccount
 analyzer = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
 # → AccountAnalyzer (sharpe_ratio()=1.16, annualized_return()=0.148, max_drawdown()=(-0.10,...))
 
-# full 模式: 验证 + 报告 — 引擎内部走 Engine.run(), 完整快照+交易记录
+# full 模式: 验证 + 报告 — 引擎内部走 Engine.run() + AccountManager, 完整快照+交易记录
 analyzer = EngineCore.backtest(panel, assets, mode='full', top_n=3,
                                rebalance='W', bench_label='000300.SH',
                                buffer=2)                        # 缓冲区: 持仓滑出 top_n+2 名才卖
@@ -154,8 +154,9 @@ analyzer.to_notebook("因子轮动")
 | `start_date` | 回测起始日 | None=数据首位 |
 | `bench_label` | full 模式基准标签 (自动跑 BenchHolder) | None |
 | `buffer` | 排名缓冲数: 持仓滑出 top_n+buffer 名才剔除, 0=严格Top-N | 0 |
+| `fee_config` | 费率配置 dict, None=零费率。例: `{'commission_rate': 0.0003, ...}` | None |
 
-> fast/full 均返回 AccountAnalyzer，接口一致。fast 不生成 TradeRecord，交易指标返回 None。两者共用 core.Engine._drive_timeline() 时间线循环。
+> fast/full 均返回 AccountAnalyzer，接口一致。fast 不生成 TradeRecord，交易指标返回 None。两者共用 core.Engine._drive_timeline() 时间线循环，fast 模式下 ctx.account 指向 FastAccount。
 
 ### 3. GP 因子组合优化引擎
 
@@ -278,7 +279,7 @@ len(BASIC_FACTORS)  # 20    因子原子基元
 - v3 保留，回测已统一到 ft2.core，语法仍为自研 Parser
 - FactorExpression 是 signals.v4 Expression 的薄包装层，语法完全一致
 - EngineCore 与 signals.v4 EngineCore 架构对齐，fast/full 双模式，均返回 AccountAnalyzer
-- fast 模式内部走 `core.Engine.run_fast()`，不生成快照/交易记录
+- fast 模式内部走 `core.Engine.run_fast()` + `FastAccount`，不生成快照/交易记录；ctx.account 接口与 full 统一
 - 截面排名推荐使用 `evaluate_ranked()` 或 `Expression.rank_panel()`
 - 67 原语覆盖 WorldQuant 时序算子的 96%，截面 100%
 - 扩展新原语：`signals.v4.register_function()` 注册 → 因子模块即用

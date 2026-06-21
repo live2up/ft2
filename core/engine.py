@@ -198,6 +198,8 @@ class Engine:
                     strategy.on_bar(context, bars)
                     if _snapshot:
                         _snapshot()
+                    elif hasattr(self.account, 'mark'):
+                        self.account.mark()
         finally:
             context._active_engine = prev_engine
 

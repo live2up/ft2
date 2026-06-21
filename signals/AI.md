@@ -108,18 +108,18 @@ expr.complexity   # 5
 ```python
 from signals.v4 import EngineCore
 
-# fast 模式: 搜索 (~0.5s/次) — 内部走 core.Engine.run_fast(), 不生成快照
+# fast 模式: 搜索 (~0.5s/次) — 内部走 core.Engine.run_fast() + FastAccount
 analyzer = EngineCore.backtest(signal, data, mode='fast', start_date='2020-01-01')
 # → AccountAnalyzer (sharpe_ratio()=1.16, annualized_return()=0.148, max_drawdown()=(-0.10,...))
 
-# full 模式: 验证 + 报告 — 内部走 core.Engine.run(), 完整快照+交易记录
+# full 模式: 验证 + 报告 — 内部走 core.Engine.run() + AccountManager, 完整快照+交易记录
 analyzer = EngineCore.backtest(signal, data, mode='full',
                                start_date='2020-01-01', bench_label='399317.SZ',
-                               with_fees=False)    # 指数择时默认不扣费率
+                               fee_config=None)    # 默认零费率
 analyzer.to_notebook("策略回测")
 ```
 
-> fast/full 均返回 AccountAnalyzer，接口一致。fast 不生成 TradeRecord/snapshots，交易指标返回 None。`with_fees` 控制是否扣除 ETF 费默认不扣费率。
+> fast/full 均返回 AccountAnalyzer，接口一致。fast 不生成 TradeRecord/snapshots，交易指标返回 None。`fee_config` 控制费率，None=零费率。传入 dict 自定义，如 `{'commission_rate': 0.0003, 'stamp_tax_rate': 0.001, 'min_commission': 5.0}`。
 
 ### 3. 表达式语法
 
@@ -318,7 +318,7 @@ ast.parse(expr) → 三层白名单校验:
 - v3 保留，仅供历史测试对照，回测已统一到 ft2.core
 - FeatureSpace 仍存在于 v3，可作为兼容层（`extra_features=dict`传入），但 v4 不需要
 - `evaluate_panel()` 确保索引对齐到 data 尾部（FeatureSpace 冷启动截断）
-- fast 模式内部走 `core.Engine.run_fast()`，不生成快照/交易记录；Sharpe 与 full 一致
+- fast 模式内部走 `core.Engine.run_fast()` + `FastAccount`，不生成快照/交易记录；Sharpe 与 full 一致，`ctx.account` 接口统一
 - **滚动窗口预热**: `ts_zscore(60)` 等滚动函数要求满窗口才输出有效值（前59天为 NaN→0），避免早期样本不足时的假信号
 - **自定义注册**: `register_function()` / `register_variable()` 进程级全局，推荐脚本顶部注册、末尾注销
 - 67 原语覆盖 WorldQuant 时序算子的 96%，截面 100%

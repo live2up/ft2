@@ -186,7 +186,12 @@ class AccountManager:
         total_assets = self.cash
 
         for symbol, pos in self.positions.items():
-            price = self._get_price(symbol)
+            try:
+                price = self._get_price(symbol)
+            except (ValueError, KeyError):
+                continue
+            if price <= 0:
+                continue
             pos_snap = PositionSnapshot(
                 symbol=symbol,
                 volume=pos['volume'],
@@ -679,7 +684,7 @@ class FastAccount:
                 nav += shares * self._get_price(sym)
             except (ValueError, KeyError):
                 pass  # 未订阅的品种跳过
-        self.daily_assets[date] = float(nav)
+        self.daily_assets[date] = round(nav, 2)
 
     # ── 下单 (接口对齐 AccountManager) ──
 
@@ -729,8 +734,6 @@ class FastAccount:
                 del self.positions[symbol]
             shares = sell_shares
 
-        # 交易后自动记录净值
-        self.mark()
         return shares
 
     def order_volume(self, symbol: str, volume: int, side: int,
@@ -765,7 +768,6 @@ class FastAccount:
             if self.positions[symbol] <= 0:
                 del self.positions[symbol]
 
-        self.mark()
         return volume
 
     # ── 查询 (兼容 AccountManager 接口) ──
@@ -779,8 +781,14 @@ class FastAccount:
                 for sym, sh in self.positions.items()}
 
     def get_account(self, query_time=None):
-        """返回账户概览。"""
-        return {'cash': self.cash, 'nav': self.cash}
+        """返回账户概览。nav = cash + 持仓市值"""
+        nav = self.cash
+        for sym, shares in self.positions.items():
+            try:
+                nav += shares * self._get_price(sym)
+            except (ValueError, KeyError):
+                pass
+        return {'cash': self.cash, 'nav': nav}
 
 
 # ============================================================================
