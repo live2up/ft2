@@ -190,8 +190,6 @@ class EngineCore:
                 if dt is None:
                     return
 
-                ctx.account.mark()
-
                 if sig > 0 and not ctx.account.positions:
                     ctx.account.order_percent(symbol, 1.0, OrderSide.Buy)
                 elif sig <= 0 and ctx.account.positions:

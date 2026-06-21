@@ -119,8 +119,8 @@ class Engine:
 
         策略契约：
         - ctx.account 在 fast 模式下指向 FastAccount (接口兼容 AccountManager)
-        - 策略调用 ctx.account.order_percent/order_volume 下单 (自动扣费+记净值)
-        - 非交易日: ctx.account.mark() 记录净值
+        - 策略调用 ctx.account.order_percent/order_volume 下单 (自动扣费)
+        - 引擎在 on_bar 后自动调用 ctx.account.mark() 记录日末净值
 
         Returns:
             AccountAnalyzer: 统一分析器 (仅资产指标可用，交易指标返回 None)
@@ -139,8 +139,8 @@ class Engine:
             daily = self.fast_account.daily_assets
             if not daily:
                 raise RuntimeError(
-                    "fast 模式要求策略在 on_bar 中调用 ctx.account.mark() 记录净值，"
-                    "或通过 ctx.account.order_percent/order_volume 自动记录。"
+                    "fast 模式未产生任何净值记录。"
+                    "请确认策略在 on_bar 中调用了 order_percent/order_volume。"
                 )
             return AccountAnalyzer(daily_assets=daily)
         finally:

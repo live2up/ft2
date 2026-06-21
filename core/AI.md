@@ -61,7 +61,7 @@ analyzer = engine.run_fast(FastStrategy(), start_time, end_time)
 - `run()` / `run_fast()` 共用 `_drive_timeline()` 时间线循环，差异只在 `snapshot=True/False`
 - `run_fast()` 不生成 TradeRecord/snapshots，FastAccount 自动管理仓位+费率+净值，约 6x 快于 full
 - `ctx.account` 在 fast 模式下指向 FastAccount，接口兼容 AccountManager（order_percent/order_volume/get_position）
-- 非交易日策略调用 `ctx.account.mark()` 记录净值到 FastAccount.daily_assets
+- 引擎在 on_bar 后自动调用 `ctx.account.mark()` 记录日末净值，策略无需手动调用
 - `start/end` 自动 clamp 到时间线边界，`init_snapshot` 锚定时间线上 start 之前的真实 bar
 - `run()`/`run_fast()` 入口注册 `_active_engine`，退出时恢复，支持嵌套多引擎
 
@@ -82,9 +82,7 @@ def on_bar(self, context, bars):
 
     # 查询
     account.get_position(symbol)  # {'volume': ..., 'cost_price': ...}
-
-    # fast 模式专用: 非交易日记录净值
-    account.mark()
+    account.get_account()         # {'cash': ..., 'nav': ...}
 ```
 
 - **AccountManager**: 完整账户，快照聚合 + TradeRecord + FIFO 平仓匹配

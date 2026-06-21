@@ -266,10 +266,7 @@ class EngineCore:
                 if current_date is None:
                     return
 
-                # 记录当日净值 (FastAccount 自动从缓存计算)
-                date_key = current_date.date()
-                ctx.account.mark(date_key)
-
+                # 引擎自动记录日末净值 (drive_timeline 在 on_bar 后调用 mark())
                 if current_date not in rebalance_set:
                     return
                 if current_date not in panel.index:
@@ -292,7 +289,7 @@ class EngineCore:
                 n_slots = top_n - len(ctx.account.positions)
                 if top_codes and n_slots > 0:
                     weight = 1.0 / len(top_codes)
-                    total_nav = ctx.account.daily_assets[date_key]
+                    total_nav = ctx.account.get_account()['nav']
                     n_bought = 0
                     for code in top_codes & set(symbols):
                         if n_bought >= n_slots:
