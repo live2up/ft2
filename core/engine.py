@@ -195,6 +195,10 @@ class Engine:
                 for bar in bars:
                     _add_bar(bar)
 
+                # [优化] 2026-06-21 注入 bar 价格到 FastAccount，消除 mark()/get_account() 中的 _get_price 开销
+                if hasattr(self.account, 'update_prices'):
+                    self.account.update_prices(bars)
+
                 if start_time <= current_time <= end_time:
                     strategy.on_bar(context, bars)
                     if _snapshot:

@@ -658,11 +658,17 @@ class FastAccount:
             'min_commission': 0.0,
         }
         self.daily_assets: Dict = {}  # {datetime.date: nav}
+        self._latest_prices: Dict[str, float] = {}  # [优化] 2026-06-21 缓存 bar 价格，避免 _get_price
 
     # ── 价格查询 (读 context.data 缓存) ──
 
     def _get_price(self, symbol: str) -> float:
-        """从缓存获取当前价格，逻辑对齐 AccountManager._get_price"""
+        """从缓存获取当前价格。优先读 _latest_prices，兜底走 context.data。"""
+        # [优化] 2026-06-21 优先读引擎注入的 bar 价格缓存，跳过 DataFrame 构造
+        cached = self._latest_prices.get(symbol)
+        if cached is not None and cached > 0:
+            return cached
+
         action_time = context.now
         subscribed_freqs = {freq for (s, freq) in context._subscribed if s == symbol}
         if not subscribed_freqs:
@@ -688,6 +694,19 @@ class FastAccount:
                 continue
         return 0.0
 
+    # ── 价格缓存 ([优化] 2026-06-21 消除 mark/get_account 中的 _get_price 开销) ──
+
+    def update_prices(self, bars: List[Dict]):
+        """引擎注入当前 bar 价格，mark()/get_account() 优先读缓存。
+
+        由 _drive_timeline 在每个 bar 前调用，避免 mark() 和 get_account()
+        反复通过 context.data() → DataFrame 查价（约 1.2ms/次/品种）。
+        """
+        for b in bars:
+            close = b.get('close')
+            if close is not None and close > 0:
+                self._latest_prices[b['symbol']] = float(close)
+
     # ── 交易单位 ──
 
     def _get_lot_size(self, symbol: str) -> float:
@@ -708,15 +727,20 @@ class FastAccount:
     # ── 净值记录 ──
 
     def mark(self, date=None):
-        """记录当日净值到 daily_assets。date=None 时取 context.now.date()"""
+        """记录当日净值到 daily_assets。优先读 _latest_prices 缓存，兜底 _get_price。"""
         if date is None:
             date = context.now.date()
         nav = self.cash
         for sym, shares in self.positions.items():
-            try:
-                nav += shares * self._get_price(sym)
-            except (ValueError, KeyError):
-                pass  # 未订阅的品种跳过
+            # [优化] 2026-06-21 优先读引擎注入的 bar 价格缓存
+            price = self._latest_prices.get(sym)
+            if price is None:
+                try:
+                    price = self._get_price(sym)
+                except (ValueError, KeyError):
+                    pass
+            if price:
+                nav += shares * price
         self.daily_assets[date] = round(nav, 2)
 
     # ── 下单 (计算逻辑对齐 AccountManager，执行层替换为轻量实现) ──
@@ -836,13 +860,17 @@ class FastAccount:
                 for sym, sh in self.positions.items()}
 
     def get_account(self, query_time=None):
-        """返回账户概览。nav = cash + 持仓市值"""
+        """返回账户概览。nav = cash + 持仓市值，优先读 _latest_prices 缓存。"""
         nav = self.cash
         for sym, shares in self.positions.items():
-            try:
-                nav += shares * self._get_price(sym)
-            except (ValueError, KeyError):
-                pass
+            price = self._latest_prices.get(sym)
+            if price is None:
+                try:
+                    price = self._get_price(sym)
+                except (ValueError, KeyError):
+                    pass
+            if price:
+                nav += shares * price
         return {'cash': self.cash, 'nav': nav}
 
 
