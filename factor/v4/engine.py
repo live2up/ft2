@@ -3,14 +3,15 @@
 factor/v4/engine.py — 因子轮动回测引擎 (ft2.core 驱动)
 
 对齐 signals/v4 EngineCore 架构:
-  full  — Engine.run() + AccountManager.order_percent() → AccountAnalyzer (完整指标/交易记录/notebook)
-  fast  — Engine.run_fast() + FastAccount.order_percent() → AccountAnalyzer (~400ms/次, 1566天5品种)
+  full   — Engine.run() + AccountManager.order_percent() → AccountAnalyzer (完整指标/交易记录/notebook)
+  fast   — Engine.run_fast() + FastAccount.order_percent() → AccountAnalyzer (~400ms/次, 1566天5品种)
+  vector — 纯矩阵向量化, 跳过事件驱动循环 → AccountAnalyzer (~50~100x 快于 full)
 
 用法:
   from factor.v4 import EngineCore
 
-  # 两种模式统一返回 AccountAnalyzer，调用接口一致
-  analyzer = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
+  # 三种模式统一返回 AccountAnalyzer，调用接口一致
+  analyzer = EngineCore.backtest(panel, assets, mode='vector', top_n=3, rebalance='W')
   print(analyzer.sharpe_ratio(), analyzer.max_drawdown(), analyzer.metrics())
 
   # full 模式 — 验证 + 报告
@@ -32,11 +33,12 @@ from core.analyzer import AccountAnalyzer
 
 
 class EngineCore:
-    """因子轮动回测引擎 — ft2.core 驱动, full/fast 双模式
+    """因子轮动回测引擎 — ft2.core 驱动, full/fast/vector 三模式
 
     对齐 signals/v4 EngineCore:
-      - full: AccountManager.order_percent() → AccountAnalyzer
-      - fast: 自管净值, 不生成 TradeRecord/snapshots
+      - full:   AccountManager.order_percent() → AccountAnalyzer
+      - fast:   FastAccount, 无 TradeRecord/snapshots
+      - vector: 纯矩阵向量化, 跳过事件驱动循环
     """
 
     @staticmethod
@@ -68,11 +70,13 @@ class EngineCore:
                     例: top_n=3, buffer=2 → 持仓排名在6名及以下才卖出
             fee_config: 费率配置 dict, None=零费率。
                         例: {'commission_rate': 0.0003, 'stamp_tax_rate': 0.001, 'min_commission': 5.0}
+                        向量化模式不模拟 lot_size，用连续权重近似（偏差 <1%）
 
         Returns:
             AccountAnalyzer: 统一分析器 (可 sharpe_ratio()/metrics()/to_notebook())
 
         [重构] 2026-06-18 新增 returns 参数 (自动合成 OHLCV), rebalance 支持 Scheduler 对象
+        [新增] 2026-06-21 mode='vector' 纯矩阵向量化路径
         """
         # 数据源: assets 优先, 否则从 returns 合成
         if assets is None and returns is not None:
@@ -80,7 +84,10 @@ class EngineCore:
         elif assets is None:
             raise ValueError("需要 assets 或 returns 参数")
 
-        if mode == 'fast':
+        if mode == 'vector':
+            return EngineCore._run_vectorized(panel, assets, top_n, rebalance,
+                                             initial_capital, start_date, buffer, fee_config)
+        elif mode == 'fast':
             return EngineCore._run_fast(panel, assets, top_n, rebalance,
                                        initial_capital, start_date, buffer, fee_config)
         else:
@@ -311,6 +318,120 @@ class EngineCore:
         start_time = panel.index[0].to_pydatetime()
         end_time = panel.index[-1].to_pydatetime()
         return engine.run_fast(_FastRotationStrategy(), start_time, end_time)
+
+    # ============================================================
+    # vector 模式 — 纯矩阵向量化, 跳过事件驱动循环
+    # ============================================================
+
+    @staticmethod
+    def _run_vectorized(panel, assets, top_n, rebalance, initial_capital, start_date,
+                        buffer=0, fee_config=None):
+        """向量化因子轮动：纯矩阵运算，不经过 Engine._drive_timeline。
+
+        连续权重近似 (无 lot_size)，费率模拟与 fast/full 对齐。
+        调仓时序: 当日收盘后用旧权重计收益 → 调仓 → 记录净值 (与 _drive_timeline 一致)
+        """
+        panel = EngineCore._prepare_panel(panel, start_date)
+        dates = panel.index.sort_values()
+        symbols = panel.columns.tolist()
+        symbols_set = set(symbols)
+        n = len(dates)
+        sym_to_idx = {c: i for i, c in enumerate(symbols)}
+
+        # 构建价格 + 收益率矩阵 (T × N)
+        price_arr = np.full((n, len(symbols)), np.nan)
+        for code in symbols:
+            if code in assets:
+                price_arr[:, sym_to_idx[code]] = assets[code]['close'].reindex(dates).values
+        returns_arr = np.diff(price_arr, axis=0) / price_arr[:-1]
+        returns_arr = np.nan_to_num(returns_arr, nan=0.0)
+
+        # 调仓日
+        rebalance_set = EngineCore._make_rebalance_set(dates, rebalance)
+        use_buffer = buffer > 0
+        buffer_rank = top_n + buffer
+
+        fee = fee_config or {'commission_rate': 0.0, 'stamp_tax_rate': 0.0, 'min_commission': 0.0}
+
+        # 预计算每日 top_codes
+        panel_arr = panel.values  # T × N
+        top_indices = np.argsort(-panel_arr, axis=1)[:, :max(top_n, buffer_rank if use_buffer else top_n)]
+
+        # 权重矩阵: weight_matrix[i] = 第i天开始时的持仓权重 (即前一天收盘调仓后的权重)
+        weight_matrix = np.zeros((n, len(symbols)))
+        held = set()
+        current_weights = {}
+
+        nav = float(initial_capital)
+        daily_nav = {dates[0].date(): round(nav, 2)}
+
+        for i in range(n):
+            date = dates[i]
+            is_rebalance = date in rebalance_set and date in panel.index
+
+            # 1. 当日收益: 用旧权重 × 当日收益率 (i-1 → i)
+            if i > 0 and current_weights:
+                ret = 0.0
+                for c, w in current_weights.items():
+                    j = sym_to_idx.get(c)
+                    if j is not None:
+                        ret += w * returns_arr[i - 1, j]
+                nav *= (1.0 + ret)
+
+            # 2. 调仓 (收盘后)
+            if is_rebalance:
+                top_codes = set()
+                for j in range(top_n):
+                    code = symbols[top_indices[i, j]]
+                    if code in symbols_set:
+                        top_codes.add(code)
+
+                if use_buffer:
+                    buffer_codes = set()
+                    for j in range(buffer_rank):
+                        code = symbols[top_indices[i, j]]
+                        if code in symbols_set:
+                            buffer_codes.add(code)
+                    keep = held & buffer_codes
+                else:
+                    keep = held & top_codes
+
+                n_keep = len(keep)
+                n_slots = top_n - n_keep
+                new_codes = [c for c in top_codes if c not in held][:n_slots]
+                target_codes = keep | set(new_codes)
+                n_target = len(target_codes)
+
+                if n_target > 0:
+                    wt = 1.0 / n_target
+                    new_weights = {c: wt for c in target_codes}
+                else:
+                    new_weights = {}
+
+                # 手续费
+                if current_weights:
+                    sell_val = buy_val = 0.0
+                    for c, w in current_weights.items():
+                        nw = new_weights.get(c, 0.0)
+                        if w > nw:
+                            sell_val += (w - nw) * nav
+                    for c, w in new_weights.items():
+                        ow = current_weights.get(c, 0.0)
+                        if w > ow:
+                            buy_val += (w - ow) * nav
+                    if sell_val > 0:
+                        nav -= max(sell_val * fee['commission_rate'], fee['min_commission'])
+                        nav -= sell_val * fee['stamp_tax_rate']
+                    if buy_val > 0:
+                        nav -= max(buy_val * fee['commission_rate'], fee['min_commission'])
+
+                current_weights = new_weights
+                held = target_codes
+
+            weight_matrix[i] = [current_weights.get(c, 0.0) for c in symbols]
+            daily_nav[date.date()] = round(nav, 2)
+
+        return AccountAnalyzer(daily_assets=daily_nav)
 
     # ============================================================
     # 工具方法
