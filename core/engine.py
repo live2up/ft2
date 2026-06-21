@@ -1,7 +1,7 @@
 #这个是回测引擎，尽量精简导入的模块
 from collections import OrderedDict
 from .storage import context, _Cache
-from .account import AccountManager
+from .account import AccountManager, FastAccount
 import pandas as pd
 
 class Engine:
@@ -20,12 +20,14 @@ class Engine:
         - 策略通过 context.account 访问（委托到活跃 Engine）
         - 实盘时替换为 RealBroker，接口不变
     """
-    def __init__(self, init_cash=1e6):
+    def __init__(self, init_cash=1e6, fee_config=None):
+        self.init_cash = init_cash
         self.timeline = OrderedDict()
         self.cache_count = 100
         self._cache = _Cache()
         self.bar_data_set = set()
-        self.account = AccountManager(init_cash=init_cash)
+        self.account = AccountManager(init_cash=init_cash, fee_config=fee_config)
+        self.fast_account = None  # 每次 run_fast() 时重建
 
     def set_cache_count(self, cache_count):
         self.cache_count = cache_count
@@ -110,15 +112,15 @@ class Engine:
         self._drive_timeline(strategy, start_time, end_time, snapshot=True)
 
     def run_fast(self, strategy, start_time, end_time):
-        """快速回测：策略自管持仓/净值，不生成 TradeRecord/snapshots。
+        """快速回测：替换 self.account 为 FastAccount，策略统一用 ctx.account 下单。
 
-        跑完时间线后直接从策略对象读取 daily_assets 构造 AccountAnalyzer，
+        跑完时间线后从 FastAccount.daily_assets 构造 AccountAnalyzer，
         跳过快照聚合和 FIFO 交易匹配，约 6x 快于 full 模式。
 
         策略契约：
-        - 策略类必须在 on_bar() 中将每日净值写入 self.daily_assets[date] = nav
-        - date 必须是 datetime.date（不可用 pd.Timestamp）
-        - 策略类自行管理持仓/现金（不依赖 ctx.account）
+        - ctx.account 在 fast 模式下指向 FastAccount (接口兼容 AccountManager)
+        - 策略调用 ctx.account.order_percent/order_volume 下单 (自动扣费+记净值)
+        - 非交易日: ctx.account.mark() 记录净值
 
         Returns:
             AccountAnalyzer: 统一分析器 (仅资产指标可用，交易指标返回 None)
@@ -126,16 +128,23 @@ class Engine:
         from .analyzer import AccountAnalyzer
         if isinstance(strategy, type):
             strategy = strategy()
-        # [核心] 不生成快照 — 传 snapshot=False 跳过 take_snapshot
-        self._drive_timeline(strategy, start_time, end_time, snapshot=False)
-        daily = getattr(strategy, 'daily_assets', None)
-        if daily is None:
-            raise RuntimeError(
-                "fast 模式要求策略类暴露 self.daily_assets 属性。"
-                "请在 on_bar 中将每日净值记录到 self.daily_assets[date] = nav，"
-                "key 必须是 datetime.date 类型。"
-            )
-        return AccountAnalyzer(daily_assets=daily)
+
+        # 替换 account 为 FastAccount，策略 ctx.account 透明切换
+        original_account = self.account
+        self.fast_account = FastAccount(self.init_cash, original_account.fee_config)
+        self.account = self.fast_account
+
+        try:
+            self._drive_timeline(strategy, start_time, end_time, snapshot=False)
+            daily = self.fast_account.daily_assets
+            if not daily:
+                raise RuntimeError(
+                    "fast 模式要求策略在 on_bar 中调用 ctx.account.mark() 记录净值，"
+                    "或通过 ctx.account.order_percent/order_volume 自动记录。"
+                )
+            return AccountAnalyzer(daily_assets=daily)
+        finally:
+            self.account = original_account
 
     # ── 内部时间线驱动 (run/run_fast 共用) ──
     def _drive_timeline(self, strategy, start_time, end_time, snapshot=True):

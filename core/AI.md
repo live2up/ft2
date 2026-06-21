@@ -13,9 +13,11 @@ Engine → AccountManager → AccountAnalyzer → Notebook → HTML
   │           │                 │               │
   │ 时间线驱动  │ 订单/持仓/费用   │ 指标计算       │ 渲染层(Jinja2+Vue3+ECharts)
   ▼           ▼                 ▼               ▼
-context.now  ctx.account.     @metric 收集     nb.export_html()
-逐bar推进    order_percent()   .to_notebook()   ─→ template/notebook.html
+run()       ctx.account.     @metric 收集     nb.export_html()
+全快照       order_percent()  .to_notebook()   ─→ template/notebook.html
                               .to_excel()       ─→ template/js/(Vue3/ECharts/ft-table)
+run_fast()
+零快照, 策略自管净值 → AccountAnalyzer(daily_assets)
 ```
 
 **v2.4 重构要点（2026-06-09）：**
@@ -42,18 +44,24 @@ context.subscribe('399317.SZ', '1d', count=300)
 # 加载数据（DataFrame 需有 eob, symbol 列）
 engine.add_data('399317.SZ', '1d', df)
 
-# 运行（传策略类，引擎自动实例化）
+# ── full 模式: 产生 TradeRecord + Snapshot → AccountAnalyzer(account) ──
 engine.run(MyStrategy, start_time, end_time)
-
-# 分析
 from core.analyzer import AccountAnalyzer
-analyzer = AccountAnalyzer(engine.account)
+analyzer = AccountAnalyzer(engine.account)       # Path 1: 快照模式 (全部指标)
+
+# ── fast 模式: 无快照, 策略自管净值 → AccountAnalyzer(daily_assets) ──
+analyzer = engine.run_fast(FastStrategy(), start_time, end_time)
+                                                  # Path 2: 净值模式 (仅资产指标)
 ```
 
-- `Engine.timeline` 是 `OrderedDict[eob → List[bar]]`，按时间排序驱动
+- `Engine.timeline` 是 `OrderedDict[eob → List[bar]]`，按时间排序驱动；多频率数据共线
 - 每个 bar 先入缓存（`_add_bar`），再调 `on_bar`
-- 策略实例化在 `run()` 内完成，`context.data()` 只能看到 ≤当前时间的数据
-- `Engine.run()` 入口注册 `_active_engine`，退出时恢复，支持嵌套多引擎
+- `run()` / `run_fast()` 共用 `_drive_timeline()` 时间线循环，差异只在 `snapshot=True/False`
+- `run_fast()` 不生成 TradeRecord/snapshots，约 6x 快于 full，适合批量搜索
+- fast 策略契约：`on_bar` 中将每日净值写入 `self.daily_assets[date] = nav`，key 必须是 `datetime.date`
+- `start/end` 自动 clamp 到时间线边界，`init_snapshot` 锚定时间线上 start 之前的真实 bar
+- 策略实例化在 `run()`/`run_fast()` 内完成，`context.data()` 只能看到 ≤当前时间的数据
+- `run()`/`run_fast()` 入口注册 `_active_engine`，退出时恢复，支持嵌套多引擎
 
 ---
 
@@ -84,7 +92,20 @@ def on_bar(self, context, bars):
 
 ```python
 from core.analyzer import AccountAnalyzer
-analyzer = AccountAnalyzer(account)
+
+# ── 两种输入路径 ──
+
+# Path 1: 快照模式 (full 回测) — 全部指标可用
+analyzer = AccountAnalyzer(account=engine.account)
+# _daily_assets ← _aggregate_daily_assets(snapshots)
+# _trade_profits ← _calculate_profit(trade_records)
+
+# Path 2: 净值模式 (fast 回测 / 外部数据) — 仅资产指标可用
+analyzer = AccountAnalyzer(daily_assets={date(2024,1,2): 1e6, ...})
+# _daily_assets ← 直接赋值, _trade_profits = []
+
+# 两种路径均归一到 Dict[date, float]，返回同一套 @metric 指标
+# fast 模式下交易指标 (胜率/盈亏比等) 返回 None
 ```
 
 ### 3.1 指标定义：@metric 装饰器
@@ -326,11 +347,12 @@ nb.export_html()  # → 输出到当前脚本所在目录
 1. **计算层返回纯数字，呈现层负责格式化** — 方法返回 `0.159`，`fmt='.1%'` 控制输出 `15.9%`
 2. **`@metric` 声明式驱动** — 指标元数据集中管理，输出层零硬编码
 3. **引擎天然防未来** — `eob` 时间线 + `context.now` 保证每时刻只能看到 ≤当前的数据
-4. **频率无限制** — `freq` 是纯字符串 key，支持 `'1d'`/`'m10'`/`'my_signal'` 等任意自定义频率
-5. **初始快照独立** — `init_snapshot(start_time-1天)` 作为 `snapshots[0]`，分析层零推断、零补偿
-6. **缓存实例化隔离** — `_cache`/`bar_data_set`/`account` 归 Engine 实例所有，多引擎天然隔离，无需 `account.reset()`
-7. **基准＝真实策略** — `BenchHolder` 走与主策略相同的引擎+数据+账户通道，对比结果无偏差
-8. **Notebook 渲染层内聚** — `analyzer.to_notebook()` 内部完成全链路；支持 `header/footer` 回调扩展
+4. **频率无限制** — `freq` 是纯字符串 key，支持 `'1d'`/`'m10'`/`'my_signal'` 等任意自定义频率；多频数据共线推进
+5. **fast/full 双模式** — `run()` 全快照 + 交易记录，`run_fast()` 零快照 + 策略自管净值，共用 `_drive_timeline()` 时间线循环
+6. **初始快照独立** — `init_snapshot(start_time前一根真实bar)` 作为 `snapshots[0]`，分析层零推断、零补偿
+7. **缓存实例化隔离** — `_cache`/`bar_data_set`/`account` 归 Engine 实例所有，多引擎天然隔离，无需 `account.reset()`
+8. **基准＝真实策略** — `BenchHolder` 走与主策略相同的引擎+数据+账户通道，对比结果无偏差
+9. **Notebook 渲染层内聚** — `analyzer.to_notebook()` 内部完成全链路；支持 `header/footer` 回调扩展
 
 ---
 

@@ -207,7 +207,7 @@ def three_zone_backtest(score: pd.Series,
                         symbol: str = '399317.SZ',
                         initial_capital: float = 1_000_000,
                         start_date: str = None,
-                        with_fees: bool = False) -> 'BacktestResult':
+                        fee_config: dict = None) -> 'BacktestResult':
     """
     三区状态机回测 — ft2.core Engine 驱动
 
@@ -235,8 +235,8 @@ def three_zone_backtest(score: pd.Series,
         初始资金
     start_date : str
         回测起始日
-    with_fees : bool
-        是否扣除费率
+    fee_config : dict
+        费率配置, None=零费率
 
     Returns
     -------
@@ -275,7 +275,7 @@ def three_zone_backtest(score: pd.Series,
     analyzer = EngineV3.backtest(
         signal, data, symbol=symbol, mode='fast',
         initial_capital=initial_capital, start_date=start_date,
-        with_fees=with_fees)
+        fee_config=fee_config)
 
     return BacktestResult(
         analyzer=analyzer,

@@ -11,8 +11,7 @@
 | 版本 | 状态 | 说明 |
 |------|------|------|
 | **v4** | **主力** | Python AST DSL, 67 原语, EngineCore, 探索灵活, `from signals.v4 import ...` |
-| v3 | 保留 | 仅供历史测试对照，自研 Parser + FeatureSpace |
-| v1/v2 | 已归档 | `signals/_archived/v1/`, `signals/_archived/v2/` |
+| v3 | 保留 | 仅供历史测试对照，自研 Parser + FeatureSpace，回测已统一到 ft2.core (EngineV3) |
 
 ## v4 核心变革
 
@@ -66,9 +65,6 @@ signals/
 │   ├── wf_result.py        # Walk-Forward 结果
 │   └── __init__.py         # 统一导出
 ├── v3/                     # 保留 (仅供历史测试对照)
-└── _archived/              # v1 + v2 已归档
-    ├── v1/
-    └── v2/
 ```
 
 ---
@@ -112,15 +108,18 @@ expr.complexity   # 5
 ```python
 from signals.v4 import EngineCore
 
-# fast 模式: 搜索 (~0.5s/次)
+# fast 模式: 搜索 (~0.5s/次) — 内部走 core.Engine.run_fast(), 不生成快照
 analyzer = EngineCore.backtest(signal, data, mode='fast', start_date='2020-01-01')
-# → AccountAnalyzer (sharpe_ratio()=1.16, annualized_return()=0.148, max_drawdown()=(-0.10, ...))
+# → AccountAnalyzer (sharpe_ratio()=1.16, annualized_return()=0.148, max_drawdown()=(-0.10,...))
 
-# full 模式: 验证 + 报告
+# full 模式: 验证 + 报告 — 内部走 core.Engine.run(), 完整快照+交易记录
 analyzer = EngineCore.backtest(signal, data, mode='full',
-                               start_date='2020-01-01', bench_label='399317.SZ')
+                               start_date='2020-01-01', bench_label='399317.SZ',
+                               with_fees=False)    # 指数择时默认不扣费率
 analyzer.to_notebook("策略回测")
 ```
+
+> fast/full 均返回 AccountAnalyzer，接口一致。fast 不生成 TradeRecord/snapshots，交易指标返回 None。`with_fees` 控制是否扣除 ETF 费默认不扣费率。
 
 ### 3. 表达式语法
 
@@ -315,12 +314,11 @@ ast.parse(expr) → 三层白名单校验:
 
 ## 注意事项
 
-- **v1/v2 已归档** (`signals/_archived/`)，不再使用
-- **v3 保留**，仅供历史测试对照
 - **v4 主力**：`from signals.v4 import Expression, EngineCore`，探索灵活
-- FeatureSpace 仍存在于 v3，可作为兼容层（`extra_features=dict`传入），但不需要
+- v3 保留，仅供历史测试对照，回测已统一到 ft2.core
+- FeatureSpace 仍存在于 v3，可作为兼容层（`extra_features=dict`传入），但 v4 不需要
 - `evaluate_panel()` 确保索引对齐到 data 尾部（FeatureSpace 冷启动截断）
-- `EngineCore.backtest(mode='fast')` 的 Sharpe 与 `mode='full'` 一致
+- fast 模式内部走 `core.Engine.run_fast()`，不生成快照/交易记录；Sharpe 与 full 一致
 - **滚动窗口预热**: `ts_zscore(60)` 等滚动函数要求满窗口才输出有效值（前59天为 NaN→0），避免早期样本不足时的假信号
 - **自定义注册**: `register_function()` / `register_variable()` 进程级全局，推荐脚本顶部注册、末尾注销
 - 67 原语覆盖 WorldQuant 时序算子的 96%，截面 100%

@@ -141,7 +141,7 @@ def add_footer(nb):
             "- **统一入口**: `EngineV3.backtest()` 替代 v2 的多个回测函数\n"
             "- **双模式**: `full` → AccountAnalyzer / `fast` → FastResult (GP搜索用)\n"
             "- **自动基准**: `bench_label='399317.SZ'` 参数自动跑买入持有基准\n"
-            "- **费率控制**: `with_fees` 指数择时默认关闭\n"
+            "- **费率控制**: `fee_config` 参数配置，None=零费率\n"
             "\n"
             "### 信号形态比引擎更重要\n"
             "- 从 v15（简化引擎 SR=1.0~1.95）到 v18（core引擎 含费率），下降 20~40%\n"

@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 from .storage import context
 from .symbol_classifier import classify_symbol
+import numpy as np
 
 
 # ============================================================================
@@ -141,9 +142,9 @@ class AccountManager:
         self.trade_records: List[TradeRecord] = []
         self.snapshots: List[AccountSnapshot] = []
         self.fee_config = fee_config or {
-            'commission_rate': 0.0003,
-            'stamp_tax_rate': 0.001,
-            'min_commission': 5.0,
+            'commission_rate': 0.0,
+            'stamp_tax_rate': 0.0,
+            'min_commission': 0.0,
         }
 
     # ------------------------------------------------------------------------
@@ -609,6 +610,177 @@ class AccountManager:
         self.positions.clear()
         self.trade_records.clear()
         self.snapshots.clear()
+
+
+# ============================================================================
+# FastAccount — 轻量快速账户 (fast 模式专用)
+# ============================================================================
+
+class FastAccount:
+    """轻量账户：不走快照/TradeRecord，通过 context.data() 从缓存获取价格。
+
+    在 run_fast() 时替换 Engine.account，策略统一用 ctx.account 下单，
+    接口完全兼容 AccountManager (order_percent / order_volume / get_position)。
+
+    fee_config 从 AccountManager 继承，与 full 模式共享同一费源。
+    """
+
+    FREQ_ORDER = ['1m', '60s', '5m', '300s', '15m', '900s',
+                  '30m', '1800s', '60m', '3600s', '1d']
+
+    def __init__(self, cash: float = 1e6, fee_config: Dict = None):
+        self.cash = float(cash)
+        self.positions: Dict[str, float] = {}  # {symbol: shares}
+        self.fee_config = fee_config or {
+            'commission_rate': 0.0,
+            'stamp_tax_rate': 0.0,
+            'min_commission': 0.0,
+        }
+        self.daily_assets: Dict = {}  # {datetime.date: nav}
+
+    # ── 价格查询 (读 context.data 缓存) ──
+
+    def _get_price(self, symbol: str) -> float:
+        """从缓存获取当前价格，逻辑对齐 AccountManager._get_price"""
+        action_time = context.now
+        subscribed_freqs = {freq for (s, freq) in context._subscribed if s == symbol}
+        if not subscribed_freqs:
+            raise ValueError(f"品种 {symbol} 未订阅任何频率数据")
+
+        frequencies = [f for f in self.FREQ_ORDER if f in subscribed_freqs]
+        frequencies += [f for f in subscribed_freqs if f not in self.FREQ_ORDER]
+
+        for freq in frequencies:
+            try:
+                raw_data = context.data(symbol=symbol, frequency=freq,
+                                        count=3, fields='close,eob')
+                if isinstance(raw_data, pd.DataFrame):
+                    data = raw_data.to_dict('records')
+                else:
+                    data = raw_data
+                for d in reversed(data):
+                    if d['eob'] <= action_time:
+                        price = d['close']
+                        if isinstance(price, (float, int, np.integer)) and price > 0:
+                            return float(price)
+            except Exception:
+                continue
+        return 0.0
+
+    # ── 净值记录 ──
+
+    def mark(self, date=None):
+        """记录当日净值到 daily_assets。date=None 时取 context.now.date()"""
+        if date is None:
+            date = context.now.date()
+        nav = self.cash
+        for sym, shares in self.positions.items():
+            try:
+                nav += shares * self._get_price(sym)
+            except (ValueError, KeyError):
+                pass  # 未订阅的品种跳过
+        self.daily_assets[date] = float(nav)
+
+    # ── 下单 (接口对齐 AccountManager) ──
+
+    def order_percent(self, symbol: str, percent: float, side: int,
+                      position_effect=None, order_type=None,
+                      price: float = None, note: str = ''):
+        """按比例委托，price=None 时从缓存读取。
+
+        参数对齐 AccountManager.order_percent，忽略 position_effect/order_type/note
+        (FastAccount 不生成 TradeRecord)。
+        """
+        if not 0 < abs(percent) <= 1:
+            raise ValueError("Percent must be between -1 and 1 (non-zero)")
+
+        price = price or self._get_price(symbol)
+        if price <= 0:
+            return 0.0
+
+        fee = self.fee_config
+
+        if side == OrderSide.Buy:
+            amount = self.cash * abs(percent)
+            if amount <= 0:
+                return 0.0
+            commission = max(amount * fee['commission_rate'],
+                           fee['min_commission'])
+            investable = amount - commission
+            if investable <= 0:
+                return 0.0
+            shares = investable / price
+            self.cash -= amount
+            self.positions[symbol] = self.positions.get(symbol, 0) + shares
+        else:
+            current_shares = self.positions.get(symbol, 0)
+            if current_shares <= 0:
+                return 0.0
+            sell_shares = current_shares * abs(percent)
+            if sell_shares <= 0:
+                return 0.0
+            sell_value = sell_shares * price
+            commission = max(sell_value * fee['commission_rate'],
+                           fee['min_commission'])
+            stamp = sell_value * fee['stamp_tax_rate']
+            self.cash += sell_value - commission - stamp
+            self.positions[symbol] -= sell_shares
+            if self.positions[symbol] <= 0:
+                del self.positions[symbol]
+            shares = sell_shares
+
+        # 交易后自动记录净值
+        self.mark()
+        return shares
+
+    def order_volume(self, symbol: str, volume: int, side: int,
+                     position_effect=None, order_type=None,
+                     price: float = None, note: str = ''):
+        """按指定数量委托，price=None 时从缓存读取。"""
+        price = price or self._get_price(symbol)
+        if volume <= 0 or price <= 0:
+            return 0.0
+
+        fee = self.fee_config
+
+        if side == OrderSide.Buy:
+            cost = volume * price
+            commission = max(cost * fee['commission_rate'],
+                           fee['min_commission'])
+            total = cost + commission
+            if total > self.cash:
+                return 0.0
+            self.cash -= total
+            self.positions[symbol] = self.positions.get(symbol, 0) + volume
+        else:
+            current_shares = self.positions.get(symbol, 0)
+            if current_shares < volume:
+                return 0.0
+            sell_value = volume * price
+            commission = max(sell_value * fee['commission_rate'],
+                           fee['min_commission'])
+            stamp = sell_value * fee['stamp_tax_rate']
+            self.cash += sell_value - commission - stamp
+            self.positions[symbol] -= volume
+            if self.positions[symbol] <= 0:
+                del self.positions[symbol]
+
+        self.mark()
+        return volume
+
+    # ── 查询 (兼容 AccountManager 接口) ──
+
+    def get_position(self, symbol: str = None):
+        """返回持仓信息。"""
+        if symbol:
+            shares = self.positions.get(symbol, 0)
+            return {'volume': shares, 'cost_price': 0}
+        return {sym: {'volume': sh, 'cost_price': 0}
+                for sym, sh in self.positions.items()}
+
+    def get_account(self, query_time=None):
+        """返回账户概览。"""
+        return {'cash': self.cash, 'nav': self.cash}
 
 
 # ============================================================================

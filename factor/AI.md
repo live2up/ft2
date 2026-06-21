@@ -11,14 +11,13 @@
 | 版本 | 状态 | 说明 |
 |------|------|------|
 | **v4** | **主力** | signals.v4 AST DSL + ft2.core Engine + 67 原语, 探索灵活, `from factor.v4 import ...` |
-| v3 | 保留 | 仅供历史测试对照，自研 Parser + 23 原语 + 自研回测 Pipeline |
-| v1/v2 | 已归档 | `factor/_archived/` |
+| v3 | 保留 | 仅供历史测试对照，自研 Parser + 23 原语，回测已统一到 ft2.core (FactorEngineCore) |
 
 ## v4 核心变革
 
 ```
-v3:  自研Parser → 23原语 → 自研回测Pipeline → FactorExpression
-     问题: 语法自定义(add/sub/mul), 原语少, Pipeline与signals回测不统一
+v3:  自研Parser → 23原语 → FactorEngineCore (ft2.core) → FactorExpression
+     问题: 语法自定义(add/sub/mul), 原语少, Parser维护成本高
 
 v4:  signals.v4 AST DSL → 67原语实时计算 → ft2.core Engine回测 → FactorExpression
      优势: 原生Python语法, 原语3倍, 回测引擎统一, 探索灵活
@@ -77,7 +76,6 @@ factor/
 │   │   └── basic.py        # 因子原子基元
 │   └── discovered/         # GP 发现因子存档
 ├── v3/                     # 保留 (仅供历史测试对照)
-└── _archived/              # v1 + v2 已归档
 ```
 
 ---
@@ -131,27 +129,33 @@ expr.complexity   # AST 节点数
 ```python
 from factor.v4 import EngineCore
 
-# fast 模式: 搜索 (~0.5s/次)
-r = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
-# → FastResult(sharpe=1.16, cagr=0.148, max_drawdown=0.10, trades=112)  # [修复] 2026-06-16 MDD 正值对齐 full
+# fast 模式: 搜索 (~0.5s/次) — 引擎内部走 Engine.run_fast(), 不生成快照
+analyzer = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
+# → AccountAnalyzer (sharpe_ratio()=1.16, annualized_return()=0.148, max_drawdown()=(-0.10,...))
 
-# full 模式: 验证 + 报告
+# full 模式: 验证 + 报告 — 引擎内部走 Engine.run(), 完整快照+交易记录
 analyzer = EngineCore.backtest(panel, assets, mode='full', top_n=3,
-                               rebalance='W', bench_label='000300.SH')
+                               rebalance='W', bench_label='000300.SH',
+                               buffer=2)                        # 缓冲区: 持仓滑出 top_n+2 名才卖
 analyzer.to_notebook("因子轮动")
 ```
 
-**EngineCore 参数说明：**
+**EngineCore.backtest() 参数说明：**
+
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `panel` | 因子排名面板, DataFrame(index=日期, columns=品种) | — |
 | `assets` | `{品种代码: OHLCV DataFrame}` | — |
+| `returns` | 日收益率 DataFrame (自动合成 OHLCV，二选一) | None |
 | `top_n` | 持仓品种数 | 3 |
-| `rebalance` | 调仓频率 'D'/'W'/'M' | 'W' |
-| `mode` | 'fast' → FastResult, 'full' → AccountAnalyzer | 'full' |
+| `rebalance` | 调仓频率 'D'/'W'/'M'/'ME'/'5D' 或 Scheduler 对象 | 'W' |
+| `mode` | 'fast' → AccountAnalyzer(仅资产指标), 'full' → AccountAnalyzer(全部指标) | 'fast' |
 | `initial_capital` | 初始资金 | 1_000_000 |
 | `start_date` | 回测起始日 | None=数据首位 |
-| `bench_label` | full 模式基准标签 | None |
+| `bench_label` | full 模式基准标签 (自动跑 BenchHolder) | None |
+| `buffer` | 排名缓冲数: 持仓滑出 top_n+buffer 名才剔除, 0=严格Top-N | 0 |
+
+> fast/full 均返回 AccountAnalyzer，接口一致。fast 不生成 TradeRecord，交易指标返回 None。两者共用 core.Engine._drive_timeline() 时间线循环。
 
 ### 3. GP 因子组合优化引擎
 
@@ -244,8 +248,8 @@ len(BASIC_FACTORS)  # 20    因子原子基元
 |------|----|----|
 | 表达式语法 | 自研 `add/sub/mul` | **Python 原生 `+ - * /`** |
 | 原语数 | 23 | **67 (与 signals 共享)** |
-| 回测引擎 | 自研 Pipeline | **ft2.core Engine (统一时间线+费率)** |
-| 因子面板回测 | FactorPipeline | **EngineCore (fast/full 双模式)** |
+| 回测引擎 | FactorEngineCore (ft2.core) | **EngineCore (ft2.core, 同 signals)** |
+| 因子面板回测 | FactorEngineCore (fast/full) | **EngineCore (fast/full + buffer)** |
 | 截面排名 | cs_zscore(window) | **cs_rank / evaluate_ranked()** |
 | LLM 友好度 | 需学自定义语法 | **原生 Python，即学即用** |
 
@@ -270,11 +274,11 @@ len(BASIC_FACTORS)  # 20    因子原子基元
 
 ## 注意事项
 
-- **v1/v2 已归档** (`factor/_archived/`)，不再使用
-- **v3 保留**，仅供历史测试对照
 - **v4 主力**：`from factor.v4 import FactorExpression, EngineCore, FactorLibrary`
+- v3 保留，回测已统一到 ft2.core，语法仍为自研 Parser
 - FactorExpression 是 signals.v4 Expression 的薄包装层，语法完全一致
-- EngineCore 与 signals.v4 EngineCore 架构对齐，fast/full 双模式
+- EngineCore 与 signals.v4 EngineCore 架构对齐，fast/full 双模式，均返回 AccountAnalyzer
+- fast 模式内部走 `core.Engine.run_fast()`，不生成快照/交易记录
 - 截面排名推荐使用 `evaluate_ranked()` 或 `Expression.rank_panel()`
 - 67 原语覆盖 WorldQuant 时序算子的 96%，截面 100%
 - 扩展新原语：`signals.v4.register_function()` 注册 → 因子模块即用

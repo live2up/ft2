@@ -49,7 +49,8 @@ class EngineCore:
                  initial_capital: float = 1_000_000,
                  start_date: str = None,
                  bench_label: str = None,
-                 buffer: int = 0) -> AccountAnalyzer:
+                 buffer: int = 0,
+                 fee_config: dict = None) -> AccountAnalyzer:
         """因子轮动回测统一入口
 
         Args:
@@ -58,13 +59,15 @@ class EngineCore:
             returns: 日收益率 DataFrame (自动合成 OHLCV assets)
             top_n: 持仓品种数
             rebalance: 调仓频率 'D'/'W'/'M'/'ME'/'5D' 或 RebalanceScheduler 对象
-            mode: 'fast'/'fast', 统一返回 AccountAnalyzer (接口一致)
+            mode: 'fast'/'full', 统一返回 AccountAnalyzer (接口一致)
             initial_capital: 初始资金
             start_date: 回测起始日, None=数据首位
             bench_label: full 模式下基准标签 (自动跑 BenchHolder)
             buffer: 排名缓冲数, 持仓品种排名滑出 top_n+buffer 名才剔除。
                     0=无缓冲(严格Top-N), >0=容忍滑出buffer个名次。
                     例: top_n=3, buffer=2 → 持仓排名在6名及以下才卖出
+            fee_config: 费率配置 dict, None=零费率。
+                        例: {'commission_rate': 0.0003, 'stamp_tax_rate': 0.001, 'min_commission': 5.0}
 
         Returns:
             AccountAnalyzer: 统一分析器 (可 sharpe_ratio()/metrics()/to_notebook())
@@ -79,10 +82,10 @@ class EngineCore:
 
         if mode == 'fast':
             return EngineCore._run_fast(panel, assets, top_n, rebalance,
-                                       initial_capital, start_date, buffer)
+                                       initial_capital, start_date, buffer, fee_config)
         else:
             return EngineCore._run_full(panel, assets, top_n, rebalance,
-                                       initial_capital, start_date, bench_label, buffer)
+                                       initial_capital, start_date, bench_label, buffer, fee_config)
 
     # ============================================================
     # full 模式 — Engine + AccountManager → AccountAnalyzer
@@ -90,7 +93,7 @@ class EngineCore:
 
     @staticmethod
     def _run_full(panel, assets, top_n, rebalance, initial_capital, start_date,
-                  bench_label, buffer=0):
+                  bench_label, buffer=0, fee_config=None):
         """full 模式: Engine.run() + AccountManager.order_percent()"""
         panel = EngineCore._prepare_panel(panel, start_date)
         dates = panel.index.sort_values()
@@ -98,11 +101,8 @@ class EngineCore:
 
         rebalance_set = EngineCore._make_rebalance_set(dates, rebalance)
 
-        engine = Engine(init_cash=initial_capital)
+        engine = Engine(init_cash=initial_capital, fee_config=fee_config)
         context.mode = 'backtest'
-        engine.account.fee_config['commission_rate'] = 0.0
-        engine.account.fee_config['stamp_tax_rate'] = 0.0
-        engine.account.fee_config['min_commission'] = 0.0
 
         for code in symbols:
             if code in assets:
@@ -199,10 +199,7 @@ class EngineCore:
 
         # 基准
         if bench_label is not None:
-            bench_eng = Engine(init_cash=initial_capital)
-            bench_eng.account.fee_config['commission_rate'] = 0.0
-            bench_eng.account.fee_config['stamp_tax_rate'] = 0.0
-            bench_eng.account.fee_config['min_commission'] = 0.0
+            bench_eng = Engine(init_cash=initial_capital, fee_config=fee_config)
             bench_symbol = bench_label
             if bench_symbol in assets:
                 bench_df = assets[bench_symbol].copy()
@@ -225,19 +222,16 @@ class EngineCore:
 
     @staticmethod
     def _run_fast(panel, assets, top_n, rebalance, initial_capital, start_date,
-                  buffer=0):
-        """fast 模式: 自管净值 → AccountAnalyzer, 与 full 接口统一"""
+                  buffer=0, fee_config=None):
+        """fast 模式: ctx.account 下单 (指向 FastAccount) → AccountAnalyzer"""
         panel = EngineCore._prepare_panel(panel, start_date)
         dates = panel.index.sort_values()
         symbols = panel.columns.tolist()
 
         rebalance_set = EngineCore._make_rebalance_set(dates, rebalance)
 
-        engine = Engine(init_cash=initial_capital)
+        engine = Engine(init_cash=initial_capital, fee_config=fee_config)
         context.mode = 'backtest'
-        engine.account.fee_config['commission_rate'] = 0.0
-        engine.account.fee_config['stamp_tax_rate'] = 0.0
-        engine.account.fee_config['min_commission'] = 0.0
 
         for code in symbols:
             if code in assets:
@@ -254,12 +248,8 @@ class EngineCore:
                 context.subscribe(code, '1d', count=300)
                 engine.add_data(code, '1d', df)
 
-        # [重构] 2026-06-20 策略状态改为实例属性, Engine.run_fast() 读取 self.daily_assets
         class _FastRotationStrategy:
             def __init__(self):
-                self.cash = float(initial_capital)
-                self.positions: Dict[str, float] = {}
-                self.daily_assets = {}
                 self.use_buffer = buffer > 0
                 self.buffer_rank = top_n + buffer
 
@@ -267,7 +257,6 @@ class EngineCore:
                 if len(bars) == 0:
                     return
 
-                # 日期提取前置，确保 date/nav 一一对应
                 current_date = None
                 for b in bars:
                     dt = b.get('eob')
@@ -277,14 +266,9 @@ class EngineCore:
                 if current_date is None:
                     return
 
-                # 计算净值 (调仓日先记旧持仓净值为准，因交易不改变NAV恒等式)
-                total_nav = self.cash
-                for code, shares in list(self.positions.items()):
-                    for b in bars:
-                        if b.get('symbol') == code:
-                            total_nav += shares * b.get('close', b.get('open', 0))
-                # key 用 datetime.date, 与 full 模式 _aggregate_daily_assets 一致
-                self.daily_assets[current_date.date()] = float(total_nav)
+                # 记录当日净值 (FastAccount 自动从缓存计算)
+                date_key = current_date.date()
+                ctx.account.mark(date_key)
 
                 if current_date not in rebalance_set:
                     return
@@ -294,49 +278,36 @@ class EngineCore:
                 row = panel.loc[current_date]
                 top_codes = set(row.nlargest(top_n).index.tolist())
 
-                # 缓冲区逻辑：持仓排名滑出 top_n+buffer 名才剔除
                 if self.use_buffer:
                     buffer_codes = set(row.nlargest(self.buffer_rank).index.tolist())
                 else:
                     buffer_codes = top_codes
 
-                # 平仓：清掉不在缓冲区内的
-                for code in list(self.positions.keys()):
+                # 平仓：卖掉不在缓冲区内的品种
+                for code in list(ctx.account.positions.keys()):
                     if code not in buffer_codes:
-                        for b in bars:
-                            if b.get('symbol') == code:
-                                price = b.get('close', b.get('open', 0))
-                                if price > 0:
-                                    self.cash += self.positions[code] * price
-                                del self.positions[code]
-                                break
+                        ctx.account.order_percent(code, 1.0, OrderSide.Sell)
 
-                # 开仓：买入新 Top N (等权)
-                n_slots = top_n - len(self.positions)
+                # 开仓：等权买入新 Top N
+                n_slots = top_n - len(ctx.account.positions)
                 if top_codes and n_slots > 0:
                     weight = 1.0 / len(top_codes)
+                    total_nav = ctx.account.daily_assets[date_key]
                     n_bought = 0
                     for code in top_codes & set(symbols):
                         if n_bought >= n_slots:
                             break
-                        if code in self.positions:
+                        if code in ctx.account.positions:
                             continue
-                        for b in bars:
-                            if b.get('symbol') == code:
-                                price = b.get('close', b.get('open', 0))
-                                if price > 0:
-                                    target_value = total_nav * weight
-                                    shares = target_value / price
-                                    cost = shares * price
-                                    if cost <= self.cash:
-                                        self.cash -= cost
-                                        self.positions[code] = shares
-                                        n_bought += 1
-                                break
+                        price = ctx.account._get_price(code)
+                        if price <= 0:
+                            continue
+                        shares = (total_nav * weight) / price
+                        ctx.account.order_volume(code, shares, OrderSide.Buy)
+                        n_bought += 1
 
         start_time = panel.index[0].to_pydatetime()
         end_time = panel.index[-1].to_pydatetime()
-        # [重构] 2026-06-20 使用 Engine.run_fast()
         return engine.run_fast(_FastRotationStrategy(), start_time, end_time)
 
     # ============================================================

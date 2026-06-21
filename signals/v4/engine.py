@@ -38,11 +38,6 @@ from core.account import OrderSide, BenchHolder
 from core.storage import context
 from core.analyzer import AccountAnalyzer
 
-# 费率配置 (对齐 ETF 万3 佣金 + 千1 印花税)
-COMMISSION_RATE = 0.0003
-STAMP_DUTY = 0.001         # 卖出时单边征收
-MIN_COMMISSION = 5.0       # 最低佣金
-
 
 class EngineCore:
     """v4 统一回测引擎 — ft2.core 驱动, full/fast 双模式"""
@@ -60,7 +55,7 @@ class EngineCore:
         initial_capital: float = 1_000_000,
         start_date: str = None,
         mode: str = 'full',
-        with_fees: bool = False,
+        fee_config: dict = None,
         note_fields: List[str] = None,
         bench_label: str = None,
     ):
@@ -76,7 +71,8 @@ class EngineCore:
             initial_capital: 初始资金
             start_date: 回测起始日 ('2020-01-01'), None=从数据首位
             mode: 'full' → AccountAnalyzer (含交易记录), 'fast' → AccountAnalyzer (无交易记录, ~6x快)
-            with_fees: 是否扣除费率 (指数择时默认 False)
+            fee_config: 费率配置 dict, None=零费率。
+                        例: {'commission_rate': 0.0003, 'stamp_tax_rate': 0.001, 'min_commission': 5.0}
             note_fields: full 模式下写入 TradeRecord.note 的字段
             bench_label: full 模式下基准标签 (自动跑 BenchHolder)
 
@@ -93,11 +89,11 @@ class EngineCore:
 
         if mode == 'fast':
             return EngineCore._run_fast(signal, data, symbol, freq,
-                                       initial_capital, start_date, with_fees)
+                                       initial_capital, start_date, fee_config)
         else:
             return EngineCore._run_full(signal, data, symbol, freq,
                                        initial_capital, start_date,
-                                       note_fields, bench_label, with_fees)
+                                       note_fields, bench_label, fee_config)
 
     # ============================================================
     # full 模式 — Engine + AccountManager → AccountAnalyzer
@@ -105,17 +101,11 @@ class EngineCore:
 
     @staticmethod
     def _run_full(signal, data, symbol, freq, initial_capital, start_date,
-                  note_fields, bench_label, with_fees):
+                  note_fields, bench_label, fee_config):
         """full 模式: 完整 Engine.run() → AccountAnalyzer"""
         df = EngineCore._prepare_data(data, signal, start_date)
-        engine = Engine(init_cash=initial_capital)
+        engine = Engine(init_cash=initial_capital, fee_config=fee_config)
         context.mode = 'backtest'
-
-        # [新增] 2026-06-10 指数择时默认不扣费率
-        if not with_fees:
-            engine.account.fee_config['commission_rate'] = 0.0
-            engine.account.fee_config['stamp_tax_rate'] = 0.0
-            engine.account.fee_config['min_commission'] = 0.0
 
         context.unsubscribe(symbol, freq)
         context.subscribe(symbol, freq, count=300)
@@ -149,20 +139,14 @@ class EngineCore:
         engine.run(_Strategy, df['eob'].iloc[0], df['eob'].iloc[-1])
         analyzer = AccountAnalyzer(engine.account)
 
-        # 基准 (同一费率模式)
+        # 基准 (同一费率)
         if bench_label is not None:
             bench_df = data.copy()
             if start_date:
                 bench_df = bench_df.loc[bench_df.index >= pd.Timestamp(start_date)]
-            # [修复] 2026-06-10 基准补 eob，否则 Engine.add_data 跳过所有 bar
             if 'eob' not in bench_df.columns:
                 bench_df['eob'] = bench_df.index
-            bench_eng = Engine(init_cash=initial_capital)
-            # [修复] 2026-06-10 基准与策略用相同费率模式
-            if not with_fees:
-                bench_eng.account.fee_config['commission_rate'] = 0.0
-                bench_eng.account.fee_config['stamp_tax_rate'] = 0.0
-                bench_eng.account.fee_config['min_commission'] = 0.0
+            bench_eng = Engine(init_cash=initial_capital, fee_config=fee_config)
             context.unsubscribe(symbol, freq)
             context.subscribe(symbol, freq, count=3000)
             bench_eng.add_data(symbol, freq, bench_df)
@@ -179,76 +163,40 @@ class EngineCore:
     # ============================================================
 
     @staticmethod
-    def _run_fast(signal, data, symbol, freq, initial_capital, start_date, with_fees):
+    def _run_fast(signal, data, symbol, freq, initial_capital, start_date, fee_config):
         """
-        fast 模式: Engine.run() 时间线驱动, 策略自管净值 → AccountAnalyzer。
+        fast 模式: Engine.run_fast() 时间线驱动, 策略通过 ctx.account 下单 → AccountAnalyzer。
 
         与 full 模式统一返回 AccountAnalyzer，指标计算走同一套 @metric 方法，
         保证 fast/full 指标一致。差异: 不生成 TradeRecord/snapshots, ~6x快。
+        fast 模式下 ctx.account 指向 FastAccount，接口兼容。
         """
         df = EngineCore._prepare_data(data, signal, start_date)
-        engine = Engine(init_cash=initial_capital)
+        engine = Engine(init_cash=initial_capital, fee_config=fee_config)
         context.mode = 'backtest'
-
-        # 费率同步
-        if not with_fees:
-            engine.account.fee_config['commission_rate'] = 0.0
-            engine.account.fee_config['stamp_tax_rate'] = 0.0
-            engine.account.fee_config['min_commission'] = 0.0
 
         context.unsubscribe(symbol, freq)
         context.subscribe(symbol, freq, count=300)
         engine.add_data(symbol, freq, df)
 
-        # 策略本地状态 (改为实例属性, run_fast() 读取 self.daily_assets)
         class _FastStrategy:
-            def __init__(self):
-                self.cash = float(initial_capital)
-                self.shares = 0.0
-                self.daily_assets = {}
-
             def on_bar(self, ctx, bars):
                 bar = bars[0]
                 sig = bar.get('_signal', 0)
                 price = bar.get('close', bar.get('open', 0))
                 if price <= 0:
                     return
-
-                # 提取日期 (转 datetime.date, 与 full 模式 AccountAnalyzer 一致)
                 dt = bar.get('eob')
                 if dt is None:
                     return
-                current_date = pd.Timestamp(dt).normalize().date()
 
-                # 当前净值 = 现金 + 持仓市值
-                current_nav = self.cash + self.shares * price
-                self.daily_assets[current_date] = float(current_nav)
+                ctx.account.mark()
 
-                if sig > 0 and self.shares == 0:
-                    # 买入: 全部现金 → 份额 (扣除佣金)
-                    if with_fees:
-                        commission = max(self.cash * COMMISSION_RATE, MIN_COMMISSION)
-                        investable = self.cash - commission
-                    else:
-                        investable = self.cash
-                    if investable > 0 and price > 0:
-                        self.shares = investable / price
-                        self.cash = 0.0
-                        self.daily_assets[current_date] = float(self.shares * price)
+                if sig > 0 and not ctx.account.positions:
+                    ctx.account.order_percent(symbol, 1.0, OrderSide.Buy)
+                elif sig <= 0 and ctx.account.positions:
+                    ctx.account.order_percent(symbol, 1.0, OrderSide.Sell)
 
-                elif sig <= 0 and self.shares > 0:
-                    # 卖出: 全部份额 → 现金 (扣除佣金+印花税)
-                    sell_value = self.shares * price
-                    if with_fees:
-                        commission = max(sell_value * COMMISSION_RATE, MIN_COMMISSION)
-                        stamp = sell_value * STAMP_DUTY
-                        self.cash = sell_value - commission - stamp
-                    else:
-                        self.cash = sell_value
-                    self.shares = 0.0
-                    self.daily_assets[current_date] = float(self.cash)
-
-        # [重构] 2026-06-20 使用 Engine.run_fast(), 统一 daily_assets → AccountAnalyzer
         return engine.run_fast(_FastStrategy(), df['eob'].iloc[0], df['eob'].iloc[-1])
 
     # ============================================================

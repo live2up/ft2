@@ -99,9 +99,7 @@ class MACrossover:
 # ============================================================================
 
 print(f'\n运行基准策略（{BENCH_LABEL} 买入持有）...')
-bench_engine = Engine()
-# [调整] 2026-06-09 检验想法阶段设零手续费，后期精细处理再恢复
-bench_engine.account.fee_config.update(commission_rate=0, stamp_tax_rate=0, min_commission=0)
+bench_engine = Engine(fee_config={'commission_rate': 0, 'stamp_tax_rate': 0, 'min_commission': 0})
 bench_engine.add_data(SYMBOL, '1d', records)
 bench_engine.run(BenchHolder, BACKTEST_START, END_DATE)
 bench_analyzer = AccountAnalyzer(bench_engine.account)
@@ -118,9 +116,7 @@ print(f'  基准（{BENCH_LABEL}）成交 {bench_trades} 笔，最终净值 {ben
 # ============================================================================
 
 print('\n运行择时策略（MA5/20 交叉）...')
-engine = Engine()
-# [调整] 2026-06-09 检验想法阶段设零手续费，后期精细处理再恢复
-engine.account.fee_config.update(commission_rate=0, stamp_tax_rate=0, min_commission=0)
+engine = Engine(fee_config={'commission_rate': 0, 'stamp_tax_rate': 0, 'min_commission': 0})
 engine.add_data(SYMBOL, '1d', records)
 engine.run(MACrossover, BACKTEST_START, END_DATE)
 strategy_analyzer = AccountAnalyzer(engine.account)
