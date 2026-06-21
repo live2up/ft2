@@ -4,7 +4,7 @@ factor/v4/engine.py — 因子轮动回测引擎 (ft2.core 驱动)
 
 对齐 signals/v4 EngineCore 架构:
   full  — Engine.run() + AccountManager.order_percent() → AccountAnalyzer (完整指标/交易记录/notebook)
-  fast  — Engine.run_fast() + FastAccount.order_percent() → AccountAnalyzer (~0.5s/次)
+  fast  — Engine.run_fast() + FastAccount.order_percent() → AccountAnalyzer (~400ms/次, 1566天5品种)
 
 用法:
   from factor.v4 import EngineCore

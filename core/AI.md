@@ -2,7 +2,7 @@
 
 > 回测引擎核心 + HTML 报告（已融合 notebook 模块）
 >
-> **版本：v2.5 | 更新日期：2026-06-21**
+> **版本：v2.6 | 更新日期：2026-06-21**
 
 ---
 
@@ -20,7 +20,15 @@ run() →  AccountManager      run_fast() → FastAccount
   → AccountAnalyzer(account)        → AccountAnalyzer(daily_assets)
 ```
 
-**v2.5 重构要点（2026-06-21）：**
+**v2.6 重构要点（2026-06-21）：**
+- FastAccount 计算逻辑与 AccountManager 完全对齐：nav → 截断 → commission → lot_size → 扣款同一公式
+- FastAccount 新增 `_latest_prices` 价格缓存：引擎每 bar 注入 bar.close，消除 `_get_price` → DataFrame 往返
+- 性能实测：fast 约 8~28x 快于 full（1566天，单品种择时 25ms，5品种轮动 373ms）
+- SR 偏差：单品种 < 0.000001，多品种 < 0.001；NAV 偏差：单品种 0.00 元，多品种 < 0.2%
+- fast/full 统一走 `_process_order` 命名（计算逻辑一致，差异仅在 TradeRecord/快照）
+- _drive_timeline 支持 fast 模式 init_snapshot，天数与 full 对齐
+
+**v2.5 重构要点：**
 - 新增 `FastAccount` 轻量账户：走 `context.data()` 缓存取价，无快照/TradeRecord
 - `run_fast()` 替换 `self.account` 为 `FastAccount`，策略统一用 `ctx.account` 下单
 - fast/full 下单接口完全一致：`ctx.account.order_percent(symbol, 1.0, OrderSide.Buy)`
@@ -59,7 +67,7 @@ analyzer = engine.run_fast(FastStrategy(), start_time, end_time)
 - `Engine.timeline` 是 `OrderedDict[eob → List[bar]]`，按时间排序驱动；多频率数据共线
 - 每个 bar 先入缓存（`_add_bar`），再调 `on_bar`
 - `run()` / `run_fast()` 共用 `_drive_timeline()` 时间线循环，差异只在 `snapshot=True/False`
-- `run_fast()` 不生成 TradeRecord/snapshots，FastAccount 自动管理仓位+费率+净值，约 6x 快于 full
+- `run_fast()` 不生成 TradeRecord/snapshots，FastAccount 自动管理仓位+费率+净值，约 8~28x 快于 full（实测）
 - `ctx.account` 在 fast 模式下指向 FastAccount，接口兼容 AccountManager（order_percent/order_volume/get_position）
 - 引擎在 on_bar 后自动调用 `ctx.account.mark()` 记录日末净值，策略无需手动调用
 - `start/end` 自动 clamp 到时间线边界，`init_snapshot` 锚定时间线上 start 之前的真实 bar
@@ -90,8 +98,9 @@ def on_bar(self, context, bars):
 - `run_fast()` 时将 `self.account` 替换为 `FastAccount`，`ctx.account` 透明切换
 - 费用配置：通过 `Engine(fee_config={...})` 构造时传入，full/fast 共享同一费源
 - 默认费率：零费（commission_rate=0, stamp_tax_rate=0, min_commission=0）
-- 交易单位：full 模式自动识别（stock/etf→100，index→1）；fast 模式简化处理
+- 交易单位：full 模式自动识别（stock/etf→100，index→1）；fast 模式 _get_lot_size 对齐
 - `TradeRecord.note`：仅 full 模式，追溯每笔交易触发原因
+- FastAccount 每个 bar 通过 `update_prices(bars)` 缓存 close 价，mark()/get_account()/order_percent 零开销取价
 
 ---
 

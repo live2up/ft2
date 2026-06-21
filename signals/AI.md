@@ -1,6 +1,6 @@
 # signals 模块 AI 助手指南
 
-> **版本：v4 | 更新日期：2026-06-12**
+> **版本：v4 | 更新日期：2026-06-21**
 
 ## 项目定位
 
@@ -108,7 +108,7 @@ expr.complexity   # 5
 ```python
 from signals.v4 import EngineCore
 
-# fast 模式: 搜索 (~0.5s/次) — 内部走 core.Engine.run_fast() + FastAccount
+# fast 模式: 搜索 (~25ms/次, 1566天单品种) — 内部走 core.Engine.run_fast() + FastAccount
 analyzer = EngineCore.backtest(signal, data, mode='fast', start_date='2020-01-01')
 # → AccountAnalyzer (sharpe_ratio()=1.16, annualized_return()=0.148, max_drawdown()=(-0.10,...))
 

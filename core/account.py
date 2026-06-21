@@ -646,6 +646,8 @@ class FastAccount:
     fee_config 从 AccountManager 继承，与 full 模式共享同一费源。
     """
 
+    __slots__ = ('cash', 'positions', 'fee_config', 'daily_assets', '_latest_prices')
+
     FREQ_ORDER = ['1m', '60s', '5m', '300s', '15m', '900s',
                   '30m', '1800s', '60m', '3600s', '1d']
 

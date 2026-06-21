@@ -1,6 +1,6 @@
 # factor 模块 AI 助手指南
 
-> **版本：v4 | 更新日期：2026-06-14**
+> **版本：v4 | 更新日期：2026-06-21**
 
 ## 项目定位
 
@@ -129,7 +129,7 @@ expr.complexity   # AST 节点数
 ```python
 from factor.v4 import EngineCore
 
-# fast 模式: 搜索 (~0.5s/次) — 引擎内部走 Engine.run_fast() + FastAccount
+# fast 模式: 搜索 (~400ms/次, 1566天5品种) — 引擎内部走 Engine.run_fast() + FastAccount
 analyzer = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
 # → AccountAnalyzer (sharpe_ratio()=1.16, annualized_return()=0.148, max_drawdown()=(-0.10,...))
 
