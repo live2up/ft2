@@ -178,15 +178,16 @@ class Engine:
             _add_bar = self._add_bar2bar_data_cache
             _snapshot = self.account.take_snapshot if snapshot else None
 
+            # [修复] 2026-06-21 fast 模式也记录初始净值，对齐 full 模式的天数
+            prev = [t for t in sorted_times if t < start_time]
+            if prev:
+                init_date = prev[-1]
+            else:
+                init_date = start_time - pd.Timedelta(days=1)
             if snapshot:
-                # init_snapshot = 时间线上 start 之前的最后一根 bar
-                # 若无更早 bar（start_time 即首根），fallback 到日历前一日
-                prev = [t for t in sorted_times if t < start_time]
-                if prev:
-                    init_date = prev[-1]
-                else:
-                    init_date = start_time - pd.Timedelta(days=1)
                 self.account.init_snapshot(init_date)
+            elif hasattr(self.account, 'init_snapshot'):
+                self.account.init_snapshot(init_date.date())
 
             for current_time, bars in sorted(self.timeline.items()):
                 context._current_time = current_time

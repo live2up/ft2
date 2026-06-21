@@ -128,12 +128,12 @@ class EngineCore:
                 if sig > 0 and not has_pos:
                     try:
                         ctx.account.order_percent(symbol, 1.0, OrderSide.Buy, note=note)
-                    except ValueError:
+                    except (ValueError, RuntimeError):
                         pass
                 elif sig <= 0 and has_pos:
                     try:
                         ctx.account.order_percent(symbol, 1.0, OrderSide.Sell, note=note)
-                    except ValueError:
+                    except (ValueError, RuntimeError):
                         pass
 
         engine.run(_Strategy, df['eob'].iloc[0], df['eob'].iloc[-1])
@@ -183,17 +183,19 @@ class EngineCore:
             def on_bar(self, ctx, bars):
                 bar = bars[0]
                 sig = bar.get('_signal', 0)
-                price = bar.get('close', bar.get('open', 0))
-                if price <= 0:
-                    return
-                dt = bar.get('eob')
-                if dt is None:
-                    return
+                # [修复] 2026-06-21 使用 get_position() 替代直接访问 .positions
+                has_pos = bool(ctx.account.get_position())
 
-                if sig > 0 and not ctx.account.positions:
-                    ctx.account.order_percent(symbol, 1.0, OrderSide.Buy)
-                elif sig <= 0 and ctx.account.positions:
-                    ctx.account.order_percent(symbol, 1.0, OrderSide.Sell)
+                if sig > 0 and not has_pos:
+                    try:
+                        ctx.account.order_percent(symbol, 1.0, OrderSide.Buy)
+                    except (ValueError, RuntimeError):
+                        pass
+                elif sig <= 0 and has_pos:
+                    try:
+                        ctx.account.order_percent(symbol, 1.0, OrderSide.Sell)
+                    except (ValueError, RuntimeError):
+                        pass
 
         return engine.run_fast(_FastStrategy(), df['eob'].iloc[0], df['eob'].iloc[-1])
 

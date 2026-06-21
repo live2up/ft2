@@ -1,3 +1,19 @@
+# 账户管理模块
+#
+# 两个账户实现，共享相同的下单计算逻辑，差异仅在执行层：
+#
+#   AccountManager  — 完整账户，维护 TradeRecord + snapshots，支持事后分析
+#   FastAccount     — 轻量账户，仅维护现金 + 持仓，跳过 TradeRecord/快照
+#
+# 架构：
+#   order_percent ── 计算层 (nav → 截断 → commission → lot_size → volume) ──┐
+#   order_volume  ── 验证层 (lot_size → price)                            ──┤
+#                                                                           │
+#   AccountManager._process_order  ← TradeRecord + snapshot + 现金更新     │
+#   FastAccount._process_order     ← 现金 + 持仓更新 (无 TradeRecord)      │
+#
+# 设计原则：计算逻辑完全一致，FastAccount 只替换执行层，策略代码零改动。
+#
 #这个类是带东八时区的，逐一其他数据要时区一致
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -672,6 +688,23 @@ class FastAccount:
                 continue
         return 0.0
 
+    # ── 交易单位 ──
+
+    def _get_lot_size(self, symbol: str) -> float:
+        """获取交易单位，对齐 AccountManager._get_lot_size"""
+        if self.fee_config.get('lot_size') is not None:
+            return self.fee_config['lot_size']
+        sec_type = classify_symbol(symbol)
+        if sec_type in ('stock', 'etf'):
+            return 100
+        if sec_type == 'index':
+            return 1
+        return 0.1
+
+    def init_snapshot(self, date):
+        """[修复] 2026-06-21 初始化净值记录，对齐 AccountManager.init_snapshot"""
+        self.mark(date=date)
+
     # ── 净值记录 ──
 
     def mark(self, date=None):
@@ -686,86 +719,108 @@ class FastAccount:
                 pass  # 未订阅的品种跳过
         self.daily_assets[date] = round(nav, 2)
 
-    # ── 下单 (接口对齐 AccountManager) ──
+    # ── 下单 (计算逻辑对齐 AccountManager，执行层替换为轻量实现) ──
+    #
+    # [重构] 2026-06-21 order_percent 和 order_volume 的计算逻辑直接对齐
+    #   AccountManager 对应方法，差异仅在执行层：
+    #     AccountManager → _process_order (TradeRecord + 快照)
+    #     FastAccount    → _execute_order  (现金 + 持仓, 无 TradeRecord/快照)
 
     def order_percent(self, symbol: str, percent: float, side: int,
                       position_effect=None, order_type=None,
                       price: float = None, note: str = ''):
-        """按比例委托，price=None 时从缓存读取。
+        """按比例委托 — 计算逻辑完全对齐 AccountManager.order_percent。
 
-        参数对齐 AccountManager.order_percent，忽略 position_effect/order_type/note
-        (FastAccount 不生成 TradeRecord)。
+        差异：不生成 TradeRecord，不维护快照。
         """
+        # ═══ 计算阶段 (与 AccountManager.order_percent 逐行对齐) ═══
         if not 0 < abs(percent) <= 1:
             raise ValueError("Percent must be between -1 and 1 (non-zero)")
 
-        price = price or self._get_price(symbol)
-        if price <= 0:
-            return 0.0
+        nav = self.get_account()['nav']
 
-        fee = self.fee_config
+        order_amount = nav * abs(percent)
 
         if side == OrderSide.Buy:
-            amount = self.cash * abs(percent)
-            if amount <= 0:
-                return 0.0
-            commission = max(amount * fee['commission_rate'],
-                           fee['min_commission'])
-            investable = amount - commission
-            if investable <= 0:
-                return 0.0
-            shares = investable / price
-            self.cash -= amount
-            self.positions[symbol] = self.positions.get(symbol, 0) + shares
+            if order_amount > self.cash:
+                order_amount = self.cash
+
+        price = price or self._get_price(symbol)
+        if price <= 0:
+            raise ValueError(f"Invalid price {price} for {symbol}")
+
+        lot_size = self._get_lot_size(symbol)
+
+        if side == OrderSide.Buy:
+            commission = max(
+                round(order_amount * self.fee_config['commission_rate'], 2),
+                self.fee_config['min_commission']
+            )
+            available_amount = order_amount - commission
+            volume = int(available_amount / price)
+            volume = int(volume / lot_size) * lot_size
         else:
             current_shares = self.positions.get(symbol, 0)
-            if current_shares <= 0:
-                return 0.0
-            sell_shares = current_shares * abs(percent)
-            if sell_shares <= 0:
-                return 0.0
-            sell_value = sell_shares * price
-            commission = max(sell_value * fee['commission_rate'],
-                           fee['min_commission'])
-            stamp = sell_value * fee['stamp_tax_rate']
-            self.cash += sell_value - commission - stamp
-            self.positions[symbol] -= sell_shares
-            if self.positions[symbol] <= 0:
-                del self.positions[symbol]
-            shares = sell_shares
+            volume = int(current_shares * abs(percent))
+            volume = int(volume / lot_size) * lot_size
 
-        return shares
+        if volume == 0:
+            raise ValueError("Calculated order volume is zero")
+
+        # ═══ 执行阶段 (FastAccount 专用: 无 TradeRecord/快照) ═══
+        return self._process_order(symbol, volume, side, price)
 
     def order_volume(self, symbol: str, volume: int, side: int,
                      position_effect=None, order_type=None,
                      price: float = None, note: str = ''):
-        """按指定数量委托，price=None 时从缓存读取。"""
-        price = price or self._get_price(symbol)
-        if volume <= 0 or price <= 0:
-            return 0.0
+        """按指定数量委托 — 对齐 AccountManager.order_volume 验证链。"""
+        if not isinstance(volume, (int, float)) or volume <= 0:
+            raise ValueError("Order volume must be positive")
 
+        lot_size = self._get_lot_size(symbol)
+        volume = int(volume / lot_size) * lot_size
+        if volume == 0:
+            raise ValueError("Volume rounded to zero by lot_size")
+
+        if side not in (OrderSide.Buy, OrderSide.Sell):
+            raise ValueError(f"Invalid side value: {side}")
+
+        price = price or self._get_price(symbol)
+        if price <= 0:
+            raise ValueError(f"Invalid price {price} for {symbol}")
+
+        return self._process_order(symbol, volume, side, price)
+
+    def _process_order(self, symbol: str, volume: int, side: int,
+                       price: float) -> int:
+        """执行订单 — 现金+持仓更新，对齐 AccountManager._process_order 现金计算。
+
+        与 AccountManager._process_order 的区别：不生成 TradeRecord，不触发快照。
+        """
         fee = self.fee_config
 
+        commission = max(
+            round(price * volume * fee['commission_rate'], 2),
+            fee['min_commission']
+        )
+        stamp_tax = round(price * volume * fee['stamp_tax_rate'], 2) if side == OrderSide.Sell else 0
+        total_fee = round(commission + stamp_tax, 2)
+
         if side == OrderSide.Buy:
-            cost = volume * price
-            commission = max(cost * fee['commission_rate'],
-                           fee['min_commission'])
-            total = cost + commission
-            if total > self.cash:
-                return 0.0
-            self.cash -= total
+            total_cost = round(volume * price + total_fee, 2)
+            if self.cash < total_cost:
+                print(f"FastAccount 买入 {symbol} 失败，资金不足。需要 {total_cost}，可用资金 {self.cash}")
+                return 0
+            self.cash = round(self.cash - total_cost, 2)
             self.positions[symbol] = self.positions.get(symbol, 0) + volume
         else:
             current_shares = self.positions.get(symbol, 0)
             if current_shares < volume:
-                return 0.0
-            sell_value = volume * price
-            commission = max(sell_value * fee['commission_rate'],
-                           fee['min_commission'])
-            stamp = sell_value * fee['stamp_tax_rate']
-            self.cash += sell_value - commission - stamp
+                print(f"FastAccount 卖出 {symbol} 失败，持仓不足。需要 {volume}，当前持仓 {current_shares}")
+                return 0
+            self.cash = round(self.cash + volume * price - total_fee, 2)
             self.positions[symbol] -= volume
-            if self.positions[symbol] <= 0:
+            if abs(self.positions[symbol]) < 1e-9:
                 del self.positions[symbol]
 
         return volume

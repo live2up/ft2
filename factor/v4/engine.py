@@ -280,28 +280,33 @@ class EngineCore:
                 else:
                     buffer_codes = top_codes
 
-                # 平仓：卖掉不在缓冲区内的品种
-                for code in list(ctx.account.positions.keys()):
-                    if code not in buffer_codes:
-                        ctx.account.order_percent(code, 1.0, OrderSide.Sell)
+                # [修复] 2026-06-21 对齐 _run_full：平仓用 get_position() 获取持仓信息
+                positions = ctx.account.get_position()
+                n_keep = sum(1 for code, pos in positions.items()
+                            if pos.get('volume', 0) > 0 and code in buffer_codes)
+                for code, pos in list(positions.items()):
+                    if pos.get('volume', 0) > 0 and code not in buffer_codes:
+                        try:
+                            ctx.account.order_percent(code, 1.0, OrderSide.Sell)
+                        except (ValueError, RuntimeError):
+                            pass
 
-                # 开仓：等权买入新 Top N
-                n_slots = top_n - len(ctx.account.positions)
+                # [修复] 2026-06-21 对齐 _run_full：开仓用 order_percent (而非 order_volume)
+                n_slots = top_n - n_keep
                 if top_codes and n_slots > 0:
                     weight = 1.0 / len(top_codes)
-                    total_nav = ctx.account.get_account()['nav']
                     n_bought = 0
                     for code in top_codes & set(symbols):
                         if n_bought >= n_slots:
                             break
-                        if code in ctx.account.positions:
+                        pos = positions.get(code)
+                        if pos and pos.get('volume', 0) > 0:
                             continue
-                        price = ctx.account._get_price(code)
-                        if price <= 0:
-                            continue
-                        shares = (total_nav * weight) / price
-                        ctx.account.order_volume(code, shares, OrderSide.Buy)
-                        n_bought += 1
+                        try:
+                            ctx.account.order_percent(code, weight, OrderSide.Buy)
+                            n_bought += 1
+                        except (ValueError, RuntimeError):
+                            pass
 
         start_time = panel.index[0].to_pydatetime()
         end_time = panel.index[-1].to_pydatetime()
