@@ -23,10 +23,14 @@ def _rolling(x: np.ndarray, window: int, func, *a, **kw):
 
 
 def _expanding(x: np.ndarray, func, min_p: int = 20, *a, **kw):
+    """扩展窗口计算，自动跳过 NaN（与 v3 _expanding_mean 语义一致）"""
     x = np.asarray(x, dtype=float)
     r = np.full_like(x, np.nan)
     for i in range(min_p - 1, len(x)):
-        r[i] = func(x[: i + 1], *a, **kw)
+        valid = x[:i + 1]
+        valid = valid[~np.isnan(valid)]
+        if len(valid) > 0:
+            r[i] = func(valid, *a, **kw)
     return r
 
 

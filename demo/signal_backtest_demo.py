@@ -1,113 +1,161 @@
 """
-demo/signal_backtest_demo.py — signals.v3 择时回测范式 (EngineV3)
+demo/signal_backtest_demo.py — signals.v4 择时回测范式 (EngineCore)
 ====================================================================
-[更新] 2026-06-10 从 signals.v2 迁移到 signals.v3 (EngineV3)
+[更新] 2026-06-21 从 signals.v3 迁移到 signals.v4 (EngineCore)
 [重命名] 2026-06-10 core_backtest_notebook → signal_backtest_demo（避免误解为裸 core 引擎）
 
 信号探测/择时回测的标准范式：
-  Expression → EngineV3.backtest() → AccountAnalyzer.to_notebook()
+  Expression → EngineCore.backtest() → AccountAnalyzer.to_notebook()
 
 展示 header/footer 回调能力：
   - header: 对比表 / KPI卡片 / 自定义图表
   - footer: 结论 / 方法论说明
 
+v3 → v4 关键差异（必须注意）:
+  ┌──────────────────────┬──────────────────────────────────┐
+  │ v3 语义                │ v4 等价                          │
+  ├──────────────────────┼──────────────────────────────────┤
+  │ thr_mean(X)           │ X > expanding_mean(X)            │
+  │ thr_med(X)            │ X > expanding_median(X)          │
+  │ thr_roll_mean(X, w)   │ X > ts_mean(X, w)               │
+  │ thr_roll_med(X, w)    │ X > ts_median(X, w)             │
+  │ div (binary)          │ and (均先用 np.minimum 取 min)   │
+  │ sub                   │ -                                │
+  │ &                     │ and                              │
+  │ |                     │ or                               │
+  ├──────────────────────┼──────────────────────────────────┤
+  │ ATR{7}                │ atr(H,L,C,7) / CLOSE  ← /CLOSE! │
+  │ TSF{7}                │ tsf(C,7) / CLOSE       ← /CLOSE! │
+  │ STDDEV{20}            │ stddev(C,20) / CLOSE    ← /CLOSE! │
+  │ BBWIDTH{20}           │ bb_width(C,20)        ← raw      │
+  │ VOL_RATIO{5,20}       │ vol_ratio(C,V,5,20)   ← raw      │
+  │ RANGE_PCT             │ (HIGH-LOW)/CLOSE                  │
+  └──────────────────────┴──────────────────────────────────┘
+
+  ⚠️ v3 FeatureSpace 对 ATR/TSF/STDDEV 做了 /close 归一化,
+     v4 函数返回原始值, 因此需显式加 /CLOSE 才能行为一致.
+
+  ⚠️ v3 的 thr_mean(A) + thr_mean(B) 是先各自二值化再相加:
+      (A>expanding_mean(A)) + (B>expanding_mean(B))
+     不是 (A+B) > expanding_mean(A+B) !
+
 用法:
   D:/Programs/mamba/envs/py313/python.exe demo/signal_backtest_demo.py
 输出:
-  tmp/EngineV3_demo_最优信号.html
+  tmp/EngineV4_demo_最优信号.html
 """
 import sys, os, numpy as np, pandas as pd
 
-ROOT = r'D:\01-Doc\AI_zeshi'
 sys.path.insert(0, r'D:\01-Doc\Quant\ft2')
 sys.path.insert(0, r'D:\01-Doc\Quant\d2api')
-sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, 'v2'))
 
 from d2_api import d2_api
-from signals.v3 import EngineV3, FeatureSpace, Expression
-from shared.config import SYMBOL, DATA_START, START_DATE, END_DATE, INITIAL_CAPITAL
+from signals.v4 import Expression, EngineCore
 
 
 # ============================================================
-# 1. 数据 + 特征
+# 0. 配置
+# ============================================================
+SYMBOL = '399317.SZ'          # 国证A指
+DATA_START = '2019-07-01'     # 数据起点（含预热期）
+START_DATE = '2020-01-01'     # 回测起点
+END_DATE = '2025-12-31'
+INITIAL_CAPITAL = 1_000_000
+
+
+# ============================================================
+# 1. 数据获取
 # ============================================================
 data = d2_api.kline.query(SYMBOL, DATA_START, END_DATE, interval='1d')
 print(f"数据: {len(data)} 行, {data.columns.tolist()}")
-
-# 构建 FeatureSpace + 手动追加自定义特征
-fs = FeatureSpace().fit(data)
-feat_df = fs.transform(data)
-
-close = data['close'].values
-high = data['high'].values
-low = data['low'].values
-
-def _close_ma_ratio(arr, period):
-    r = np.full(len(arr), np.nan)
-    for i in range(period, len(arr)):
-        ma = np.mean(arr[i-period:i])
-        if ma > 0: r[i] = arr[i]/ma - 1
-    return r
-
-def _range_pct(h, l, c): return (h-l)/c
-
-idx = feat_df.index
-c = pd.Series(close, index=data.index).reindex(idx).values
-h = pd.Series(high, index=data.index).reindex(idx).values
-l = pd.Series(low, index=data.index).reindex(idx).values
-feat_df['RANGE_PCT'] = _range_pct(h, l, c)
-feat_df['CLOSE_MA_RATIO{10}'] = _close_ma_ratio(c, 10)
-fs._feature_names = list(feat_df.columns)
 
 
 # ============================================================
 # 2. 最优公式定义 + 信号计算
 # ============================================================
+# [更新] 2026-06-21 从 v3 适配 v4，严格保持语义一致
+#
+# v3 表达式模式 → v4 翻译:
+#   thr_mean(TERM)            → TERM > expanding_mean(TERM)
+#   thr_med(TERM)             → TERM > expanding_median(TERM)
+#   thr_roll_med(TERM, w)     → TERM > ts_median(TERM, w)
+#   thr_mean(A) op thr_mean(B)→ (A>expanding_mean(A)) op (B>expanding_mean(B))
+#                               注意: 先各自阈值化，再把二进制结果做 op
+#   div 在二进制上等于 and      → 用 and (np.minimum)
+
 TOP_FORMULAS = [
-    ("P4-量波比", "VOL_RATIO/(ATR-TSF) 滚动", "thr_mean(VOL_RATIO{5,20}) div thr_roll_med((ATR{3} sub TSF{7}), 30)"),
-    ("T28-加法", "ATR-TSF+BW-TSF", "thr_mean(ATR{7} - TSF{7}) + thr_mean(BBWIDTH{20} - TSF{7})"),
-    ("P3-量波比", "VOL_RATIO/(ATR-TSF)", "thr_mean(VOL_RATIO{5,20}) div thr_med((ATR{7} sub TSF{7}))"),
-    ("P4-偏离", "ATR - TSF", "thr_mean(ATR{7}) - thr_mean(TSF{7})"),
-    ("T28-三重", "BBWIDTH+ATR+STDDEV", "thr_mean(BBWIDTH{20}) + thr_mean(ATR{7}) + thr_mean(STDDEV{20})"),
-    ("T28-终极", "(ATR-TSF+BW-TSF)×RANGE_PCT", "(thr_mean(ATR{10} - TSF{10}) + thr_mean(BBWIDTH{20} - TSF{7})) * thr_mean(RANGE_PCT)"),
+    # ── P4-量波比: thr_mean(VOL_RATIO{5,20}) div thr_roll_med((ATR{3} sub TSF{7}), 30) ──
+    ("P4-量波比", "VOL_RATIO/(ATR-TSF) 滚动",
+     "(vol_ratio(CLOSE,VOLUME,5,20) > expanding_mean(vol_ratio(CLOSE,VOLUME,5,20)))"
+     " and (((atr(HIGH,LOW,CLOSE,3) - tsf(CLOSE,7)) / CLOSE) > ts_median((atr(HIGH,LOW,CLOSE,3) - tsf(CLOSE,7)) / CLOSE, 30))"),
+
+    # ── T28-加法: thr_mean(ATR{7} - TSF{7}) + thr_mean(BBWIDTH{20} - TSF{7}) ──
+    ("T28-加法", "ATR-TSF+BW-TSF",
+     "(((atr(HIGH,LOW,CLOSE,7) - tsf(CLOSE,7)) / CLOSE) > expanding_mean(((atr(HIGH,LOW,CLOSE,7) - tsf(CLOSE,7)) / CLOSE)))"
+     " + "
+     "((bb_width(CLOSE,20) - (tsf(CLOSE,7) / CLOSE)) > expanding_mean(bb_width(CLOSE,20) - (tsf(CLOSE,7) / CLOSE)))"),
+
+    # ── P3-量波比: thr_mean(VOL_RATIO{5,20}) div thr_med((ATR{7} sub TSF{7})) ──
+    ("P3-量波比", "VOL_RATIO/(ATR-TSF)",
+     "(vol_ratio(CLOSE,VOLUME,5,20) > expanding_mean(vol_ratio(CLOSE,VOLUME,5,20)))"
+     " and (((atr(HIGH,LOW,CLOSE,7) - tsf(CLOSE,7)) / CLOSE) > expanding_median((atr(HIGH,LOW,CLOSE,7) - tsf(CLOSE,7)) / CLOSE))"),
+
+    # ── P4-偏离: thr_mean(ATR{7}) - thr_mean(TSF{7}) ──
+    ("P4-偏离", "ATR - TSF",
+     "((atr(HIGH,LOW,CLOSE,7) / CLOSE) > expanding_mean(atr(HIGH,LOW,CLOSE,7) / CLOSE))"
+     " - "
+     "((tsf(CLOSE,7) / CLOSE) > expanding_mean(tsf(CLOSE,7) / CLOSE))"),
+
+    # ── T28-三重: thr_mean(BBWIDTH{20}) + thr_mean(ATR{7}) + thr_mean(STDDEV{20}) ──
+    ("T28-三重", "BBWIDTH+ATR+STDDEV",
+     "(bb_width(CLOSE,20) > expanding_mean(bb_width(CLOSE,20)))"
+     " + "
+     "((atr(HIGH,LOW,CLOSE,7) / CLOSE) > expanding_mean(atr(HIGH,LOW,CLOSE,7) / CLOSE))"
+     " + "
+     "((stddev(CLOSE,20) / CLOSE) > expanding_mean(stddev(CLOSE,20) / CLOSE))"),
+
+    # ── T28-终极: (thr_mean(ATR{10} - TSF{10}) + thr_mean(BBWIDTH{20} - TSF{7})) * thr_mean(RANGE_PCT) ──
+    ("T28-终极", "(ATR-TSF+BW-TSF)×RANGE_PCT",
+     "((((atr(HIGH,LOW,CLOSE,10) - tsf(CLOSE,10)) / CLOSE) > expanding_mean(((atr(HIGH,LOW,CLOSE,10) - tsf(CLOSE,10)) / CLOSE)))"
+     " + "
+     "((bb_width(CLOSE,20) - (tsf(CLOSE,7) / CLOSE)) > expanding_mean(bb_width(CLOSE,20) - (tsf(CLOSE,7) / CLOSE))))"
+     " * "
+     "(((HIGH - LOW) / CLOSE) > expanding_mean((HIGH - LOW) / CLOSE))"),
 ]
 
-# 对每个公式: Expression → signal → EngineV3.backtest
+# 对每个公式: Expression → signal → EngineCore.backtest
 results = []
 for short_id, short_name, expr_str in TOP_FORMULAS:
     print(f"\n[{short_id}] {expr_str[:60]} ...", end=" ")
     try:
-        signal = Expression(expr_str, feature_df=feat_df).generate(data)
-        # [更新] 2026-06-10 v3: EngineV3.backtest 替代 core_backtest
-        # mode='full' → AccountAnalyzer, bench_label 自动跑基准
-        analyzer = EngineV3.backtest(
+        signal = Expression(expr_str).generate(data)
+        # [更新] 2026-06-21 v4: EngineCore.backtest 替代 EngineV3.backtest
+        analyzer = EngineCore.backtest(
             signal, data, symbol=SYMBOL, mode='full',
             initial_capital=INITIAL_CAPITAL, start_date=START_DATE,
         )
-        m = analyzer.metrics()
 
-        def _v(name, default=0):
-            for k, v in m.items():
-                if isinstance(v, dict) and v.get('name') == name:
-                    val = v['value']
-                    return val[0] if isinstance(val, tuple) else val
-            return default
+        # [更新] 2026-06-21 使用 AccountAnalyzer 方法调用，替代 metrics() dict 遍历
+        sharpe = analyzer.sharpe_ratio()
+        cagr = analyzer.annualized_return()
+        dd = analyzer.max_drawdown()
+        dd_max = dd[0] if dd else 0.0  # (value, start, end)
+        trades = len(analyzer.trade_profits)
 
-        # 从 daily_assets 计算回撤序列
+        # 处理 None 返回值（无交易时某些指标为 None）
+        if sharpe is None: sharpe = 0.0
+        if cagr is None: cagr = 0.0
+        sharpe = round(sharpe, 3)
+
+        tag = "OK" if sharpe > 0.5 else ("~" if sharpe > 0 else "X")
+        print(f"{tag} SR={sharpe:.3f} CAGR={cagr:.1%} DD={dd_max:.1%} 交易={trades}")
+
+        # daily_assets 用于 header 图表
         daily = analyzer.daily_assets
         dates = sorted(daily.keys())
         nav_arr = np.array([daily[d] for d in dates])
         cummax = np.maximum.accumulate(nav_arr)
         dd_arr = (nav_arr / cummax - 1)
-        dd_max = float(np.min(dd_arr))
-
-        sharpe = round(float(_v('夏普比率')), 3)
-        cagr = float(_v('年化收益率'))
-        trades = len(analyzer.account.trade_records) // 2
-
-        tag = "OK" if sharpe > 0.5 else ("~" if sharpe > 0 else "X")
-        print(f"{tag} SR={sharpe:.3f} CAGR={cagr:.1%} DD={dd_max:.1%} 交易={trades}")
 
         results.append({
             'id': short_id, 'name': short_name, 'expr': expr_str,
@@ -137,21 +185,24 @@ top = results[0]
 def add_footer(nb):
     with nb.section("结论与方法论"):
         nb.markdown(
-            "### EngineV3 (signals.v3) 特点\n"
-            "- **统一入口**: `EngineV3.backtest()` 替代 v2 的多个回测函数\n"
+            "### EngineCore (signals.v4) 特点\n"
+            "- **统一入口**: `EngineCore.backtest()` 替代 v3 的 EngineV3\n"
             "- **双模式**: `full` / `fast` 统一返回 AccountAnalyzer\n"
-            "- **自动基准**: `bench_label='399317.SZ'` 参数自动跑买入持有基准\n"
-            "- **费率控制**: `fee_config` 参数配置，None=零费率\n"
+            "- **Python AST**: 表达式使用原生 Python 语法\n"
+            "\n"
+            "### v3 → v4 适配要点\n"
+            "- **阈值时机**: v3 先对各项二值化再组合 (`thr_mean(A)+thr_mean(B)`),\n"
+            "  v4 等价: `(A>expanding_mean(A)) + (B>expanding_mean(B))`\n"
+            "- **归一化差异**: v3 FeatureSpace 对 ATR/TSF/STDDEV 做了 `/close`,\n"
+            "  v4 需显式加 `/CLOSE`\n"
+            "- **div→and**: v3 二进制 `div` 等效 v4 `and` (均用 np.minimum)\n"
             "\n"
             "### 信号形态比引擎更重要\n"
             "- 从 v15（简化引擎 SR=1.0~1.95）到 v18（core引擎 含费率），下降 20~40%\n"
-            "- 但 **close_ma_ratio** 从 1.95 → 0.16 的主因是 thr_mean 二值化，不是引擎差异\n"
             "- **波动率类信号最稳健**: ATR/BBWIDTH/STDDEV 的 TSF 差分组合衰减仅 15~25%\n"
             "\n"
             "### 最优公式\n"
-            f"- 第1名 **{top['id']}** `{top['expr'][:50]}...` Sharpe={top['sharpe']:.3f}\n"
-            "- 推荐: 滚动中位数版 VOL_RATIO/(ATR-TSF)，回撤最可控（~10%）\n"
-            "- 搭配: ATR-TSF + BBWIDTH-TSF 加法组合，CAGR 可达 18%\n"
+            f"- 第1名 **{top['id']}** Sharpe={top['sharpe']:.3f}\n"
         )
 
 # ── 3b. header: 全量对比表 + KPI ──
@@ -227,7 +278,7 @@ output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 os.makedirs(output_dir, exist_ok=True)
 
 top['analyzer'].base_dir = output_dir
-# [更新] 2026-06-10 set_benchmark 用 START_DATE 截断的净值 dict
+# set_benchmark 用 START_DATE 截断的净值 dict
 bench_data = data.loc[data.index >= pd.Timestamp(START_DATE)]
 bench_nav_dict = {
     d.date() if hasattr(d, 'date') else d: float(closes[i] / closes[0] * INITIAL_CAPITAL)
@@ -235,11 +286,11 @@ bench_nav_dict = {
 }
 top['analyzer'].set_benchmark(bench_nav_dict, SYMBOL)
 top['analyzer'].to_notebook(
-    f"EngineV3 demo — v18 最优择时",
+    f"EngineV4 demo — v18 最优择时",
     header=add_header,
     footer=add_footer)
 
-print(f"\n>> HTML: {output_dir}/EngineV3 demo — v18 最优择时.html")
+print(f"\n>> HTML: {output_dir}/EngineV4 demo — v18 最优择时.html")
 
 # 控制台
 print(f"\n{'排名':<4} {'ID':<12} {'Sharpe':>7} {'CAGR':>7} {'MDD':>7} {'交易':>5}")

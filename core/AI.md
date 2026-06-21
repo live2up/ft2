@@ -2,7 +2,7 @@
 
 > 回测引擎核心 + HTML 报告（已融合 notebook 模块）
 >
-> **版本：v2.6 | 更新日期：2026-06-21**
+> **版本：v2.7 | 更新日期：2026-06-21**
 
 ---
 
@@ -18,7 +18,16 @@ run() →  AccountManager      run_fast() → FastAccount
        order_percent()              order_percent() → 接口完全一致
                                       mark() 记录净值
   → AccountAnalyzer(account)        → AccountAnalyzer(daily_assets)
+
+              factor/v4 EngineCore._run_vectorized()
+              纯矩阵向量化, 跳过事件驱动, ~38ms/次 (73x)
+                 → AccountAnalyzer(daily_assets)
 ```
+
+**v2.7 更新要点（2026-06-21）：**
+- factor/v4 新增 `mode='vector'`：纯矩阵向量化因子轮动，跳过 `_drive_timeline`，约 73x 快于 full
+- vector 用连续权重近似（无 lot_size），适合因子扫描/GP 初筛，相对排序与 fast/full 完全一致 (r=0.9985)
+- FastAccount 新增 `__slots__`，减少内存占用，加速属性查找
 
 **v2.6 重构要点（2026-06-21）：**
 - FastAccount 计算逻辑与 AccountManager 完全对齐：nav → 截断 → commission → lot_size → 扣款同一公式
@@ -72,6 +81,17 @@ analyzer = engine.run_fast(FastStrategy(), start_time, end_time)
 - 引擎在 on_bar 后自动调用 `ctx.account.mark()` 记录日末净值，策略无需手动调用
 - `start/end` 自动 clamp 到时间线边界，`init_snapshot` 锚定时间线上 start 之前的真实 bar
 - `run()`/`run_fast()` 入口注册 `_active_engine`，退出时恢复，支持嵌套多引擎
+
+### 三种模式对比
+
+| 模式 | 引擎路径 | 耗时 (1566天5品种) | 用途 |
+|------|---------|:---:|------|
+| `full` | `Engine.run()` → `_drive_timeline` → AccountManager | 2794ms | 最终验证/Notebook报告 |
+| `fast` | `Engine.run_fast()` → `_drive_timeline` → FastAccount | 365ms | 通用策略/信号扫描 |
+| `vector` | `EngineCore._run_vectorized()` → 矩阵运算 | **38ms** | 因子轮动GP/网格初筛 |
+
+vector 模式仅在 `factor/v4` 可用，不经过 `_drive_timeline`，用连续权重近似（无 lot_size）。
+相对排序与 fast/full 完全一致 (排名相关性 r=0.9985)，适合 1000+ 因子的快速筛选。
 
 ---
 
@@ -364,7 +384,10 @@ nb.export_html()  # → 输出到当前脚本所在目录
 2. **`@metric` 声明式驱动** — 指标元数据集中管理，输出层零硬编码
 3. **引擎天然防未来** — `eob` 时间线 + `context.now` 保证每时刻只能看到 ≤当前的数据
 4. **频率无限制** — `freq` 是纯字符串 key，支持 `'1d'`/`'m10'`/`'my_signal'` 等任意自定义频率；多频数据共线推进
-5. **fast/full 双模式** — `run()` 全快照 + AccountManager，`run_fast()` 替换为 FastAccount，接口一致，共用 `_drive_timeline()` 时间线循环
+5. **三种回测模式** — `full` (AccountManager, 精确), `fast` (FastAccount, 8~28x), `vector` (矩阵运算, 73x)
+   - full: 完整 TradeRecord + snapshots，用于最终验证和报告
+   - fast: 事件驱动 + 价格缓存，通用策略兜底
+   - vector: 跳过事件循环，仅 factor/v4 因子轮动，适合扫描/GP 初筛
 6. **初始快照独立** — `init_snapshot(start_time前一根真实bar)` 作为 `snapshots[0]`，分析层零推断、零补偿
 7. **缓存实例化隔离** — `_cache`/`bar_data_set`/`account` 归 Engine 实例所有，多引擎天然隔离，无需 `account.reset()`
 8. **基准＝真实策略** — `BenchHolder` 走与主策略相同的引擎+数据+账户通道，对比结果无偏差
