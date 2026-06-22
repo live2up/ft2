@@ -37,3 +37,78 @@ from signals.v4 import Expression, EngineCore  # v4 推荐 (AST DSL)
 - 代码修改添加注释: `# [修复] 2026-05-29 描述`
 - 修改前先读取源码确认
 - 临时脚本/测试文件放 `tmp/` 目录，根目录保持整洁
+
+## 外部模块调用准则
+
+AI Agent 或外部项目调用 ft2 时，遵循以下原则保障上下文沟通简洁：
+
+### 1. 命名对齐 ft2 规范
+
+| 场景 | ft2 规范 | 外部模块应使用 |
+|------|----------|---------------|
+| OHLCV 数据 | `data`（不是 `raw_data` / `df` / `klines`） | `data` |
+| 回测结果 | `analyzer` / `r`（不是 `result` / `backtest`） | `r = EngineCore.backtest(...)` |
+| 信号序列 | `signal`（不是 `sig` / `signals` / `pred`） | `signal` |
+| 额外特征 | `extra_features`（不是 `features` / `feats` / `ctx`） | `extra_features` |
+| 表达式字符串 | `expr` / `buy_expr` / `sell_expr` | `buy_expr` / `sell_expr` |
+
+### 2. 零封装原则
+
+直接调用 ft2 API，不要创建中间封装层：
+
+```python
+# 好 — 直接调 signals.v4，无中间函数
+from signals.v4 import stateful_signal, EngineCore
+signal = stateful_signal(data, buy_expr, sell_expr, max_hold=10)
+r = EngineCore.backtest(signal, data, mode='fast')
+
+# 坏 — 又包一层，Agent 需要学两套 API
+def my_backtest(data, b, s):
+    sig = stateful_signal(data, b, s)
+    return EngineCore.backtest(sig, data)
+r = my_backtest(data, buy_expr, sell_expr)
+```
+
+### 3. 显式传参，不依赖闭包
+
+```python
+# 好 — 参数显式传递
+signal = stateful_signal(data, buy_expr, sell_expr, extra_features=ef)
+r = EngineCore.backtest(signal, data, mode='fast', start_date=start_date)
+
+# 坏 — 依赖闭包变量，模板复制后跑不通
+def stateful_engine(data, buy, sell):
+    return stateful_signal(data, buy, sell, extra_features=extra_features)  # extra_features 从哪来？
+```
+
+### 4. 能用 v4 就用 v4
+
+ft2 已有功能的不要手写：
+
+```python
+# 好 — 用 v4 现成函数
+from signals.v4.validate import signal_correlation
+corr = signal_correlation(signals, data)
+
+# 坏 — 自实现同样逻辑
+def my_correlation(signals, data):
+    ...  # 45 行手写计算
+```
+
+### 5. 保持 import 链简单
+
+```python
+# 好 — 直接从 v4 导入
+from signals.v4 import stateful_signal, EngineCore
+
+# 坏 — 多层 import 跳转
+from signals.v4.expression import stateful_signal
+from signals.v4.engine import EngineCore
+```
+
+### 6. 调用链不超过 2 层
+
+```
+  模板 -> signals.v4
+  模板 -> 自封装层 -> signals.v4  (中间层无新增价值)
+```

@@ -1,16 +1,16 @@
 # factor 模块 AI 助手指南
 
-> **版本：v4 | 更新日期：2026-06-21**
+> **版本：v4 | 更新日期：2026-06-22**
 
 ## 项目定位
 
-因子挖掘 + 因子轮动研究模块。基于 signals.v4 Python AST DSL 构建，共享 67 原语，LLM 原生友好。
+因子挖掘 + 因子轮动研究模块。基于 signals.v4 Python AST DSL 构建，共享 72 原语，LLM 原生友好。
 
 ## 版本说明
 
 | 版本 | 状态 | 说明 |
 |------|------|------|
-| **v4** | **主力** | signals.v4 AST DSL + ft2.core Engine + 67 原语, 探索灵活, `from factor.v4 import ...` |
+| **v4** | **主力** | signals.v4 AST DSL + ft2.core Engine + 72 原语, 探索灵活, `from factor.v4 import ...` |
 | v3 | 保留 | 仅供历史测试对照，自研 Parser + 23 原语，回测已统一到 ft2.core (FactorEngineCore) |
 
 ## v4 核心变革
@@ -19,7 +19,7 @@
 v3:  自研Parser → 23原语 → FactorEngineCore (ft2.core) → FactorExpression
      问题: 语法自定义(add/sub/mul), 原语少, Parser维护成本高
 
-v4:  signals.v4 AST DSL → 67原语实时计算 → ft2.core Engine回测 → FactorExpression
+v4:  signals.v4 AST DSL → 72原语实时计算 → ft2.core Engine回测 → FactorExpression
      优势: 原生Python语法, 原语3倍, 回测引擎统一, 探索灵活
 ```
 
@@ -63,7 +63,7 @@ factor/
 │   ├── validator.py        # IC/IR/Bootstrap 检验
 │   ├── search.py           # 网格搜索 + 贝叶斯优化
 │   ├── cache.py            # 因子值缓存
-│   ├── base.py             # FactorLibrary + FactorMetadata (复用 v3)
+│   ├── base.py             # FactorLibrary + FactorMetadata
 │   ├── industry_fitness.py # 行业适应度 + FitnessCalculator 基类
 │   ├── llm/                # LLM 因子生成器
 │   │   ├── generator.py
@@ -92,7 +92,7 @@ from signals.v4 import Expression
 expr = Expression("cs_rank(ts_roc(CLOSE, 20))")
 panel = expr.rank_panel(assets)                              # 因子排名面板
 result = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
-# result.sharpe, result.cagr, result.max_drawdown
+# result.sharpe_ratio(), result.annualized_return(), result.max_drawdown()
 
 # full 模式: 验证 + 报告
 analyzer = EngineCore.backtest(panel, assets, mode='full', top_n=3,
@@ -116,7 +116,7 @@ expr.functions    # ['cs_rank', 'ts_roc']
 expr.complexity   # AST 节点数
 ```
 
-**表达式语法与 signals.v4 完全一致** (67 原语，详见 signals/AI.md)：
+**表达式语法与 signals.v4 完全一致** (72 原语，详见 signals/AI.md)：
 - 数据源: `CLOSE OPEN HIGH LOW VOLUME AMOUNT`
 - 时序: `ts_mean ts_std ts_rank ts_roc ts_zscore ts_delay ts_delta ...`
 - 截面: `cs_rank cs_zscore cs_scale cs_winsorize ...`
@@ -248,7 +248,7 @@ len(BASIC_FACTORS)  # 20    因子原子基元
 | 项目 | v3 | v4 |
 |------|----|----|
 | 表达式语法 | 自研 `add/sub/mul` | **Python 原生 `+ - * /`** |
-| 原语数 | 23 | **67 (与 signals 共享)** |
+| 原语数 | 23 | **72 (与 signals 共享)** |
 | 回测引擎 | FactorEngineCore (ft2.core) | **EngineCore (ft2.core, 同 signals)** |
 | 因子面板回测 | FactorEngineCore (fast/full) | **EngineCore (fast/full + buffer)** |
 | 截面排名 | cs_zscore(window) | **cs_rank / evaluate_ranked()** |
@@ -281,5 +281,5 @@ len(BASIC_FACTORS)  # 20    因子原子基元
 - EngineCore 与 signals.v4 EngineCore 架构对齐，fast/full 双模式，均返回 AccountAnalyzer
 - fast 模式内部走 `core.Engine.run_fast()` + `FastAccount`，不生成快照/交易记录；ctx.account 接口与 full 统一
 - 截面排名推荐使用 `evaluate_ranked()` 或 `Expression.rank_panel()`
-- 67 原语覆盖 WorldQuant 时序算子的 96%，截面 100%
+- 72 原语覆盖 WorldQuant 时序算子的 96%，截面 100%
 - 扩展新原语：`signals.v4.register_function()` 注册 → 因子模块即用

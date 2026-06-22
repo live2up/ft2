@@ -1,5 +1,5 @@
 """
-factor/v3/discovered/ — GP/ML 发现的因子存档
+factor/v4/discovered/ — GP/ML 发现的因子存档
 =============================================================================
 
 目录约定：
@@ -8,7 +8,7 @@ factor/v3/discovered/ — GP/ML 发现的因子存档
   gp_round_{N}_top20.py      — GP 每轮 Top 20 精选（自动生成，方便 code review）
 
 查询接口：
-  >>> from factor.v3.discovered import load_discovered
+  >>> from factor.v4.discovered import load_discovered
   >>> lib = load_discovered(r'path/to/discovered')
   >>> lib.top(20, sort_by='sharpe')
   >>> lib.by_time('2026-06-01', '2026-06-04')  # 按时间范围筛选
@@ -17,7 +17,7 @@ factor/v3/discovered/ — GP/ML 发现的因子存档
 import os
 import json
 
-from ..base import FactorLibrary, LibraryEntry, FactorCategory
+from factor.v4.base import FactorLibrary, LibraryEntry, FactorCategory
 
 
 def load_discovered(discovered_dir: str = None) -> FactorLibrary:
