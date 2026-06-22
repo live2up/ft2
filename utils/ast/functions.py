@@ -665,6 +665,10 @@ def get_func_category(name: str) -> str:
 # 临时自定义注册 (LLM 探索时热添加，无需修改 functions.py)
 # ============================================================
 #
+# 使用场景:
+#   每个探索脚本是独立进程, 跑完即销毁。脚本顶部注册 → 全文使用 →
+#   进程退出自动清零, 无需手动清理。不存在跨脚本污染问题。
+#
 # 用法:
 #   from utils.ast import register_function
 #   register_function('my_indicator', lambda x, w: np.convolve(x, np.ones(w)/w, 'same'))
@@ -675,6 +679,9 @@ def get_func_category(name: str) -> str:
 
 def register_function(name: str, func: Callable) -> None:
     """临时注册自定义函数到表达式引擎。
+
+    进程级全局注册, 当前脚本内所有 Expression 生效。
+    脚本退出自动销毁, 无泄漏风险。
 
     Args:
         name: 函数名 (表达式中的调用名)

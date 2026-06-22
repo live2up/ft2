@@ -189,6 +189,10 @@ def is_valid_variable(name: str) -> bool:
 # 临时自定义注册 (外部模板热添加，无需修改 variables.py)
 # ============================================================
 #
+# 使用场景:
+#   每个探索脚本是独立进程, 跑完即销毁。脚本顶部注册 → 全文使用 →
+#   进程退出自动清零, 无需手动清理。不存在跨脚本污染问题。
+#
 # 用法:
 #   from utils.ast import register_variable
 #   register_variable('MY_VAR')
@@ -199,6 +203,9 @@ def is_valid_variable(name: str) -> bool:
 
 def register_variable(prefix: str) -> None:
     """临时注册自定义变量前缀到表达式引擎。
+
+    进程级全局注册, 当前脚本内所有 Expression 生效。
+    脚本退出自动销毁, 无泄漏风险。
 
     Args:
         prefix: 变量名前缀 (大小写不敏感)，支持 'prefix' 或 'prefix_suffix' 匹配
