@@ -20,7 +20,7 @@ from .ast_dsl import (
     parse_expression, evaluate, get_variables, get_functions,
     DSLSecurityError, DSLSyntaxError,
 )
-from .expression import Expression
+from .expression import Expression, stateful_signal
 from .registry import FUNC_REGISTRY, is_valid_variable, register_function, register_variable, unregister_function, unregister_variable
 
 # V4 引擎（full/fast 统一返回 AccountAnalyzer）
@@ -34,6 +34,7 @@ from . import validate
 
 __all__ = [
     'Expression',
+    'stateful_signal',
     'EngineCore',
     'parse_expression', 'evaluate',
     'get_variables', 'get_functions',

@@ -169,6 +169,49 @@ class Expression(AstExpression):
         return pd.DataFrame(ranked, index=dates, columns=symbols)
 
 
+def stateful_signal(data: pd.DataFrame, buy_expr: str, sell_expr: str,
+                    max_hold: int = None,
+                    extra_features: Dict[str, np.ndarray] = None) -> pd.Series:
+    """状态机信号: 空仓等BUY→持仓→SELL/超时→空仓
+
+    将非对称 BUY/SELL 表达式转换为单一持仓信号序列，
+    适用于择时策略的 BUY/SELL 分离设计。
+
+    [新增] 2026-06-22 从 AI_zeshi 模板提取到 v4 公共 API。
+
+    Args:
+        data: OHLCV DataFrame
+        buy_expr: 买入触发表达式（值 >0 触发建仓）
+        sell_expr: 卖出触发表达式（值 >0 触发平仓），可为 None
+        max_hold: 最长持仓天数，None = 不超时
+        extra_features: 注入 Expression.generate() 的额外特征
+
+    Returns:
+        pd.Series, index 对齐 data, 值 {0, 1}
+    """
+    buy_sig = Expression(buy_expr).generate(data, extra_features=extra_features)
+    sell_sig = None
+    if sell_expr is not None:
+        sell_sig = Expression(sell_expr).generate(data, extra_features=extra_features)
+
+    pos, hold = 0, 0
+    sig = np.zeros(len(data), dtype=int)
+    for i in range(len(data)):
+        if pos == 0 and buy_sig.iloc[i] > 0:
+            sig[i] = 1; pos = 1; hold = 1
+        elif pos == 1:
+            hold += 1
+            sell_trigger = (sell_sig.iloc[i] > 0) if sell_sig is not None else False
+            timeout = (max_hold is not None and hold >= max_hold)
+            if sell_trigger or timeout:
+                sig[i] = 0; pos = 0; hold = 0
+            else:
+                sig[i] = 1
+        # pos == 0: sig[i] stays 0
+
+    return pd.Series(sig, index=data.index, name=f"STF(B={buy_expr[:30]}, S={sell_expr[:20] if sell_expr else 'None'})")
+
+
 def _build_data_dict(data: pd.DataFrame,
                      required_vars: List[str],
                      extra_features: Dict[str, np.ndarray] = None) -> Dict[str, np.ndarray]:
