@@ -19,7 +19,7 @@ import numpy as np
 from typing import Dict
 
 import signals.v4.ast_dsl as dsl
-from factor.v4.cs_resolver import CsResolver, _has_any_cs, _is_outer_cs_rank_call
+from factor.v4.cs_resolver import CsResolver, _has_any_cs, _is_outer_cs_rank_call, _eval_colwise
 
 # signals.v4 函数设计为 1D 数组，因子面板为 2D (T,N)，需逐列求值。
 _BASE_VARS = {'open', 'high', 'low', 'close', 'volume', 'amount'}
@@ -33,6 +33,7 @@ class _ExpressionFromAST:
         self.name = name
 
     def evaluate(self, data: Dict[str, np.ndarray]) -> np.ndarray:
+        """[重构] 2026-06-22 复用 _eval_colwise 消除重复逻辑"""
         data_norm = {}
         T, N = None, None
         for k, v in data.items():
@@ -46,15 +47,7 @@ class _ExpressionFromAST:
             result = dsl.evaluate(self._tree, data_norm)
             return np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
 
-        result = np.full((T, N), 0.0)
-        for j in range(N):
-            col_data = {}
-            for k, v in data_norm.items():
-                col_data[k] = v[:, j] if isinstance(v, np.ndarray) and v.ndim == 2 else v
-            col_result = dsl.evaluate(self._tree, col_data)
-            result[:, j] = np.nan_to_num(
-                col_result[:T].ravel(), nan=0.0, posinf=0.0, neginf=0.0)
-        return result
+        return _eval_colwise(self._tree, data_norm, T, N)
 
 
 class FactorExpression:
@@ -88,9 +81,17 @@ class FactorExpression:
     def evaluate(self, data: Dict[str, np.ndarray]) -> np.ndarray:
         """求值为 (T, N) ndarray。
 
-        signals.v4 函数设计为 1D 数组，因子面板为 2D (T,N)，
-        逐列求值确保兼容性。
+        注意: 含截面函数的表达式请使用 evaluate_ranked()。
+        evaluate() 逐列求值, 截面函数收到 1D 数组会退化。
         """
+        # [新增] 2026-06-22 运行时警告: 含 cs_rank 的表达式走错入口
+        if self._has_cs_rank:
+            import warnings
+            warnings.warn(
+                f"FactorExpression.evaluate(): 表达式含截面函数, "
+                f"逐列求值会导致截面函数退化。请使用 evaluate_ranked()。"
+                f"\n  表达式: {self.expr_str[:80]}"
+            )
         # 规范化数据
         data_norm = {}
         T, N = None, None
@@ -106,17 +107,8 @@ class FactorExpression:
             result = dsl.evaluate(self._tree, data_norm)
             return np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # 2D: 逐列
-        result = np.full((T, N), 0.0)
-        for j in range(N):
-            col_data = {}
-            for k, v in data_norm.items():
-                col_data[k] = v[:, j] if isinstance(v, np.ndarray) and v.ndim == 2 else v
-            col_result = dsl.evaluate(self._tree, col_data)
-            result[:, j] = np.nan_to_num(
-                col_result[:T].ravel(), nan=0.0, posinf=0.0, neginf=0.0,
-            )
-        return result
+        # 2D: 逐列 (复用 cs_resolver 的逐列求值器)
+        return _eval_colwise(self._tree, data_norm, T, N)
 
     def evaluate_ranked(self, data: Dict[str, np.ndarray]) -> np.ndarray:
         """截面排名求值 → 0~1 排名矩阵

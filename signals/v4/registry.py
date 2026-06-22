@@ -15,7 +15,13 @@ from typing import Dict, Callable
 
 
 def _rolling(x: np.ndarray, window: int, func, *a, **kw):
+    """[修复] 2026-06-22 加 2D 防护: 时序函数只接受 1D, 误传 2D 会静默错误"""
     x = np.asarray(x, dtype=float)
+    if x.ndim != 1:
+        raise ValueError(
+            f"_rolling 只接受 1D 数组, 收到 {x.ndim}D shape={x.shape}。"
+            f"2D 面板需逐列调用。"
+        )
     r = np.full_like(x, np.nan)
     for i in range(window - 1, len(x)):
         r[i] = func(x[i - window + 1 : i + 1], *a, **kw)
@@ -23,8 +29,14 @@ def _rolling(x: np.ndarray, window: int, func, *a, **kw):
 
 
 def _expanding(x: np.ndarray, func, min_p: int = 20, *a, **kw):
-    """扩展窗口计算，自动跳过 NaN（与 v3 _expanding_mean 语义一致）"""
+    """扩展窗口计算，自动跳过 NaN（与 v3 _expanding_mean 语义一致）
+    
+    [修复] 2026-06-22 加 2D 防护"""
     x = np.asarray(x, dtype=float)
+    if x.ndim != 1:
+        raise ValueError(
+            f"_expanding 只接受 1D 数组, 收到 {x.ndim}D shape={x.shape}。"
+        )
     r = np.full_like(x, np.nan)
     for i in range(min_p - 1, len(x)):
         valid = x[:i + 1]
@@ -35,7 +47,12 @@ def _expanding(x: np.ndarray, func, min_p: int = 20, *a, **kw):
 
 
 def _persist(x: np.ndarray, n: int) -> np.ndarray:
+    """[修复] 2026-06-22 加 2D 防护"""
     x = np.asarray(x, dtype=float)
+    if x.ndim != 1:
+        raise ValueError(
+            f"_persist 只接受 1D 数组, 收到 {x.ndim}D shape={x.shape}。"
+        )
     r = np.full_like(x, 0.0)
     s = x > 0
     for i in range(n - 1, len(x)):
