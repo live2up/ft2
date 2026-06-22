@@ -19,7 +19,7 @@ import numpy as np
 from typing import Dict
 
 import signals.v4.ast_dsl as dsl
-from factor.v4.cs_resolver import CsResolver, _has_any_cs, _is_outer_cs_rank_call, _eval_colwise
+from utils.ast import CsResolver, _has_any_cs, _is_outer_cs_rank_call, _eval_colwise
 
 # signals.v4 函数设计为 1D 数组，因子面板为 2D (T,N)，需逐列求值。
 _BASE_VARS = {'open', 'high', 'low', 'close', 'volume', 'amount'}
@@ -77,6 +77,11 @@ class FactorExpression:
         # [重构] 2026-06-22 cs_rank 检测委托给 CsResolver (注册表驱动)
         self._has_cs_rank = _has_any_cs(self._tree)
         self._is_outer_cs_rank = _is_outer_cs_rank_call(self._tree)
+
+    @property
+    def features_used(self) -> list:
+        """[新增] 2026-06-22 对齐 signals/v4 Expression 参数规范"""
+        return self.variables
 
     def evaluate(self, data: Dict[str, np.ndarray]) -> np.ndarray:
         """求值为 (T, N) ndarray。

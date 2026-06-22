@@ -115,11 +115,19 @@ class Expression:
                    align: str = 'inner') -> pd.DataFrame:
         """
         多品种批量求值 + 截面排名（一步到位）
+
+        [修复] 2026-06-22 检测 cs_* 截面函数 → 委托 factor/v4 CsResolver,
+        避免逐品种求值时 cs_rank 收到 1D 数组返回全 0.5。
         
         Returns:
             DataFrame(index=日期, columns=品种代码)，值为 0~1 截面百分位排名
             每日每品种的排名值（1=最强，0=最弱）
         """
+        # [修复] 含截面函数 → 委托 CsResolver (需要完整2D面板)
+        if any(f.startswith('cs_') for f in self.functions):
+            return self._rank_panel_via_csresolver(assets, align)
+        
+        # 无截面函数 → 原有逻辑 (逐品种求值安全)
         panel = self.evaluate_panel(assets, align=align)
         # 每日截面排名
         from scipy.stats import rankdata
@@ -131,6 +139,40 @@ class Expression:
                 rk = rankdata(row[valid]) / valid.sum()
                 ranked.iloc[i, valid] = rk
         return ranked
+    
+    def _rank_panel_via_csresolver(self, assets: Dict[str, pd.DataFrame],
+                                    align: str = 'inner') -> pd.DataFrame:
+        """委托 CsResolver 正确处理截面函数 (需要完整2D面板)
+        
+        [新增] 2026-06-22 统一 signals 和 factor 的 cs_* 求值路径
+        """
+        from factor.v4 import FactorExpression
+        
+        symbols = list(assets.keys())
+        
+        # 收集所有品种的日期交集 → 确保面板对齐
+        common_dates = assets[symbols[0]].index
+        for sym in symbols[1:]:
+            common_dates = common_dates.intersection(assets[sym].index)
+        dates = sorted(common_dates)
+        
+        # 为每个需要的变量构建 (T,N) ndarray
+        panel_data = {}
+        for var in self.variables:
+            var_upper = var.upper()
+            mat = np.full((len(dates), len(symbols)), np.nan)
+            for j, sym in enumerate(symbols):
+                df = assets[sym]
+                col_map = {c.upper().strip(): c for c in df.columns}
+                col_name = col_map.get(var_upper, col_map.get(var_upper.lower()))
+                if col_name:
+                    mat[:, j] = df[col_name].reindex(dates).values.astype(float)
+            panel_data[var_upper] = mat
+        
+        # 委托 CsResolver (单遍 bottom-up 处理嵌套/组合截面函数)
+        ranked = FactorExpression(self.expr_str).evaluate_ranked(panel_data)
+        
+        return pd.DataFrame(ranked, index=dates, columns=symbols)
 
 
 def _build_data_dict(data: pd.DataFrame,

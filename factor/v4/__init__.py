@@ -21,9 +21,8 @@ factor/v4 — 因子发现引擎 (基于 signals.v4 AST DSL + ft2.core Engine)
 
 Quick Start:
   >>> from factor.v4 import FactorExpression, EngineCore, FactorLibrary, GPEngine
-  >>> from signals.v4 import Expression
-  >>> expr = Expression("cs_rank(ts_roc(CLOSE, 20))")
-  >>> panel = expr.rank_panel(assets)       # 因子值面板
+  >>> expr = FactorExpression("cs_rank(ts_roc(CLOSE, 20))")
+  >>> panel = expr.evaluate_ranked(data_dict)   # ndarray(T,N) 截面排名
   >>> result = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
 """
 
