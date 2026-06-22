@@ -46,7 +46,8 @@ utils/ast — 公共 AST 基础设施 (signals 和 factor 模块共享)
 
 # ── 语法层 (dsl.py) ──
 from .dsl import (
-    parse_expression, evaluate, get_variables, get_functions,
+    parse_expression, evaluate, validate_expression,
+    get_variables, get_functions,
     normalize_data_keys,
     eval_colwise, cross_sectional_rank,
     ast_depth, ast_node_count,
@@ -96,7 +97,8 @@ from .registry import *  # noqa: F401,F403
 
 __all__ = [
     # dsl — 语法层
-    'parse_expression', 'evaluate', 'get_variables', 'get_functions',
+    'parse_expression', 'evaluate', 'validate_expression',
+    'get_variables', 'get_functions',
     'normalize_data_keys',
     'eval_colwise', 'cross_sectional_rank',
     'ast_depth', 'ast_node_count',

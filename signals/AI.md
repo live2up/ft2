@@ -223,6 +223,10 @@ a if cond else b           # 三元
 # 信号确认 (ATR突破连续2日确认)
 "persist(atr(HIGH, LOW, CLOSE, 7) > ts_mean(atr(HIGH, LOW, CLOSE, 7), 30), 2)"
 
+# 窗口内条件计数 (比较运算输出0/1, ts_sum=计数)
+"ts_sum(CLOSE > OPEN, 20) > 12"  # 过去20天超过12天收阳
+"ts_sum(vol_ratio(CLOSE,VOLUME,5,20) > 1.5, 10) > 3"  # 过去10天有3天以上放量
+
 # 状态切换 (趋势市追涨, 震荡市抄底)
 "ema(CLOSE, 20) if adx(HIGH, LOW, CLOSE, 14) > 25 else rsi(CLOSE, 14)"
 

@@ -398,12 +398,18 @@ def _eval_node(node: ast.AST, data: Dict[str, np.ndarray]) -> np.ndarray:
 # ============================================================
 
 def get_variables(tree: ast.Expression) -> list:
-    """提取表达式中引用的所有变量名"""
+    """提取表达式中引用的所有变量名
+
+    排除安全常量 (True/False/None/pi/e) 和已注册函数名
+    (避免 vol_ratio/atr 等同名变量被误判)。
+    """
     vars_set = set()
     for node in ast.walk(tree.body):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             name = node.id
-            if name not in SAFE_CONSTANTS and is_valid_variable(name):
+            if name in SAFE_CONSTANTS or name.lower() in FUNC_REGISTRY:
+                continue  # 跳过常量和函数名
+            if is_valid_variable(name):
                 vars_set.add(name.upper())
     return sorted(vars_set)
 
@@ -417,19 +423,56 @@ def get_functions(tree: ast.Expression) -> list:
     return sorted(funcs)
 
 
+def validate_expression(expr_str: str, available_vars: list = None) -> dict:
+    """LLM 前置校验: 表达式语法 + 变量存在性
+
+    不依赖数据求值, 只做 parse + 变量对比。
+    适合 LLM 生成表达式后立即调用, 避免等到 evaluate() 才发现 KeyError。
+
+    Args:
+        expr_str: 表达式字符串
+        available_vars: 可用变量名列表 (大小写不敏感), None 则跳过变量存在性检查
+
+    Returns:
+        {'valid': bool, 'errors': [str], 'variables': [str], 'missing_vars': [str]}
+    """
+    result = {'valid': True, 'errors': [], 'variables': [], 'missing_vars': []}
+    try:
+        tree = parse_expression(expr_str)
+        result['variables'] = get_variables(tree)
+    except (DSLSyntaxError, DSLSecurityError) as e:
+        result['valid'] = False
+        result['errors'].append(str(e))
+        return result
+
+    if available_vars is not None:
+        avail_upper = {v.upper() for v in available_vars}
+        for var in result['variables']:
+            if var.upper() not in avail_upper:
+                result['missing_vars'].append(var)
+                result['valid'] = False
+                result['errors'].append(
+                    f"变量 '{var}' 不在可用数据中。"
+                    f"可用: {sorted(avail_upper)}"
+                )
+    return result
+
+
 # ============================================================
 # 面板逐列求值器 — 时序函数在 1D 上安全求值
 # ============================================================
 
 def eval_colwise(tree: ast.Expression, data: Dict[str, np.ndarray],
-                 T: int, N: int) -> np.ndarray:
+                 T: int, N: int, strict: bool = False) -> np.ndarray:
     """逐列求值 AST — 时序函数在 1D 上安全求值
 
     设计理由:
       _rolling / _expanding / _persist 只处理 1D 数组,
       因此 2D 面板必须逐列调用 evaluate()。
 
-    与 signals/v4 _ExpressionFromAST.evaluate() 逻辑等价。
+    Args:
+        strict: False=静默返回NaN (批量回测/搜索模式),
+                True=异常立即抛出 (调试模式, 带列号定位)
 
     [重构] 2026-06-22 从 resolver.py 移动到 dsl.py (通用工具)
     """
@@ -447,7 +490,11 @@ def eval_colwise(tree: ast.Expression, data: Dict[str, np.ndarray],
                 result[:, j] = col_result[:T].ravel()
             elif isinstance(col_result, (int, float, np.integer, np.floating)):
                 result[:, j] = float(col_result)
-        except Exception:
+        except Exception as e:
+            if strict:
+                raise RuntimeError(
+                    f"eval_colwise 第 {j} 列求值失败: {e}"
+                ) from e
             result[:, j] = np.nan
     return np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
 

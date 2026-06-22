@@ -105,7 +105,15 @@ def _persist(x: np.ndarray, n: int) -> np.ndarray:
 
 def ts_mean(x, d):       return _rolling(x, d, np.mean)
 def ts_std(x, d):        return _rolling(x, d, lambda a: np.std(a, ddof=1))
-def ts_sum(x, d):        return _rolling(x, d, np.sum)
+def ts_sum(x, d):
+    """滚动窗口求和。
+
+    典型用法:
+      ts_sum(CLOSE > OPEN, 20)  → 过去20天有几天涨 (比较运算输出0/1, sum=计数)
+      ts_sum(vol_ratio(x, v, 5, 20) > 1, 10) → 过去10天有几天放量
+      ts_sum(ts_roc(CLOSE, 5), 20) → 过去20天累计收益率
+    """
+    return _rolling(x, d, np.sum)
 def ts_max(x, d):        return _rolling(x, d, np.max)
 def ts_min(x, d):        return _rolling(x, d, np.min)
 def ts_median(x, d):     return _rolling(x, d, np.median)

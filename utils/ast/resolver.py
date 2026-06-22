@@ -132,16 +132,12 @@ class CsResolver:
         # 逐列求值内部表达式 (时序函数需要 1D)
         inner_vals = eval_colwise(inner_tree, data, self._T, self._N)
 
-        # 应用截面变换 (在完整 2D 面板上)
-        if func_name == 'cs_rank':
-            result = cross_sectional_rank(inner_vals)
+        # 应用截面变换 — 统一从注册表获取 (cs_rank/cs_zscore/cs_scale/...)
+        fn = FUNC_REGISTRY.get(func_name)
+        if fn is not None:
+            result = np.asarray(fn(inner_vals), dtype=float)
         else:
-            # 扩展点: 其他截面函数从 registry 获取实现
-            fn = FUNC_REGISTRY.get(func_name)
-            if fn is not None:
-                result = np.asarray(fn(inner_vals), dtype=float)
-            else:
-                result = inner_vals
+            result = inner_vals
 
         # 注入预计算变量
         self._counter += 1

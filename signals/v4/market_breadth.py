@@ -1,5 +1,5 @@
 """
-signals/v2/market_breadth.py — 市场广度特征计算
+signals/v4/market_breadth.py — 市场广度特征计算
 =============================================================================
 
 突破 AIdev GP 的根本局限：特征池缺少市场广度指标。
@@ -211,10 +211,6 @@ def _breadth_arms(data: pd.DataFrame, **params) -> Tuple[np.ndarray, np.ndarray]
     return np.full(len(data), np.nan), np.full(len(data), np.nan)
 
 
-def register_breadth_features():
-    """注册市场广度特征计算函数到FeatureSpace"""
-    from .features import _FEATURE_CALC_REGISTRY
-    _FEATURE_CALC_REGISTRY['ADV_DEC_RATIO'] = _breadth_ad_ratio
-    _FEATURE_CALC_REGISTRY['NEW_HIGH_LOW'] = _breadth_new_high_low
-    _FEATURE_CALC_REGISTRY['MCCLELLAN_OSC'] = _breadth_mcclellan
-    _FEATURE_CALC_REGISTRY['ARMS_INDEX'] = _breadth_arms
+# [移除] 2026-06-22 register_breadth_features() —
+# 引用已删除的 v3 FeatureSpace._FEATURE_CALC_REGISTRY,
+# v4 中市场广度通过 extra_features 字典直接注入 Expression.generate()。

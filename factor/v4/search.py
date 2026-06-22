@@ -86,7 +86,7 @@ class FactorGridSearch:
             List[GridSearchResult]: 按 Sharpe 降序排列的结果
         """
         from .validator import FactorValidator
-        from .backtest import TopNEqualWeight, parse_scheduler
+        from ..v3.backtest import parse_scheduler  # [修复] 2026-06-22 原名 .backtest 模块已不存在
         from .engine import EngineCore
 
         if freqs is None:
