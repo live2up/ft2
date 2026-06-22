@@ -415,3 +415,78 @@ def get_functions(tree: ast.Expression) -> list:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             funcs.add(node.func.id)
     return sorted(funcs)
+
+
+# ============================================================
+# 面板逐列求值器 — 时序函数在 1D 上安全求值
+# ============================================================
+
+def eval_colwise(tree: ast.Expression, data: Dict[str, np.ndarray],
+                 T: int, N: int) -> np.ndarray:
+    """逐列求值 AST — 时序函数在 1D 上安全求值
+
+    设计理由:
+      _rolling / _expanding / _persist 只处理 1D 数组,
+      因此 2D 面板必须逐列调用 evaluate()。
+
+    与 signals/v4 _ExpressionFromAST.evaluate() 逻辑等价。
+
+    [重构] 2026-06-22 从 resolver.py 移动到 dsl.py (通用工具)
+    """
+    result = np.full((T, N), np.nan)
+    for j in range(N):
+        col_data = {}
+        for k, v in data.items():
+            if isinstance(v, np.ndarray) and v.ndim == 2:
+                col_data[k] = v[:, j]
+            else:
+                col_data[k] = v
+        try:
+            col_result = evaluate(tree, col_data)
+            if isinstance(col_result, np.ndarray):
+                result[:, j] = col_result[:T].ravel()
+            elif isinstance(col_result, (int, float, np.integer, np.floating)):
+                result[:, j] = float(col_result)
+        except Exception:
+            result[:, j] = np.nan
+    return np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def cross_sectional_rank(vals: np.ndarray) -> np.ndarray:
+    """每日截面排名 → 0~1 (与 signals/v4 cs_rank 逻辑一致)
+
+    [重构] 2026-06-22 从 resolver.py 移动到 dsl.py (通用工具)
+    """
+    from scipy.stats import rankdata
+    vals = np.asarray(vals, dtype=float)
+    if vals.ndim != 2:
+        return vals
+    T, N = vals.shape
+    ranked = np.full((T, N), 0.0)
+    for t in range(T):
+        row = vals[t]
+        valid = ~np.isnan(row)
+        if valid.sum() > 0:
+            rk = rankdata(row[valid])
+            ranked[t, valid] = np.nan_to_num(
+                rk / valid.sum(), nan=0.5, posinf=0.5, neginf=0.5)
+    return ranked
+
+
+# ============================================================
+# 表达式自省扩展 — 结构化描述
+# ============================================================
+
+def ast_depth(tree: ast.Expression) -> int:
+    """计算 AST 最大深度"""
+    def _depth(node):
+        children = list(ast.iter_child_nodes(node))
+        if not children:
+            return 1
+        return 1 + max(_depth(c) for c in children)
+    return _depth(tree.body)
+
+
+def ast_node_count(tree: ast.Expression) -> int:
+    """计算 AST 节点总数"""
+    return sum(1 for _ in ast.walk(tree.body))

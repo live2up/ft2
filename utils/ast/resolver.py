@@ -25,9 +25,8 @@ import copy
 import numpy as np
 from typing import Dict, Set, Optional
 
-import signals.v4.ast_dsl as dsl  # [重构] 仍通过兼容重导出访问
 from .registry import FUNC_REGISTRY
-from .dsl import normalize_data_keys
+from .dsl import normalize_data_keys, evaluate, eval_colwise, cross_sectional_rank
 
 # ============================================================
 # 截面函数检测 — 运行时动态查询 FUNC_REGISTRY (支持热注册)
@@ -75,7 +74,7 @@ class CsResolver:
         data_norm = self._normalize_data(data)
         if self._N == 0:
             # 1D 数据, 直接求值
-            result = dsl.evaluate(tree, data_norm)
+            result = evaluate(tree, data_norm)
             return np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
 
         self._counter = 0
@@ -90,8 +89,8 @@ class CsResolver:
         # Step 1: 检测截面函数存在性
         if not _has_any_cs(work_tree):
             # 路径A: 无截面函数 → 逐列求值 + 截面排名
-            vals = _eval_colwise(work_tree, data_norm, self._T, self._N)
-            return _cross_sectional_rank(vals)
+            vals = eval_colwise(work_tree, data_norm, self._T, self._N)
+            return cross_sectional_rank(vals)
 
         # 路径B: 有截面函数 → 单遍 bottom-up 替换
         work_tree_copy = copy.deepcopy(work_tree)
@@ -102,8 +101,8 @@ class CsResolver:
         ast.fix_missing_locations(resolved_tree)
 
         # 最终: 逐列求值替换后的 AST + 截面排名
-        vals = _eval_colwise(resolved_tree, current_data, self._T, self._N)
-        return _cross_sectional_rank(vals)
+        vals = eval_colwise(resolved_tree, current_data, self._T, self._N)
+        return cross_sectional_rank(vals)
 
     def _normalize_data(self, data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
         """[重构] 2026-06-22 复用 utils/ast normalize_data_keys"""
@@ -131,11 +130,11 @@ class CsResolver:
         inner_tree = ast.Expression(body=node.args[0])
 
         # 逐列求值内部表达式 (时序函数需要 1D)
-        inner_vals = _eval_colwise(inner_tree, data, self._T, self._N)
+        inner_vals = eval_colwise(inner_tree, data, self._T, self._N)
 
         # 应用截面变换 (在完整 2D 面板上)
         if func_name == 'cs_rank':
-            result = _cross_sectional_rank(inner_vals)
+            result = cross_sectional_rank(inner_vals)
         else:
             # 扩展点: 其他截面函数从 registry 获取实现
             fn = FUNC_REGISTRY.get(func_name)
@@ -219,47 +218,3 @@ def _has_any_cs_in_expr(expr_node) -> bool:
                 and _is_cs_function(node.func.id)):
             return True
     return False
-
-
-def _eval_colwise(tree: ast.Expression, data: Dict[str, np.ndarray],
-                  T: int, N: int) -> np.ndarray:
-    """逐列求值 AST — 时序函数在 1D 上安全求值
-
-    signals/v4 的 _rolling 只处理 1D, 因此必须逐列调用 dsl.evaluate。
-    与 _ExpressionFromAST.evaluate() 逻辑等价。
-    """
-    result = np.full((T, N), np.nan)
-    for j in range(N):
-        col_data = {}
-        for k, v in data.items():
-            if isinstance(v, np.ndarray) and v.ndim == 2:
-                col_data[k] = v[:, j]
-            else:
-                col_data[k] = v
-        try:
-            col_result = dsl.evaluate(tree, col_data)
-            if isinstance(col_result, np.ndarray):
-                result[:, j] = col_result[:T].ravel()
-            elif isinstance(col_result, (int, float, np.integer, np.floating)):
-                result[:, j] = float(col_result)
-        except Exception:
-            result[:, j] = np.nan
-    return np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
-
-
-def _cross_sectional_rank(vals: np.ndarray) -> np.ndarray:
-    """每日截面排名 → 0~1 (与 signals/v4 cs_rank 逻辑一致)"""
-    from scipy.stats import rankdata
-    vals = np.asarray(vals, dtype=float)
-    if vals.ndim != 2:
-        return vals
-    T, N = vals.shape
-    ranked = np.full((T, N), 0.0)
-    for t in range(T):
-        row = vals[t]
-        valid = ~np.isnan(row)
-        if valid.sum() > 0:
-            rk = rankdata(row[valid])
-            ranked[t, valid] = np.nan_to_num(
-                rk / valid.sum(), nan=0.5, posinf=0.5, neginf=0.5)
-    return ranked
