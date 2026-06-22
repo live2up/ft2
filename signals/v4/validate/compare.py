@@ -10,7 +10,7 @@ signals/v4/validate/compare.py — 多信号对比验证
 """
 import pandas as pd, numpy as np
 from ..expression import Expression
-from ..engine import EngineCore
+from ..engine import SigEngine
 
 
 def compare_signals(signals: list, data: pd.DataFrame,
@@ -37,7 +37,7 @@ def compare_signals(signals: list, data: pd.DataFrame,
         try:
             expr = Expression(expr_str)
             signal = expr.generate(data)
-            result = EngineCore.backtest(signal, data, mode=mode,
+            result = SigEngine.backtest(signal, data, mode=mode,
                                          symbol=symbol, start_date=start_date)
             # full/fast 统一返回 AccountAnalyzer，直接调方法
             dd = result.max_drawdown()

@@ -23,7 +23,7 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass, field
 
 from ..expression import Expression
-from ..engine import EngineCore
+from ..engine import SigEngine
 
 
 # ============================================================
@@ -239,7 +239,7 @@ class GPSearch:
         for ind in gs.elite_set(5):
             expr = Expression(ind.expression_str)
             signal = expr.generate(raw_data)
-            analyzer = EngineCore.backtest(signal, raw_data, mode='full')
+            analyzer = SigEngine.backtest(signal, raw_data, mode='full')
     """
 
     def __init__(self, raw_data: pd.DataFrame,
@@ -303,7 +303,7 @@ class GPSearch:
         try:
             expr = Expression(ind.expression_str)
             signal = expr.generate(self.raw_data)
-            r = EngineCore.backtest(signal, self.raw_data, mode='fast',
+            r = SigEngine.backtest(signal, self.raw_data, mode='fast',
                                      start_date=self.start_date)
             ind.fitness = r.sharpe_ratio() or 0
             ind.sharpe = r.sharpe_ratio() or 0

@@ -17,7 +17,7 @@ signals/v4/validate/walkforward.py — Walk-Forward 滚动窗口验证
 import pandas as pd, numpy as np
 from typing import Dict, List
 from ..expression import Expression
-from ..engine import EngineCore
+from ..engine import SigEngine
 
 
 def validate_walkforward(expr_str: str, data: pd.DataFrame,
@@ -53,7 +53,7 @@ def validate_walkforward(expr_str: str, data: pd.DataFrame,
             signal = expr.generate(data[train_start:test_end])
             # 只取测试期部分
             test_signal = signal[test_start:test_end]
-            r = EngineCore.backtest(test_signal, data[test_start:test_end],
+            r = SigEngine.backtest(test_signal, data[test_start:test_end],
                                     mode='fast', symbol=symbol)
             dd_result = r.max_drawdown()
             results.append({

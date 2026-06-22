@@ -8,7 +8,7 @@ signals/v4/validate/single.py — 单信号标准回测验证
 """
 import pandas as pd
 from ..expression import Expression
-from ..engine import EngineCore
+from ..engine import SigEngine
 
 
 def validate_single(expr_str: str, data: pd.DataFrame,
@@ -30,6 +30,6 @@ def validate_single(expr_str: str, data: pd.DataFrame,
     """
     expr = Expression(expr_str)
     signal = expr.generate(data)
-    return EngineCore.backtest(signal, data, mode='full',
+    return SigEngine.backtest(signal, data, mode='full',
                                symbol=symbol, start_date=start_date,
                                bench_label=bench_label)

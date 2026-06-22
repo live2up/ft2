@@ -23,8 +23,8 @@
 import sys; sys.path.insert(0, r'd:\01-Doc\Quant\ft2')
 from core import Engine, AccountAnalyzer, context, OrderSide, BenchHolder
 from notebook import Notebook
-from factor.v4 import FactorExpression, FactorLibrary, FactorValidator  # v4 推荐
-from signals.v4 import Expression, EngineCore  # v4 推荐 (AST DSL)
+from factor.v4 import FacEngine, FactorExpression, FactorLibrary, FactorValidator  # v4 因子
+from signals.v4 import Expression, SigEngine  # v4 择时信号
 ```
 
 ## 数据约定
@@ -47,7 +47,7 @@ AI Agent 或外部项目调用 ft2 时，遵循以下原则保障上下文沟通
 | 场景 | ft2 规范 | 外部模块应使用 |
 |------|----------|---------------|
 | OHLCV 数据 | `data`（不是 `raw_data` / `df` / `klines`） | `data` |
-| 回测结果 | `analyzer` / `r`（不是 `result` / `backtest`） | `r = EngineCore.backtest(...)` |
+| 回测结果 | `analyzer` / `r`（不是 `result` / `backtest`） | `r = SigEngine.backtest(...)` |
 | 信号序列 | `signal`（不是 `sig` / `signals` / `pred`） | `signal` |
 | 额外特征 | `extra_features`（不是 `features` / `feats` / `ctx`） | `extra_features` |
 | 表达式字符串 | `expr` / `buy_expr` / `sell_expr` | `buy_expr` / `sell_expr` |
@@ -58,14 +58,14 @@ AI Agent 或外部项目调用 ft2 时，遵循以下原则保障上下文沟通
 
 ```python
 # 好 — 直接调 signals.v4，无中间函数
-from signals.v4 import stateful_signal, EngineCore
+from signals.v4 import stateful_signal, SigEngine
 signal = stateful_signal(data, buy_expr, sell_expr, max_hold=10)
-r = EngineCore.backtest(signal, data, mode='fast')
+r = SigEngine.backtest(signal, data, mode='fast')
 
 # 坏 — 又包一层，Agent 需要学两套 API
 def my_backtest(data, b, s):
     sig = stateful_signal(data, b, s)
-    return EngineCore.backtest(sig, data)
+    return SigEngine.backtest(sig, data)
 r = my_backtest(data, buy_expr, sell_expr)
 ```
 
@@ -74,7 +74,7 @@ r = my_backtest(data, buy_expr, sell_expr)
 ```python
 # 好 — 参数显式传递
 signal = stateful_signal(data, buy_expr, sell_expr, extra_features=ef)
-r = EngineCore.backtest(signal, data, mode='fast', start_date=start_date)
+r = SigEngine.backtest(signal, data, mode='fast', start_date=start_date)
 
 # 坏 — 依赖闭包变量，模板复制后跑不通
 def stateful_engine(data, buy, sell):
@@ -99,11 +99,11 @@ def my_correlation(signals, data):
 
 ```python
 # 好 — 直接从 v4 导入
-from signals.v4 import stateful_signal, EngineCore
+from signals.v4 import stateful_signal, SigEngine
 
 # 坏 — 多层 import 跳转
 from signals.v4.expression import stateful_signal
-from signals.v4.engine import EngineCore
+from signals.v4.engine import SigEngine
 ```
 
 ### 6. 调用链不超过 2 层

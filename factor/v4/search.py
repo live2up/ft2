@@ -86,7 +86,7 @@ class FactorGridSearch:
             List[GridSearchResult]: 按 Sharpe 降序排列的结果
         """
         from .validator import FactorValidator
-        from .engine import EngineCore
+        from .engine import FacEngine
 
         if freqs is None:
             freqs = ['ME', 'W']
@@ -127,8 +127,8 @@ class FactorGridSearch:
             if ic_mean is None or np.isnan(ic_mean):
                 continue
 
-            # [重构] 2026-06-18 FactorPipeline → EngineCore.backtest(mode='fast')
-            analyzer = EngineCore.backtest(fv, returns=self.returns,
+            # [重构] 2026-06-18 FactorPipeline → FacEngine.backtest(mode='fast')
+            analyzer = FacEngine.backtest(fv, returns=self.returns,
                                            top_n=top_n, rebalance=scheduler, mode='fast')
 
             result = GridSearchResult(
@@ -212,7 +212,7 @@ class FactorBOSearch:
         Returns:
             Dict: {'best_params', 'best_score', 'all_results'}
         """
-        from .engine import EngineCore
+        from .engine import FacEngine
 
         # [重构] 2026-06-05 使用 parse_scheduler 统一入口
         scheduler = parse_scheduler(freq)
@@ -224,8 +224,8 @@ class FactorBOSearch:
             fv = factor_fn(*params_tuple)
             if fv is None:
                 return FAILURE_PENALTY
-            # [重构] 2026-06-18 FactorPipeline → EngineCore.backtest(mode='fast')
-            analyzer = EngineCore.backtest(fv, returns=self.returns,
+            # [重构] 2026-06-18 FactorPipeline → FacEngine.backtest(mode='fast')
+            analyzer = FacEngine.backtest(fv, returns=self.returns,
                                            top_n=top_n, rebalance=scheduler, mode='fast')
             return -analyzer.sharpe_ratio()  # minimize negative Sharpe
 

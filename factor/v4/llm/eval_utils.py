@@ -142,8 +142,8 @@ def quick_sharpe(expression: str,
     Returns:
         年化 Sharpe
     """
-    from factor.v4.engine import EngineCore
+    from factor.v4.engine import FacEngine
 
     ranked = quick_rank_panel(expression, assets)
-    analyzer = EngineCore.backtest(ranked, assets, top_n=top_n, rebalance=rebalance)
+    analyzer = FacEngine.backtest(ranked, assets, top_n=top_n, rebalance=rebalance)
     return analyzer.sharpe_ratio()

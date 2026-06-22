@@ -1,7 +1,7 @@
 """
 signals/v4/search/grid.py — 参数网格搜索 (v4)
 =============================================================================
-基于 ? 占位符模板的笛卡尔积展开 + v4 EngineCore.backtest(mode='fast|full')。
+基于 ? 占位符模板的笛卡尔积展开 + v4 SigEngine.backtest(mode='fast|full')。
 
 [修复] 2026-06-22 修正 docstring 标签 (v3→v4)
 =============================================================================
@@ -12,7 +12,7 @@ import pandas as pd
 from typing import Dict, List, Any
 
 from ..expression import Expression
-from ..engine import EngineCore
+from ..engine import SigEngine
 
 
 class GridSearch:
@@ -68,7 +68,7 @@ class GridSearch:
                     signal = expr.generate(self.data)
 
                     if mode == 'fast':
-                        bt = EngineCore.backtest(
+                        bt = SigEngine.backtest(
                             signal, self.data, symbol=self.symbol,
                             mode='fast', start_date=self.start_date)
                         dd = bt.max_drawdown()
@@ -83,7 +83,7 @@ class GridSearch:
                         success = True
                         break
                     else:
-                        analyzer = EngineCore.backtest(
+                        analyzer = SigEngine.backtest(
                             signal, self.data, symbol=self.symbol,
                             mode='full', start_date=self.start_date)
                         dd = analyzer.max_drawdown()

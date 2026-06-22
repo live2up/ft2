@@ -11,12 +11,12 @@
 | 版本 | 状态 | 说明 |
 |------|------|------|
 | **v4** | **主力** | signals.v4 AST DSL + ft2.core Engine + 72 原语, 探索灵活, `from factor.v4 import ...` |
-| v3 | 保留 | 仅供历史测试对照，自研 Parser + 23 原语，回测已统一到 ft2.core (FactorEngineCore) |
+| v3 | 保留 | 仅供历史测试对照，自研 Parser + 23 原语，回测已统一到 ft2.core (FactorFacEngine) |
 
 ## v4 核心变革
 
 ```
-v3:  自研Parser → 23原语 → FactorEngineCore (ft2.core) → FactorExpression
+v3:  自研Parser → 23原语 → FactorFacEngine (ft2.core) → FactorExpression
      问题: 语法自定义(add/sub/mul), 原语少, Parser维护成本高
 
 v4:  signals.v4 AST DSL → 72原语实时计算 → ft2.core Engine回测 → FactorExpression
@@ -32,7 +32,7 @@ v4:  signals.v4 AST DSL → 72原语实时计算 → ft2.core Engine回测 → F
                    ▼              ▼                    ▼
            factor/v4/      signals/v4/          factor/v4/
            expression.py    Expression           engine.py
-           FactorExpression + rank_panel         EngineCore
+           FactorExpression + rank_panel         FacEngine
            (薄包装层)       (AST DSL)            fast/full 双模式
                    │              │                    │
                    └──────┬───────┘                    │
@@ -58,7 +58,7 @@ factor/
 ├── v4/                     # 主力 ←
 │   ├── __init__.py         # 统一导出
 │   ├── expression.py       # FactorExpression (基于 signals.v4 AST DSL)
-│   ├── engine.py           # EngineCore (fast/full 双模式, ft2.core 驱动)
+│   ├── engine.py           # FacEngine (fast/full 双模式, ft2.core 驱动)
 │   ├── gp_engine.py       # GP 因子组合优化引擎 (Python AST 原生, 种子驱动)
 │   ├── validator.py        # IC/IR/Bootstrap 检验
 │   ├── search.py           # 网格搜索 + 贝叶斯优化
@@ -85,17 +85,17 @@ factor/
 ### 0. 导入规范
 
 ```python
-from factor.v4 import FactorExpression, EngineCore, FactorLibrary
+from factor.v4 import FactorExpression, FacEngine, FactorLibrary
 
 # 表达式 → 因子面板 → 回测 → 报告 (一站式)
 from signals.v4 import Expression
 expr = Expression("cs_rank(ts_roc(CLOSE, 20))")
 panel = expr.rank_panel(assets)                              # 因子排名面板
-result = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
+result = FacEngine.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
 # result.sharpe_ratio(), result.annualized_return(), result.max_drawdown()
 
 # full 模式: 验证 + 报告
-analyzer = EngineCore.backtest(panel, assets, mode='full', top_n=3,
+analyzer = FacEngine.backtest(panel, assets, mode='full', top_n=3,
                                rebalance='W', bench_label='000300.SH')
 analyzer.to_notebook("因子轮动回测")
 ```
@@ -124,23 +124,23 @@ expr.complexity   # AST 节点数
 - 数学: `abs log sqrt sign exp tanh sigmoid ...`
 - Python 原生: `+ - * / > < and or not a if cond else b`
 
-### 2. EngineCore — 因子轮动回测
+### 2. FacEngine — 因子轮动回测
 
 ```python
-from factor.v4 import EngineCore
+from factor.v4 import FacEngine
 
 # fast 模式: 搜索 (~400ms/次, 1566天5品种) — 引擎内部走 Engine.run_fast() + FastAccount
-analyzer = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
+analyzer = FacEngine.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
 # → AccountAnalyzer (sharpe_ratio()=1.16, annualized_return()=0.148, max_drawdown()=(-0.10,...))
 
 # full 模式: 验证 + 报告 — 引擎内部走 Engine.run() + AccountManager, 完整快照+交易记录
-analyzer = EngineCore.backtest(panel, assets, mode='full', top_n=3,
+analyzer = FacEngine.backtest(panel, assets, mode='full', top_n=3,
                                rebalance='W', bench_label='000300.SH',
                                buffer=2)                        # 缓冲区: 持仓滑出 top_n+2 名才卖
 analyzer.to_notebook("因子轮动")
 ```
 
-**EngineCore.backtest() 参数说明：**
+**FacEngine.backtest() 参数说明：**
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
@@ -249,8 +249,8 @@ len(BASIC_FACTORS)  # 20    因子原子基元
 |------|----|----|
 | 表达式语法 | 自研 `add/sub/mul` | **Python 原生 `+ - * /`** |
 | 原语数 | 23 | **72 (与 signals 共享)** |
-| 回测引擎 | FactorEngineCore (ft2.core) | **EngineCore (ft2.core, 同 signals)** |
-| 因子面板回测 | FactorEngineCore (fast/full) | **EngineCore (fast/full + buffer)** |
+| 回测引擎 | FactorFacEngine (ft2.core) | **FacEngine (ft2.core, 同 signals)** |
+| 因子面板回测 | FactorFacEngine (fast/full) | **FacEngine (fast/full + buffer)** |
 | 截面排名 | cs_zscore(window) | **cs_rank / evaluate_ranked()** |
 | LLM 友好度 | 需学自定义语法 | **原生 Python，即学即用** |
 
@@ -275,10 +275,10 @@ len(BASIC_FACTORS)  # 20    因子原子基元
 
 ## 注意事项
 
-- **v4 主力**：`from factor.v4 import FactorExpression, EngineCore, FactorLibrary`
+- **v4 主力**：`from factor.v4 import FactorExpression, FacEngine, FactorLibrary`
 - v3 保留，回测已统一到 ft2.core，语法仍为自研 Parser
 - FactorExpression 是 signals.v4 Expression 的薄包装层，语法完全一致
-- EngineCore 与 signals.v4 EngineCore 架构对齐，fast/full 双模式，均返回 AccountAnalyzer
+- FacEngine 与 signals.v4 FacEngine 架构对齐，fast/full 双模式，均返回 AccountAnalyzer
 - fast 模式内部走 `core.Engine.run_fast()` + `FastAccount`，不生成快照/交易记录；ctx.account 接口与 full 统一
 - 截面排名推荐使用 `evaluate_ranked()` 或 `Expression.rank_panel()`
 - 72 原语覆盖 WorldQuant 时序算子的 96%，截面 100%

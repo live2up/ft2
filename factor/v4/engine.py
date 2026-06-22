@@ -2,20 +2,20 @@
 """
 factor/v4/engine.py — 因子轮动回测引擎 (ft2.core 驱动)
 
-对齐 signals/v4 EngineCore 架构:
+对齐 signals/v4 FacEngine 架构:
   full   — Engine.run() + AccountManager.order_percent() → AccountAnalyzer (完整指标/交易记录/notebook)
   fast   — Engine.run_fast() + FastAccount.order_percent() → AccountAnalyzer (~400ms/次, 1566天5品种)
   vector — 纯矩阵向量化, 跳过事件驱动循环 → AccountAnalyzer (~50~100x 快于 full)
 
 用法:
-  from factor.v4 import EngineCore
+  from factor.v4 import FacEngine
 
   # 三种模式统一返回 AccountAnalyzer，调用接口一致
-  analyzer = EngineCore.backtest(panel, assets, mode='vector', top_n=3, rebalance='W')
+  analyzer = FacEngine.backtest(panel, assets, mode='vector', top_n=3, rebalance='W')
   print(analyzer.sharpe_ratio(), analyzer.max_drawdown(), analyzer.metrics())
 
   # full 模式 — 验证 + 报告
-  analyzer = EngineCore.backtest(panel, assets, mode='full', top_n=3, rebalance='W')
+  analyzer = FacEngine.backtest(panel, assets, mode='full', top_n=3, rebalance='W')
   analyzer.to_notebook("因子轮动回测")
 """
 import numpy as np
@@ -32,10 +32,10 @@ from core.analyzer import AccountAnalyzer
 
 
 
-class EngineCore:
+class FacEngine:
     """因子轮动回测引擎 — ft2.core 驱动, full/fast/vector 三模式
 
-    对齐 signals/v4 EngineCore:
+    对齐 signals/v4 FacEngine:
       - full:   AccountManager.order_percent() → AccountAnalyzer
       - fast:   FastAccount, 无 TradeRecord/snapshots
       - vector: 纯矩阵向量化, 跳过事件驱动循环
@@ -80,18 +80,18 @@ class EngineCore:
         """
         # 数据源: assets 优先, 否则从 returns 合成
         if assets is None and returns is not None:
-            assets = EngineCore._synthetic_assets(returns)
+            assets = FacEngine._synthetic_assets(returns)
         elif assets is None:
             raise ValueError("需要 assets 或 returns 参数")
 
         if mode == 'vector':
-            return EngineCore._run_vectorized(panel, assets, top_n, rebalance,
+            return FacEngine._run_vectorized(panel, assets, top_n, rebalance,
                                              initial_capital, start_date, buffer, fee_config)
         elif mode == 'fast':
-            return EngineCore._run_fast(panel, assets, top_n, rebalance,
+            return FacEngine._run_fast(panel, assets, top_n, rebalance,
                                        initial_capital, start_date, buffer, fee_config)
         else:
-            return EngineCore._run_full(panel, assets, top_n, rebalance,
+            return FacEngine._run_full(panel, assets, top_n, rebalance,
                                        initial_capital, start_date, bench_label, buffer, fee_config)
 
     # ============================================================
@@ -102,11 +102,11 @@ class EngineCore:
     def _run_full(panel, assets, top_n, rebalance, initial_capital, start_date,
                   bench_label, buffer=0, fee_config=None):
         """full 模式: Engine.run() + AccountManager.order_percent()"""
-        panel = EngineCore._prepare_panel(panel, start_date)
+        panel = FacEngine._prepare_panel(panel, start_date)
         dates = panel.index.sort_values()
         symbols = panel.columns.tolist()
 
-        rebalance_set = EngineCore._make_rebalance_set(dates, rebalance)
+        rebalance_set = FacEngine._make_rebalance_set(dates, rebalance)
 
         engine = Engine(init_cash=initial_capital, fee_config=fee_config)
         context.mode = 'backtest'
@@ -231,11 +231,11 @@ class EngineCore:
     def _run_fast(panel, assets, top_n, rebalance, initial_capital, start_date,
                   buffer=0, fee_config=None):
         """fast 模式: ctx.account 下单 (指向 FastAccount) → AccountAnalyzer"""
-        panel = EngineCore._prepare_panel(panel, start_date)
+        panel = FacEngine._prepare_panel(panel, start_date)
         dates = panel.index.sort_values()
         symbols = panel.columns.tolist()
 
-        rebalance_set = EngineCore._make_rebalance_set(dates, rebalance)
+        rebalance_set = FacEngine._make_rebalance_set(dates, rebalance)
 
         engine = Engine(init_cash=initial_capital, fee_config=fee_config)
         context.mode = 'backtest'
@@ -331,7 +331,7 @@ class EngineCore:
         连续权重近似 (无 lot_size)，费率模拟与 fast/full 对齐。
         调仓时序: 当日收盘后用旧权重计收益 → 调仓 → 记录净值 (与 _drive_timeline 一致)
         """
-        panel = EngineCore._prepare_panel(panel, start_date)
+        panel = FacEngine._prepare_panel(panel, start_date)
         dates = panel.index.sort_values()
         symbols = panel.columns.tolist()
         symbols_set = set(symbols)
@@ -347,7 +347,7 @@ class EngineCore:
         returns_arr = np.nan_to_num(returns_arr, nan=0.0)
 
         # 调仓日
-        rebalance_set = EngineCore._make_rebalance_set(dates, rebalance)
+        rebalance_set = FacEngine._make_rebalance_set(dates, rebalance)
         use_buffer = buffer > 0
         buffer_rank = top_n + buffer
 

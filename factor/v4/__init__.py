@@ -9,7 +9,7 @@ factor/v4 — 因子发现引擎 (基于 signals.v4 AST DSL + ft2.core Engine)
 
 模块结构:
   base.py          — FactorLibrary + FactorMetadata
-  engine.py        — EngineCore (ft2.core Engine 驱动, fast/full 双模式, 统一返回 AccountAnalyzer)
+  engine.py        — FacEngine (ft2.core Engine 驱动, fast/full 双模式, 统一返回 AccountAnalyzer)
   expression.py    — FactorExpression (基于 signals.v4 AST DSL)
   gp_engine.py     — GP 因子组合优化引擎 (Python AST 原生, 种子驱动)
   validator.py     — IC/IR/Bootstrap 检验
@@ -20,10 +20,10 @@ factor/v4 — 因子发现引擎 (基于 signals.v4 AST DSL + ft2.core Engine)
   formulas/        — 公式库 (WQ101/GT191，语法适配 V4)
 
 Quick Start:
-  >>> from factor.v4 import FactorExpression, EngineCore, FactorLibrary, GPEngine
+  >>> from factor.v4 import FactorExpression, FacEngine, FactorLibrary, GPEngine
   >>> expr = FactorExpression("cs_rank(ts_roc(CLOSE, 20))")
   >>> panel = expr.evaluate_ranked(data_dict)   # ndarray(T,N) 截面排名
-  >>> result = EngineCore.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
+  >>> result = FacEngine.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
 """
 
 # ── base (v4 独立版) ──
@@ -34,7 +34,7 @@ from .base import (
 )
 
 # ── engine ──
-from .engine import EngineCore
+from .engine import FacEngine
 
 # ── expression ──
 from .expression import FactorExpression
@@ -49,7 +49,7 @@ from .cache import FactorCacheStore
 from .gp_engine import GPEngine, Individual
 
 __all__ = [
-    'EngineCore',
+    'FacEngine',
     'FactorExpression',
     'GPEngine', 'Individual',
     'FactorCategory', 'FactorMetadata', 'FactorLibrary',

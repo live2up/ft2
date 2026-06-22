@@ -6,7 +6,7 @@ factor/v4/industry_fitness.py — 行业轮动自适应适应度
   N 50~100: 宽松IC门控 + Pipeline Sharpe (IC半可信)
   N ≥ 100:  WQB风格IC门控 + Pipeline Sharpe (IC可信)
 
-Sharpe计算: 使用 ft2.core EngineCore (fast 模式) 替代 FactorPipeline
+Sharpe计算: 使用 ft2.core FacEngine (fast 模式) 替代 FactorPipeline
   - 日期+标的交集对齐、NaN→0、逐日累乘净值、√252年化
   - 调仓周期由scheduler/rebalance参数控制
 
@@ -16,7 +16,7 @@ IC门控: 根据截面宽度N自适应
   N ≥ 100:  ICIR + HR + 分年度稳定性(严格, WQB风格)
 
 [新增] 2026-06-05
-[重构] 2026-06-18 FactorPipeline → EngineCore.backtest(mode='fast')
+[重构] 2026-06-18 FactorPipeline → FacEngine.backtest(mode='fast')
 """
 
 import logging
@@ -148,26 +148,26 @@ class IndustryFitness(FitnessCalculator):
         self._N = self._shape[1]  # 截面宽度
 
     def _pipeline_sharpe(self, factor_values: np.ndarray) -> float:
-        """EngineCore fast Sharpe — 替代 FactorPipeline
+        """FacEngine fast Sharpe — 替代 FactorPipeline
 
-        [重构] 2026-06-18 FactorPipeline → EngineCore.backtest(mode='fast')
+        [重构] 2026-06-18 FactorPipeline → FacEngine.backtest(mode='fast')
         """
         if self.returns is None:
             return -999.0
 
         T, N = factor_values.shape
         try:
-            from .engine import EngineCore
+            from .engine import FacEngine
             fv_df = pd.DataFrame(factor_values,
                                  index=self.returns.index[:T],
                                  columns=self.returns.columns[:N])
             rebalance = self.scheduler if self.scheduler is not None else 'ME'
             _top_n = getattr(self.allocator, 'top_n', self.top_n) if self.allocator is not None else self.top_n
-            analyzer = EngineCore.backtest(fv_df, returns=self.returns,
+            analyzer = FacEngine.backtest(fv_df, returns=self.returns,
                                            top_n=_top_n, rebalance=rebalance, mode='fast')
             return float(analyzer.sharpe_ratio())
         except Exception as e:
-            logger.debug(f"IndustryFitness EngineCore Sharpe失败: {e}")
+            logger.debug(f"IndustryFitness FacEngine Sharpe失败: {e}")
             return -999.0
 
     def _ic_gate(self, factor_values: np.ndarray) -> Tuple[bool, Dict[str, float]]:
