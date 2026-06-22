@@ -68,68 +68,68 @@ def _persist(x: np.ndarray, n: int) -> np.ndarray:
 # 时序函数
 # ============================================================
 
-def ts_mean(x, w):       return _rolling(x, w, np.mean)
-def ts_std(x, w):        return _rolling(x, w, lambda a: np.std(a, ddof=0))
-def ts_sum(x, w):        return _rolling(x, w, np.sum)
-def ts_max(x, w):        return _rolling(x, w, np.max)
-def ts_min(x, w):        return _rolling(x, w, np.min)
-def ts_median(x, w):     return _rolling(x, w, np.median)
+def ts_mean(x, d):       return _rolling(x, d, np.mean)
+def ts_std(x, d):        return _rolling(x, d, lambda a: np.std(a, ddof=0))
+def ts_sum(x, d):        return _rolling(x, d, np.sum)
+def ts_max(x, d):        return _rolling(x, d, np.max)
+def ts_min(x, d):        return _rolling(x, d, np.min)
+def ts_median(x, d):     return _rolling(x, d, np.median)
 
-def ts_delta(x, w):
+def ts_delta(x, d):
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
-    r[w:] = x[w:] - x[:-w]; return r
+    r[d:] = x[d:] - x[:-d]; return r
 
-def ts_delay(x, w):
+def ts_delay(x, d):
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
-    r[w:] = x[:-w]; return r
+    r[d:] = x[:-d]; return r
 
-def ts_rank(x, w):
-    return _rolling(x, w, lambda a: (np.searchsorted(np.sort(a), a[-1]) + 1) / len(a))
+def ts_rank(x, d):
+    return _rolling(x, d, lambda a: (np.searchsorted(np.sort(a), a[-1]) + 1) / len(a))
 
-def ts_corr(x, y, w):
+def ts_corr(x, y, d):
     x, y = np.asarray(x, float), np.asarray(y, float)
     r = np.full_like(x, np.nan)
-    for i in range(w - 1, len(x)):
-        xw = x[i - w + 1 : i + 1]; yw = y[i - w + 1 : i + 1]
+    for i in range(d - 1, len(x)):
+        xw = x[i - d + 1 : i + 1]; yw = y[i - d + 1 : i + 1]
         sx, sy = np.std(xw, ddof=0), np.std(yw, ddof=0)
         r[i] = 0.0 if sx < 1e-10 or sy < 1e-10 else np.corrcoef(xw, yw)[0, 1]
     return r
 
-def ts_cov(x, y, w):
+def ts_cov(x, y, d):
     """Rolling covariance"""
     x, y = np.asarray(x, float), np.asarray(y, float)
     r = np.full_like(x, np.nan)
-    for i in range(w - 1, len(x)):
-        xw = x[i - w + 1 : i + 1]; yw = y[i - w + 1 : i + 1]
+    for i in range(d - 1, len(x)):
+        xw = x[i - d + 1 : i + 1]; yw = y[i - d + 1 : i + 1]
         r[i] = np.cov(xw, yw, ddof=0)[0, 1]
     return r
 
-def ts_skew(x, w):
+def ts_skew(x, d):
     def f(a):
         s = np.std(a, ddof=0)
         return 0.0 if s < 1e-10 else np.mean(((a - np.mean(a)) / s) ** 3)
-    return _rolling(x, w, f)
+    return _rolling(x, d, f)
 
-def ts_kurt(x, w):
+def ts_kurt(x, d):
     def f(a):
         s = np.std(a, ddof=0)
         return 0.0 if s < 1e-10 else np.mean(((a - np.mean(a)) / s) ** 4) - 3.0
-    return _rolling(x, w, f)
+    return _rolling(x, d, f)
 
-def ts_argmax(x, w):
-    return _rolling(x, w, lambda a: len(a) - 1 - np.argmax(a))
+def ts_argmax(x, d):
+    return _rolling(x, d, lambda a: len(a) - 1 - np.argmax(a))
 
-def ts_argmin(x, w):
-    return _rolling(x, w, lambda a: len(a) - 1 - np.argmin(a))
+def ts_argmin(x, d):
+    return _rolling(x, d, lambda a: len(a) - 1 - np.argmin(a))
 
-def ts_roc(x, w):
-    """Rate of change: (x[t]-x[t-w])/x[t-w]"""
+def ts_roc(x, d):
+    """Rate of change: (x[t]-x[t-d])/x[t-d]"""
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
-    r[w:] = (x[w:] - x[:-w]) / np.where(np.abs(x[:-w]) > 1e-10, x[:-w], np.nan)
+    r[d:] = (x[d:] - x[:-d]) / np.where(np.abs(x[:-d]) > 1e-10, x[:-d], np.nan)
     return r
 
 def ts_zscore(x, d):
-    """Rolling Z-score: (x-mu)/sigma"""
+    """[修复] 2026-06-22 参数名统一为 d (对齐 WQ101 行业标准)"""
     mu = ts_mean(x, d); sg = ts_std(x, d)
     return np.where(sg > 1e-10, (np.asarray(x, float) - mu) / sg, 0)
 
@@ -170,6 +170,12 @@ def ts_product(x, d):
 
 def ts_regression(y, x, d, rettype=2):
     """Rolling linear regression: y = alpha + beta*x + eps
+    
+    Args:
+        y: 因变量
+        x: 自变量
+        d: 窗口
+        rettype: 0=斜率, 1=截距, 2=残差, 3=预测值, 4=R²
     """
     y, x = np.asarray(y, float), np.asarray(x, float)
     r = np.full_like(y, np.nan)
@@ -518,7 +524,7 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'ts_argmax': ts_argmax, 'ts_argmin': ts_argmin,
     'ts_roc':    ts_roc,
     'ts_cov':      ts_cov,
-    'ts_var':      lambda x, w: ts_std(x, w) ** 2,
+    'ts_var':      lambda x, d: ts_std(x, d) ** 2,
     'ts_logret':   lambda x: safe_log(x / ts_delay(x, 1)),
     'ts_zscore':   ts_zscore,
     'ts_scale':    ts_scale,

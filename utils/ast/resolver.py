@@ -32,11 +32,11 @@ from .dsl import normalize_data_keys
 # ============================================================
 
 def _is_cs_function(name: str) -> bool:
-    """运行时检测: 是否为截面函数 (支持 register_function 热注册)"""
+    """[新增] 2026-06-22 运行时动态检测: 是否为截面函数 (支持 register_function 热注册)"""
     return name.startswith('cs_') and name in FUNC_REGISTRY
 
 def _get_cs_functions() -> Set[str]:
-    """获取当前所有 cs_* 函数名 (调试用)"""
+    """[新增] 2026-06-22 获取当前所有 cs_* 函数名 (调试用)"""
     return {name for name in FUNC_REGISTRY if name.startswith('cs_')}
 
 
