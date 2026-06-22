@@ -37,7 +37,7 @@ from .registry import (
 )
 from .resolver import (
     CsResolver,
-    CROSS_SECTIONAL_FUNCTIONS,
+    _get_cs_functions,
     _has_any_cs,
     _is_outer_cs_rank_call,
     _eval_colwise,
@@ -52,6 +52,6 @@ __all__ = [
     'register_function', 'register_variable',
     'unregister_function', 'unregister_variable',
     # resolver
-    'CsResolver', 'CROSS_SECTIONAL_FUNCTIONS',
+    'CsResolver', '_get_cs_functions',
     '_has_any_cs', '_is_outer_cs_rank_call', '_eval_colwise',
 ]

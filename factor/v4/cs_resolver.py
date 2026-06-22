@@ -6,7 +6,7 @@ factor/v4/cs_resolver.py — 兼容重导出
 """
 from utils.ast.resolver import (
     CsResolver,
-    CROSS_SECTIONAL_FUNCTIONS,
+    _get_cs_functions,
     _has_any_cs,
     _is_outer_cs_rank_call,
     _eval_colwise,
@@ -15,7 +15,7 @@ from utils.ast.resolver import (
 
 __all__ = [
     'CsResolver',
-    'CROSS_SECTIONAL_FUNCTIONS',
+    '_get_cs_functions',
     '_has_any_cs',
     '_is_outer_cs_rank_call',
     '_eval_colwise',

@@ -28,13 +28,16 @@ from .registry import FUNC_REGISTRY
 from .dsl import normalize_data_keys
 
 # ============================================================
-# 截面函数注册表 — 自动从 FUNC_REGISTRY 发现所有 cs_* 函数
+# 截面函数检测 — 运行时动态查询 FUNC_REGISTRY (支持热注册)
 # ============================================================
 
-CROSS_SECTIONAL_FUNCTIONS: Set[str] = {
-    name for name in FUNC_REGISTRY
-    if name.startswith('cs_')
-}
+def _is_cs_function(name: str) -> bool:
+    """运行时检测: 是否为截面函数 (支持 register_function 热注册)"""
+    return name.startswith('cs_') and name in FUNC_REGISTRY
+
+def _get_cs_functions() -> Set[str]:
+    """获取当前所有 cs_* 函数名 (调试用)"""
+    return {name for name in FUNC_REGISTRY if name.startswith('cs_')}
 
 
 # ============================================================
@@ -170,7 +173,7 @@ class _CSVisitor(ast.NodeTransformer):
 
         # 2. 检查当前节点是否为截面函数
         if not (isinstance(node.func, ast.Name)
-                and node.func.id in CROSS_SECTIONAL_FUNCTIONS
+                and _is_cs_function(node.func.id)
                 and node.args):
             return node
 
@@ -197,21 +200,21 @@ def _is_outer_cs_rank_call(tree: ast.Expression) -> bool:
 
 
 def _has_any_cs(tree: ast.Expression) -> bool:
-    """检测 AST 中是否包含任意注册的截面函数"""
+    """检测 AST 中是否包含任意注册的截面函数 (运行时动态查询)"""
     for node in ast.walk(tree):
         if (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id in CROSS_SECTIONAL_FUNCTIONS):
+                and _is_cs_function(node.func.id)):
             return True
     return False
 
 
 def _has_any_cs_in_expr(expr_node) -> bool:
-    """检测表达式节点子树中是否包含截面函数 (不检查自身)"""
+    """检测表达式节点子树中是否包含截面函数 (不检查自身, 运行时动态查询)"""
     for node in ast.walk(expr_node):
         if (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id in CROSS_SECTIONAL_FUNCTIONS):
+                and _is_cs_function(node.func.id)):
             return True
     return False
 
