@@ -28,6 +28,9 @@ class Engine:
         self.bar_data_set = set()
         self.account = AccountManager(init_cash=init_cash, fee_config=fee_config)
         self.fast_account = None  # 每次 run_fast() 时重建
+        # [新增] 2026-06-23 代码→品种名称映射，由 add_data(symbol_name=...) 填充
+        #   _drive_timeline 启动时注入到 account._symbol_names，analyzer 报告查表显示
+        self._symbol_names: dict = {}
 
     def set_cache_count(self, cache_count):
         self.cache_count = cache_count
@@ -57,9 +60,46 @@ class Engine:
             self._add_data_to_cache(bar["symbol"], bar["frequency"], bar)
             self.bar_data_set.add(kk)
 
-    def add_data(self, symbol, freq, data):
+    def add_data(self, symbol, freq, data, symbol_name=None):
+        """加载数据到时间线
+
+        [新增] 2026-06-23 symbol_name 参数：品种名称（可选）
+            传入后记录到 self._symbol_names，_drive_timeline 启动时注入到 account._symbol_names，
+            analyzer 报告时查表显示品种名称。
+            名称不进入 bar（策略 on_bar 不需要），不进入 TradeRecord（交易记录保持纯净），
+            仅作为元数据流向 analyzer 报告。
+            不传时名称表为空，analyzer 不显示名称列，行为与改动前一致。
+
+        自动适配数据源：
+            若未显式传入 symbol_name，但 data 含 'symbol_name' 或 'name' 列，则自动提取。
+            优先级：显式参数 > symbol_name列 > name列 > 空
+        """
+        # [新增] 2026-06-23 自动适配数据源：未显式传参时，从 data 列提取品种名称
+        #   优先级：显式 symbol_name > df['symbol_name'] > df['name'] > 空
+        #   [修复] 2026-06-23 NaN 值过滤 + DataFrame/list fallback 行为统一 + 空 df 防御
+        if symbol_name is None:
+            if isinstance(data, pd.DataFrame):
+                if len(data) > 0:
+                    val = data.iloc[0].get('symbol_name')
+                    if pd.isna(val) or not val:
+                        val = data.iloc[0].get('name')
+                    if pd.notna(val) and val:
+                        symbol_name = val
+            elif isinstance(data, list) and data:
+                first = data[0]
+                val = first.get('symbol_name')
+                if pd.isna(val) or not val:
+                    val = first.get('name')
+                if pd.notna(val) and val:
+                    symbol_name = val
+
         if isinstance(data, pd.DataFrame):
             data = data.to_dict('records')
+
+        # [新增] 2026-06-23 记录品种名称到名称表，供 _drive_timeline 注入到 account
+        #   名称不注入 bar，不进入 TradeRecord，仅作为元数据供 analyzer 查表
+        if symbol_name:
+            self._symbol_names[symbol] = str(symbol_name)
 
         params = context.get_subscribe_params(symbol, freq)
         if params is None:
@@ -175,6 +215,11 @@ class Engine:
         context._active_engine = self
 
         try:
+            # [新增] 2026-06-23 注入品种名称表到 account，analyzer 报告时查表显示品种名称
+            #   FastAccount 无 _symbol_names 属性，hasattr 守卫跳过；run_fast 模式下名称不参与回测
+            if hasattr(self.account, '_symbol_names'):
+                self.account._symbol_names = self._symbol_names
+
             _add_bar = self._add_bar2bar_data_cache
             _snapshot = self.account.take_snapshot if snapshot else None
 

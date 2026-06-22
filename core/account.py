@@ -162,6 +162,9 @@ class AccountManager:
             'stamp_tax_rate': 0.0,
             'min_commission': 0.0,
         }
+        # [新增] 2026-06-23 代码→品种名称映射，由 Engine._drive_timeline 注入
+        #   _process_order 创建 TradeRecord 时自动查表填充 symbol_name，策略层无感知
+        self._symbol_names: Dict[str, str] = {}
 
     # ------------------------------------------------------------------------
     # 快照操作

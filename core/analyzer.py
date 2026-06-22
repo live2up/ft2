@@ -1177,11 +1177,20 @@ class AccountAnalyzer:
 
         has_bench = bool(self._bench_assets and has_bench_data)
 
+        # [重构] 2026-06-23 has_notes/has_names 统一计算，消除 to_notebook/to_excel 重复
+        #   has_names 直接检查 account._symbol_names 名称表是否空白（权威来源），
+        #   不遍历 TradeRecord.symbol_name —— 名称表是 Engine.add_data 传入的原始映射
+        records = self.account.trade_records if (self.account and self.account.trade_records) else []
+        has_notes = any(getattr(t, 'note', '') for t in records)
+        symbol_names = getattr(self.account, '_symbol_names', {}) if self.account else {}
+        has_names = bool(symbol_names)
+
         return {
             'nav_values': nav_values, 'dates': dates, 'info_m': info_m,
             'grouped': grouped, 'base_items': base_items, 'has_records': has_records,
             'has_bench': has_bench, 'cmp_rows': cmp_rows, 'bench_label': bench_label,
             'common_dates': common_dates, 'strat_vals': strat_vals, 'bench_vals': bench_vals,
+            'has_notes': has_notes, 'has_names': has_names, 'symbol_names': symbol_names,
         }
 
     # ------------------------------------------------------------------------
@@ -1233,17 +1242,23 @@ class AccountAnalyzer:
 
         if d['has_records']:
             trades = []
-            has_notes = any(getattr(t, 'note', '') for t in self.account.trade_records)
+            has_notes = d['has_notes']
+            # [新增] 2026-06-23 直接用 account._symbol_names 名称表查表显示
+            #   has_names 检查名称表是否空白，渲染时按 symbol 查表
+            has_names = d['has_names']
+            symbol_names = d['symbol_names']
             for t in self.account.trade_records:
                 row = {
                     '日期': t.created_at.strftime('%Y-%m-%d %H:%M'),
                     '标的': t.symbol,
-                    '方向': '买入' if t.side == 1 else '卖出',
-                    '价格': t.price,
-                    '数量': t.volume,
-                    '金额': round(t.amount, 2),
-                    '手续费': round(t.fee, 2),
                 }
+                if has_names:
+                    row['名称'] = symbol_names.get(t.symbol, '')
+                row['方向'] = '买入' if t.side == 1 else '卖出'
+                row['价格'] = t.price
+                row['数量'] = t.volume
+                row['金额'] = round(t.amount, 2)
+                row['手续费'] = round(t.fee, 2)
                 if has_notes:
                     row['备注'] = getattr(t, 'note', '')
                 trades.append(row)
@@ -1372,18 +1387,23 @@ class AccountAnalyzer:
 
         # ---------- Sheet 3: 交易记录 ----------
         trade_rows = []
-        has_notes = self.account and any(getattr(t, 'note', '') for t in self.account.trade_records)
+        has_notes = d['has_notes']
+        # [新增] 2026-06-23 直接用 account._symbol_names 名称表查表显示
+        has_names = d['has_names']
+        symbol_names = d['symbol_names']
         if self.account:
             for t in self.account.trade_records:
                 row = {
                     '日期': t.created_at.strftime('%Y-%m-%d %H:%M'),
                     '标的': t.symbol,
-                    '方向': '买入' if t.side == 1 else '卖出',
-                    '价格': t.price,
-                    '数量': t.volume,
-                    '金额': round(t.amount, 2),
-                    '手续费': round(t.fee, 2),
                 }
+                if has_names:
+                    row['名称'] = symbol_names.get(t.symbol, '')
+                row['方向'] = '买入' if t.side == 1 else '卖出'
+                row['价格'] = t.price
+                row['数量'] = t.volume
+                row['金额'] = round(t.amount, 2)
+                row['手续费'] = round(t.fee, 2)
                 if has_notes:
                     row['备注'] = getattr(t, 'note', '')
                 trade_rows.append(row)
