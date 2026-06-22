@@ -1,21 +1,25 @@
 """
-utils/ast/dsl.py — Python AST DSL 引擎 (公共基础设施)
+utils/ast/dsl.py — 语法层 (公共基础设施)
 =============================================================================
+
+在四层架构中的位置: 第1层(语法) — 定义"能写什么"
+  parse_expression()    — Python ast 解析 + 白名单安全校验
+  evaluate()            — 递归求值 AST 节点
+  normalize_data_keys() — 数据键 ALL_CAPS 规范化 (对齐 WQ101 行业标准)
+  get_variables()       — 提取表达式中的变量名
+  get_functions()       — 提取表达式中的函数名
+
+安全策略:
+  ALLOWED_NODE_TYPES    — 白名单 (BinOp, Compare, Call, Name, etc.)
+  FORBIDDEN_NODE_TYPES  — 黑名单 (import, exec, lambda, loops, etc.)
+  is_valid_variable()   — 变量名校验 (仅允许注册前缀)
+  FUNC_REGISTRY lookup  — 函数名校验 (仅允许注册函数)
+
+上游依赖:
+  registry.py::FUNC_REGISTRY      — 函数注册表
+  registry.py::VALID_VAR_PREFIXES — 变量前缀白名单
 
 [重构] 2026-06-22 从 signals/v4 提取到 utils/ast 公共层
-
-用 Python 内置 ast 模块做安全解析和求值，无需自研 Parser。
-
-架构：三层
-  1. parse()    — ast.parse() 解析表达式字符串
-  2. validate() — 白名单检查（函数名、变量名、节点类型）
-  3. evaluate() — 递归求值 AST → numpy 数组
-
-用法：
-  >>> from utils.ast.dsl import parse_expression
-  >>> tree = parse_expression("CLOSE / ts_mean(CLOSE, 50) - 1")
-  >>> signal = evaluate(tree, data_dict)  # -> np.ndarray
-=============================================================================
 """
 import ast
 import operator

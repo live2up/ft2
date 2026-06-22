@@ -1,5 +1,7 @@
 """
-utils/ast/resolver.py — 截面函数 AST 解析器 (公共基础设施)
+utils/ast/resolver.py — 编排层 (公共基础设施)
+
+在四层架构中的位置: 第4层(编排) — cs_* 截面函数嵌套解算
 
 核心设计:
   1. 自动发现: 从 FUNC_REGISTRY 中以 cs_ 前缀自动识别截面函数

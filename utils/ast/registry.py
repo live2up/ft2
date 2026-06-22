@@ -1,15 +1,56 @@
 # -*- coding: utf-8 -*-
 """
-utils/ast/registry.py — 函数注册表 (公共基础设施)
+utils/ast/registry.py — 原语层 + 变量层 (公共基础设施)
 =============================================================================
 
-[重构] 2026-06-22 从 signals/v4 提取到 utils/ast 公共层
+在四层架构中的位置: 第2层(原语) + 第3层(变量)
+  原语 = 操作动词 (FUNC_REGISTRY): 72 函数, 定义"能算什么"
+  变量 = 数据名词 (VALID_VAR_PREFIXES): 70 前缀, 定义"能引用什么"
 
-Python AST DSL 的所有可用函数。每个函数接收 numpy 数组，返回 numpy 数组。
+═══════════════════════════════════════════════════════════════
+命名规范 (对齐 WQ101 行业标准)
 
-原则：
+  ◆ 函数命名 (snake_case, 小写 + 前缀)
+    前缀约定:
+      ts_       → Time Series (窗口滚动, 只用历史数据)
+      cs_       → Cross Sectional (截面统计, 需完整 2D 面板)
+      expanding_→ 扩展窗口 (起始→当前, 无固定窗口)
+      无前缀    → 逐元素数学 / talib 特征 / 信号
+
+    参数约定:
+      窗口: d         (对齐 WQ101, 非 w=window)
+      输入: x, y      (单变量 x, 双变量 x,y)
+      可选: 有默认值   (如 cs_scale(x, scale=1.0))
+
+    WQ101 兼容别名 (注册为短名, 等价于 ts_* 版本):
+      corr  → ts_corr,  roc  → ts_roc,  kurt → ts_kurt
+
+  ◆ 变量命名 (ALL_CAPS)
+    分类:
+      原始 OHLCV:   OPEN, HIGH, LOW, CLOSE, VOLUME, AMOUNT, VWAP, RETURNS, RET
+      talib 指标:   ATR, RSI, MACD, CCI, ADX, EMA, HV, NATR ... (函数+变量双通道)
+      行业广度:     SECTOR_UP, BW_MA20, DISP, ROTSPD, IND_CORR ... (仅变量)
+      因子模块:     BENCH, REL, SHARE, DOWNSIDE_VOL
+      LLM/用户自定义: register_variable() 运行时热注册
+
+    变量 vs 函数同名 (设计如此, 互补而非冲突):
+      函数: rsi(CLOSE, 14)     → 实时算, 参数灵活
+      变量: ts_rank(RSI_14, 60) → 预计算, 性能优先
+
+  ◆ 统计量约定
+    ddof=1 (样本)   ts_std, ts_skew, ts_kurt, ts_cov, cs_zscore, cs_winsorize
+    理由: 金融时间序列为样本数据, WQ101/GT191 均使用样本统计量
+
+═══════════════════════════════════════════════════════════════
+变量用途 (为什么需要变量层):
+  1. 性能缓存 — talib 指标预计算注入, 避免每次表达式重复算
+  2. 跨品种聚合 — 行业广度/市场级数据无法从单个 OHLCV 算出
+  3. 变量不会替代函数 — 变量用于数据, 函数用于操作, 两者互补
+
+原则:
   - 所有滚动窗口只用历史数据（无前向偏差）
   - 冷启动保护：前 window-1 天返回 NaN
+  - 1D 数组输入, 1D 数组输出 (由上层逐列调用实现 2D 面板)
 =============================================================================
 """
 import numpy as np
@@ -69,7 +110,7 @@ def _persist(x: np.ndarray, n: int) -> np.ndarray:
 # ============================================================
 
 def ts_mean(x, d):       return _rolling(x, d, np.mean)
-def ts_std(x, d):        return _rolling(x, d, lambda a: np.std(a, ddof=0))
+def ts_std(x, d):        return _rolling(x, d, lambda a: np.std(a, ddof=1))
 def ts_sum(x, d):        return _rolling(x, d, np.sum)
 def ts_max(x, d):        return _rolling(x, d, np.max)
 def ts_min(x, d):        return _rolling(x, d, np.min)
@@ -91,28 +132,28 @@ def ts_corr(x, y, d):
     r = np.full_like(x, np.nan)
     for i in range(d - 1, len(x)):
         xw = x[i - d + 1 : i + 1]; yw = y[i - d + 1 : i + 1]
-        sx, sy = np.std(xw, ddof=0), np.std(yw, ddof=0)
+        sx, sy = np.std(xw, ddof=1), np.std(yw, ddof=1)
         r[i] = 0.0 if sx < 1e-10 or sy < 1e-10 else np.corrcoef(xw, yw)[0, 1]
     return r
 
 def ts_cov(x, y, d):
-    """Rolling covariance"""
+    """Rolling covariance (样本协方差, ddof=1)"""
     x, y = np.asarray(x, float), np.asarray(y, float)
     r = np.full_like(x, np.nan)
     for i in range(d - 1, len(x)):
         xw = x[i - d + 1 : i + 1]; yw = y[i - d + 1 : i + 1]
-        r[i] = np.cov(xw, yw, ddof=0)[0, 1]
+        r[i] = np.cov(xw, yw, ddof=1)[0, 1]
     return r
 
 def ts_skew(x, d):
     def f(a):
-        s = np.std(a, ddof=0)
+        s = np.std(a, ddof=1)
         return 0.0 if s < 1e-10 else np.mean(((a - np.mean(a)) / s) ** 3)
     return _rolling(x, d, f)
 
 def ts_kurt(x, d):
     def f(a):
-        s = np.std(a, ddof=0)
+        s = np.std(a, ddof=1)
         return 0.0 if s < 1e-10 else np.mean(((a - np.mean(a)) / s) ** 4) - 3.0
     return _rolling(x, d, f)
 
@@ -206,7 +247,7 @@ def ts_regression(y, x, d, rettype=2):
 
 def expanding_mean(x, min_p=20):    return _expanding(x, np.mean, min_p)
 def expanding_median(x, min_p=20):  return _expanding(x, np.median, min_p)
-def expanding_std(x, min_p=20):     return _expanding(x, lambda a: np.std(a, ddof=0), min_p)
+def expanding_std(x, min_p=20):     return _expanding(x, lambda a: np.std(a, ddof=1), min_p)
 def expanding_percentile(x, p, min_p=20):
     return _expanding(x, lambda a: np.percentile(a, p * 100), min_p)
 
@@ -234,7 +275,7 @@ def cs_zscore(x):
     for i in range(x.shape[0]):
         v = ~np.isnan(x[i])
         if v.sum() > 1:
-            m, s = np.mean(x[i][v]), np.std(x[i][v], ddof=0)
+            m, s = np.mean(x[i][v]), np.std(x[i][v], ddof=1)
             r[i][v] = (x[i][v] - m) / s if s > 1e-10 else 0.0
     return r
 
@@ -251,16 +292,16 @@ def cs_scale(x, scale=1.0):
     return r
 
 def cs_winsorize(x, std=4.0):
-    """Cross-sectional winsorize at +/-std"""
+    """Cross-sectional winsorize at +/-std (样本标准差, ddof=1)"""
     x = np.asarray(x, float)
     if x.ndim == 1:
-        m, s = np.mean(x), np.std(x)
+        m, s = np.mean(x), np.std(x, ddof=1)
         return np.clip(x, m - std * s, m + std * s)
     r = x.copy()
     for i in range(x.shape[0]):
         v = ~np.isnan(x[i])
         if v.sum() > 1:
-            m, s = np.mean(x[i][v]), np.std(x[i][v], ddof=0)
+            m, s = np.mean(x[i][v]), np.std(x[i][v], ddof=1)
             r[i][v] = np.clip(x[i][v], m - std * s, m + std * s)
     return r
 
@@ -532,6 +573,10 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'ts_av_diff':  ts_av_diff,
     'ts_decay_linear': ts_decay_linear,
     'ts_product':  ts_product,
+    # [新增] 2026-06-22 WQ101 兼容别名 (短名)
+    'corr':        ts_corr,
+    'roc':         ts_roc,
+    'kurt':        ts_kurt,
     'ts_regression': ts_regression,
     'ts_regression_residual': ts_regression_residual,
     # 扩张统计
@@ -630,7 +675,8 @@ VALID_VAR_PREFIXES = [
     'VDISP',               # 行业成交量截面离散度（高=资金集中，低=均匀分布）
     'VSKEW',               # 行业成交量截面偏度（>0=少数行业吸金）
     # 相关性 — 市场是分散还是同步？（区别于单品种特征 CORREL）
-    'CORR',                # 行业平均两两相关系数（>0.7=系统性风险模式，<0.3=分散模式）
+    # [修复] 2026-06-22 CORR → IND_CORR: 避免与 corr/ts_corr 函数混淆
+    'IND_CORR',            # 行业平均两两相关系数（>0.7=系统性风险模式，<0.3=分散模式）
     # 尾部风险 — 极端行情信号
     'TAILUP',              # 右尾强度（行业极端上涨密度）
     'TAILDOWN',            # 左尾强度（行业极端下跌密度）
