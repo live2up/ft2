@@ -29,7 +29,7 @@ utils/ast/registry.py — 原语层 + 变量层 (公共基础设施)
     分类:
       原始 OHLCV:   OPEN, HIGH, LOW, CLOSE, VOLUME, AMOUNT, VWAP, RETURNS, RET
       talib 指标:   ATR, RSI, MACD, CCI, ADX, EMA, HV, NATR ... (函数+变量双通道)
-      行业广度:     SECTOR_UP, BW_MA20, DISP, ROTSPD, IND_CORR ... (仅变量)
+      行业广度:     SECTOR_UP, BREADTH_L, DISP, ROTSPD, IND_CORR ... (仅变量)
       因子模块:     BENCH, REL, SHARE, DOWNSIDE_VOL
       LLM/用户自定义: register_variable() 运行时热注册
 
@@ -372,7 +372,7 @@ def ts_regression_residual(x, window):
 #   → 广度好时做多追涨，广度差时做多抄底
 #
 # 时长非对称:  买入需持续性确认，卖出单日即可
-#   "persist(ts_roc(CLOSE, 5) > 0, 2) if BW_MA20 > 0.6 else -1 if CLOSE < ts_delay(CLOSE, 1) * 0.98 else 0"
+#   "persist(ts_roc(CLOSE, 5) > 0, 2) if BREADTH_L > 0.6 else -1 if CLOSE < ts_delay(CLOSE, 1) * 0.98 else 0"
 #   → 买入需要连续2天确认，破位当日立即卖出
 #
 # 状态门控:    趋势/震荡两套逻辑
@@ -621,71 +621,95 @@ FUNC_REGISTRY: Dict[str, Callable] = {
 
 SAFE_CONSTANTS = {'True': 1.0, 'False': 0.0, 'None': 0.0, 'pi': np.pi, 'e': np.e}
 
+# [重构] 2026-06-22 按实际使用频率分类, 减少无效注册
 VALID_VAR_PREFIXES = [
-    'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME', 'AMOUNT', 'VWAP', 'RETURNS', 'RET',
-    # 特征指标（通过 _feature_xxx 函数实时计算或预计算注入）
-    'ATR',          # 平均真实波幅 (Average True Range)
-    'STDDEV',       # 滚动标准差
-    'BBWIDTH',      # 布林带宽度 (upper-lower)/middle
-    'HV',           # 历史波动率 (年化)
-    'NATR',         # 归一化 ATR (ATR/CLOSE)
-    'TRIMA', 'SMA', 'MA', 'EMA', 'TSF', 'WMA', 'DEMA', 'KAMA',  # 各类均线
-    'ADX',          # 平均趋向指数 (趋势强度)
-    'RSI',          # 相对强弱指标
-    'CCI',          # 商品通道指数
-    'MACD',         # MACD 柱
-    'MFI',          # 资金流量指数
-    'ULTOSC',       # 终极摆动指标
-    'ROC',          # 变化率 (Rate of Change)
-    'MOM_RATIO',    # 动量比率
-    'TREND_STRENGTH',  # 趋势强度
-    'LINEARREG',    # 线性回归值
-    'VAR',          # 滚动方差
-    'VOL_RATIO',    # 量比 (短均量/长均量)
-    'VOL_CHG',      # 成交量变化率
-    'VOL_REGIME',   # 成交量状态(放量/缩量)
-    'OBV',          # 能量潮 (On-Balance Volume)
-    'AVGPRICE',     # 均价 (OPEN+HIGH+LOW+CLOSE)/4
-    'WCLPRICE',     # 加权收盘价 (HIGH+LOW+2*CLOSE)/4
-    'CORREL',       # 滚动相关系数
-    'MOM_CHG',      # 动量变化
-    'UP_RATIO',     # 上涨比例
-    # ═══ 行业广度变量（预计算注入，测"市场共识"而非"价格偏离"） ═══
-    # 价格宽度 — 多少行业在涨？
+    # ═══════════════════════════════════════════════════════════
+    # 第1组: 活跃 — 因子表达式高频使用 (由 data_loader 注入)
+    # ═══════════════════════════════════════════════════════════
+    'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME', 'AMOUNT',     # 原始 OHLCV
+    'VWAP',                                                  # 均价 (WQ065)
+    'RETURNS',                                               # close[t]/close[t-1]-1
+
+    # ═══════════════════════════════════════════════════════════
+    # 第2组: 活跃 — 派生变量前缀 (匹配 REL_CLOSE, BENCH_RETURNS 等后缀)
+    #
+    # 注入方式: data_loader.ensure_data() 计算后放入 panel_dict
+    # 大小写:   小写键 (rel_close) → normalize_data_keys() → 大写 (REL_CLOSE)
+    # 前缀匹配: is_valid_variable('REL_CLOSE') → startswith('REL') → True
+    #
+    # 计算来源 (data_loader.py):
+    #   REL_CLOSE   = close / bench_close      (第99行, 相对基准价)
+    #   REL_AMOUNT  = amount / bench_amount    (第105行, 相对基准额)
+    #   REL_VOLUME  = volume / bench_volume    (第109行, 相对基准量)
+    #   BENCH_CLOSE = 基准指数 close (铺平到 N 列, 第92行)
+    #   BENCH_RETURNS = bench_close 日收益率   (r6 探索中手动注册)
+    #   SHARE       = amount / amount.sum(axis=1) (第102行, 市场份额)
+    #   DOWNSIDE_VOL = 下行波动率 (仅负收益的 std, r6/r5 探索中预计算注入)
+    # ═══════════════════════════════════════════════════════════
+    'REL',          # 前缀: REL_CLOSE / REL_AMOUNT / REL_VOLUME
+    'BENCH',        # 前缀: BENCH_CLOSE / BENCH_RETURNS
+    'SHARE',        # 完整: SHARE = amount / Σamount (跨品种总成交额占比)
+    'DOWNSIDE_VOL', # 完整: DOWNSIDE_VOL = std(returns[returns<0]) (下行风险)
+
+    # ═══════════════════════════════════════════════════════════
+    # 第3组: 活跃 — 基本面变量 (r5 探索, 从 parquet 注入)
+    # ═══════════════════════════════════════════════════════════
+    'PE_TTM_INDEX',     # 滚动市盈率
+    'PB_MRQ',           # 市净率
+    'TURNOVERRATIO',    # 换手率
+    'TOTALCAPITAL',     # 总市值
+
+    # ═══════════════════════════════════════════════════════════
+    # 第4组: 预留 — talib 指标 (函数通道已覆盖, 变量通道为性能预留)
+    # 用法: rsi(CLOSE,14) 等价于 RSI_14 (预计算注入后)
+    # 原则: 只保留有明确经济学意义的标准指标, 可由 ts_* 推导的二级量不列
+    # 现状: AI_yinzi 以函数通道为主, 变量通道未启用
+    # ═══════════════════════════════════════════════════════════
+    # 波动率: ATR(真实波幅), STDDEV(滚动标准差), HV(年化波动率), NATR(归一化ATR)
+    'ATR', 'STDDEV', 'HV', 'NATR',
+    # 通道: BBWIDTH(布林带宽度, 波动率/价格水平)
+    'BBWIDTH',
+    # 趋势: 9种移动平均 + ADX(趋向指数)
+    'TRIMA', 'SMA', 'MA', 'EMA', 'TSF', 'WMA', 'DEMA', 'KAMA', 'ADX',
+    # 动量: RSI(超买超卖), CCI(偏离均值), MACD(趋势动量), MFI(资金流), ULTOSC(多周期), ROC(变化率)
+    'RSI', 'CCI', 'MACD', 'MFI', 'ULTOSC', 'ROC',
+    # 统计: LINEARREG(线性回归), VAR(方差), CORREL(相关系数)
+    'LINEARREG', 'VAR', 'CORREL',
+    # 量价: VOL_RATIO(量比), VOL_CHG(量变), OBV(能量潮), UP_RATIO(上涨比例)
+    'VOL_RATIO', 'VOL_CHG', 'OBV', 'UP_RATIO',
+    # 价格水平: AVGPRICE(均价), WCLPRICE(加权收盘)
+    'AVGPRICE', 'WCLPRICE',
+
+    # ═══════════════════════════════════════════════════════════
+    # 第5组: 预留 — 行业广度 / 市场级变量 (择时信号用)
+    # 来源: 需跨品种聚合 (无法从单列 OHLCV 算出)
+    # 原则: 只保留一级原始量, Z-score/动量等二级推导由表达式 ts_* 完成
+    # 现状: 语法白名单已预留, 数据计算管线待实现
+    # ═══════════════════════════════════════════════════════════
+    # ── 价格宽度: 多少品种在涨? (市场参与度) ──
     'SECTOR_UP',           # 当日上涨行业比例 [0,1]
-    'SECTOR_MOM20',        # 20日动量>0的行业比例
-    'SECTOR_AD',           # 行业涨跌比 (adv-decl)/total
-    # 价格宽度 Z-score 标准化
-    'SECTOR_UP_Z',         # SECTOR_UP 的 Z-score
-    'SECTOR_MOM20_Z',      # SECTOR_MOM20 的 Z-score
-    # 均线宽度 — 均线上方行业密度
-    'BW_MA5',              # 5日均线以上行业比例
-    'BW_MA10',             # 10日均线以上行业比例
-    'BW_MA20',             # 20日均线以上行业比例（经典背离信号源）
-    'BW_MA20_Z',           # BW_MA20 的 Z-score
-    'BW_MOM5',             # 5日宽度变化率
-    # 离散度/轮动 — 行业有多一致？
-    'DISP',                # 行业日收益截面标准差（高=分化，低=同涨同跌）
-    'BW_MOM20',            # 20日宽度动量
-    'ROTSPD',              # 行业轮动速度（领涨行业切换频率）
-    'NHL20',               # 20日新高-新低行业净差
-    'SKEW',                # 行业收益截面偏度（>0=少数极端领涨，<0=少数暴跌拖累）
-    # 成交量结构 — 资金在往哪流？
+    'SECTOR_MOM',          # 动量>0的行业比例
+    'SECTOR_AD',           # 行业涨跌比 = (涨-跌)/(涨+跌)
+    # ── 均线宽度: 均线上方行业密度 (趋势广度) ──
+    'BREADTH_S',           # 短期均线宽度 (短)
+    'BREADTH_M',           # 中期均线宽度 (中)
+    'BREADTH_L',           # 长期均线宽度 (长, 经典背离信号源)
+    'BREADTH_AMT',         # 成交额均线宽度
+    # 离散度/轮动 — 行业有多一致? (市场结构)
+    'DISP',                # 行业日收益截面标准差 (高=分化, 低=同涨同跌)
+    'ROTSPD',              # 行业轮动速度 (领涨行业切换频率)
+    'NHL',                 # 新高-新低行业净差
+    'SKEW',                # 行业收益截面偏度 (>0=少数领涨, <0=少数暴跌)
+    # 成交量结构 — 资金在往哪流? (资金集中度)
     'VMED',                # 行业中位数成交量
-    'VDISP',               # 行业成交量截面离散度（高=资金集中，低=均匀分布）
-    'VSKEW',               # 行业成交量截面偏度（>0=少数行业吸金）
-    # 相关性 — 市场是分散还是同步？（区别于单品种特征 CORREL）
-    # [修复] 2026-06-22 CORR → IND_CORR: 避免与 corr/ts_corr 函数混淆
-    'IND_CORR',            # 行业平均两两相关系数（>0.7=系统性风险模式，<0.3=分散模式）
-    # 尾部风险 — 极端行情信号
-    'TAILUP',              # 右尾强度（行业极端上涨密度）
-    'TAILDOWN',            # 左尾强度（行业极端下跌密度）
-    'TAILNET',             # 尾部净强度 TAILUP - TAILDOWN
-    # 成交额
-    'AMT5',                # 5日成交额指标
-    'AMT10',               # 10日成交额指标
-    # v4 因子模块自定义变量
-    'BENCH', 'REL', 'SHARE', 'DOWNSIDE_VOL',
+    'VDISP',               # 行业成交量截面离散度 (高=资金集中, 低=均匀)
+    'VSKEW',               # 行业成交量截面偏度 (>0=少数行业吸金)
+    # 相关性 — 市场分散还是同步? (系统性风险)
+    'IND_CORR',            # 行业平均两两相关系数 (>0.7=系统性, <0.3=分散)
+    # 尾部风险 — 极端行情密度 (黑天鹅预警)
+    'TAILUP',              # 右尾强度 (行业极端上涨密度)
+    'TAILDOWN',            # 左尾强度 (行业极端下跌密度)
+    'TAILNET',             # 尾部净强度 = TAILUP - TAILDOWN
 ]
 
 def is_valid_variable(name: str) -> bool:

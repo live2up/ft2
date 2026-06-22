@@ -185,19 +185,19 @@ a if cond else b           # 三元
 # 需要预计算行业宽度指标注入 extra_features
 
 # 宽度上升趋势 (ts_delay 方向检测)
-"BW_MA5 > ts_delay(BW_MA5, 5) and ts_zscore(amt_ratio(AMOUNT,5,20), 60) > 0"
+"BREADTH_S > ts_delay(BREADTH_S, 5) and ts_zscore(amt_ratio(AMOUNT,5,20), 60) > 0"
 
 # 宽度 + 资金 OR 互补触发
-"(BW_MA5 > 0.65 or AMT5 > 0.55) and ts_zscore(amt_ratio(AMOUNT,5,20), 60) > 0"
+"(BREADTH_S > 0.65 or BREADTH_AMT > 0.55) and ts_zscore(amt_ratio(AMOUNT,5,20), 60) > 0"
 
 # 宽度上升 + NHL确认 (MDD极低)
-"BW_MA5 > ts_delay(BW_MA5, 5) and NHL20 > 0 and ts_zscore(amt_ratio(AMOUNT,5,20), 60) > 0"
+"BREADTH_S > ts_delay(BREADTH_S, 5) and NHL > 0 and ts_zscore(amt_ratio(AMOUNT,5,20), 60) > 0"
 
 # 拥挤度负向过滤 (not 原语)
-"(BW_MA5 > 0.65 or AMT5 > 0.55) and ts_zscore(amt_ratio(AMOUNT,5,20), 60) > 0 and not (CORR > 0.7)"
+"(BREADTH_S > 0.65 or BREADTH_AMT > 0.55) and ts_zscore(amt_ratio(AMOUNT,5,20), 60) > 0 and not (CORR > 0.7)"
 
 # 宽度上升 + 价格OR宽松确认
-"(BW_MA5 > ts_delay(BW_MA5, 5)) and (CLOSE > OPEN or ts_roc(CLOSE, 3) > -0.02) and ts_zscore(amt_ratio(AMOUNT,5,20), 60) > 0"
+"(BREADTH_S > ts_delay(BREADTH_S, 5)) and (CLOSE > OPEN or ts_roc(CLOSE, 3) > -0.02) and ts_zscore(amt_ratio(AMOUNT,5,20), 60) > 0"
 
 # ═══ 趋势跟踪 ═══
 "ema(CLOSE, 20) > ts_mean(CLOSE, 50)"
@@ -245,8 +245,8 @@ register_function('my_smooth', my_smooth)
 register_variable('MY_VAR')
 
 # 直接使用
-expr = Expression("MY_VAR > 0 and my_smooth(BW_MA5, 5, 20) > 0")
-signal = expr.generate(data, extra_features={'MY_VAR': ..., 'BW_MA5': ...})
+expr = Expression("MY_VAR > 0 and my_smooth(BREADTH_S, 5, 20) > 0")
+signal = expr.generate(data, extra_features={'MY_VAR': ..., 'BREADTH_S': ...})
 
 # 注销 (清理)
 from signals.v4 import unregister_function, unregister_variable
@@ -284,11 +284,11 @@ ast.parse(expr) → 三层白名单校验:
 
 | 变量 | 说明 | 典型用法 |
 |------|------|---------|
-| `BW_MA5/10/20` | 均线上方行业占比 | `BW_MA5 > 0.65` |
-| `AMT5/10` | 成交额均线上方行业占比 | `AMT5 > 0.55` |
+| `BREADTH_S/M/L` | 均线上方行业占比 | `BREADTH_S > 0.65` |
+| `BREADTH_AMT` | 成交额均线上方行业占比 | `BREADTH_AMT > 0.55` |
 | `DISP` | 行业收益截面标准差 | `DISP < 0.01` (一致) |
 | `SKEW` | 行业收益截面偏度 | `SKEW < -1` (负偏反转) |
-| `NHL20` | 20日新高-新低净差 | `NHL20 > 0` |
+| `NHL` | 新高-新低净差 | `NHL > 0` |
 | `CORR` | 行业平均两两相关性 | `CORR > 0.3` (系统性), `not (CORR > 0.7)` (拥挤过滤) |
 | `ROTSPD` | 行业轮动速度 | 领涨切换频率 |
 | `TAILUP/DOWN/NET` | 尾部极端行情密度 | 尾部风险信号 |
