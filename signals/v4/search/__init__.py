@@ -1,9 +1,12 @@
 """
-signals/v3/search/__init__.py — 搜索层 (GP + 网格)
+signals/v4/search/__init__.py — 搜索层 (GP + 网格)
 =============================================================================
-保留 v2 的算法 (gp_optimizer / grid_search), 替换回测引擎为 v3.EngineV3。
+基于 Python ast 的 GP 遗传算法 + 参数网格搜索。
+v4 搜索全部使用 Expression + EngineCore（ft2.core 驱动）。
 
-接口对齐: v3.search.GPSearch ≈ v2.GPOptimizer, v3.search.GridSearch ≈ v2.GridSearch
+用法:
+  from signals.v4.search import GPSearch, GridSearch
+=============================================================================
 """
 
 from .gp import GPSearch

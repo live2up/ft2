@@ -8,9 +8,11 @@ signals/v4/validate/walkforward.py — Walk-Forward 滚动窗口验证
   - win_rate:        正向窗口比例 (越接近100%越好)
 
 用法:
-  >>> from signals.v4.validate import walkforward_validate
-  >>> wf = walkforward_validate("atr(HIGH,LOW,CLOSE,7) > ts_mean(atr(HIGH,LOW,CLOSE,7),30)", data)
+  >>> from signals.v4.validate import validate_walkforward
+  >>> wf = validate_walkforward("atr(HIGH,LOW,CLOSE,7) > ts_mean(atr(HIGH,LOW,CLOSE,7),30)", data)
   >>> print(f"均值SR={wf['mean_sharpe']:.3f} 稳定性={wf['stability']:.3f} 正窗口={wf['win_rate']:.0%}")
+
+[规范化] 2026-06-22 函数名改为 validate_walkforward, 对齐 validate_single/compare_signals 的 verb_noun 模式。
 """
 import pandas as pd, numpy as np
 from typing import Dict, List
@@ -18,7 +20,7 @@ from ..expression import Expression
 from ..engine import EngineCore
 
 
-def walkforward_validate(expr_str: str, data: pd.DataFrame,
+def validate_walkforward(expr_str: str, data: pd.DataFrame,
                          train: str = '2Y', test: str = '1Y',
                          step: str = '6M',
                          symbol: str = '399317.SZ') -> Dict:
@@ -111,12 +113,17 @@ def _generate_windows(index: pd.DatetimeIndex, train: str,
     return windows
 
 
-def _parse_offset(offset: str) -> pd.Timedelta:
-    """解析 '2Y' / '6M' / '1Y' 为 Timedelta"""
+def _parse_offset(offset: str) -> pd.offsets.DateOffset:
+    """解析 '2Y' / '6M' / '1Y' 为 DateOffset
+
+    [修复] 2026-06-22 使用 pd.DateOffset 替代 30天/365天近似，
+    避免月度窗口漂移（30天 vs 实际自然月差异超过 10%）。
+    回退逻辑保留，以防传入未识别后缀。
+    """
     if offset.endswith('Y'):
-        return pd.Timedelta(days=int(offset[:-1]) * 365)
+        return pd.offsets.DateOffset(years=int(offset[:-1]))
     elif offset.endswith('M'):
-        return pd.Timedelta(days=int(offset[:-1]) * 30)
+        return pd.offsets.DateOffset(months=int(offset[:-1]))
     elif offset.endswith('D'):
-        return pd.Timedelta(days=int(offset[:-1]))
-    return pd.Timedelta(days=365)
+        return pd.offsets.DateOffset(days=int(offset[:-1]))
+    return pd.offsets.DateOffset(years=1)

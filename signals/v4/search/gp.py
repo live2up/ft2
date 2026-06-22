@@ -2,7 +2,12 @@
 signals/v4/search/gp.py — GP 遗传算法 (基于 Python ast)
 =============================================================================
 直接操作 Python ast 树，生成/交叉/变异/求值全部用标准库。
-替换旧版 GPOptimizer (依赖已删的 expression_v3)。
+v4 独立实现，不依赖 v3 GPOptimizer。
+
+[重构] 2026-06-22 扩展 TERMINALS/PRIMITIVES 对齐 utils/ast 注册表。
+        新增: OPEN, RETURNS, VWAP 变量; ts_mean/ts_std/ts_sum 等时序函数;
+        cs_scale/cs_winsorize/cs_normalize/cs_quantile 截面函数。
+=============================================================================
 
 用法:
   >>> from signals.v4.search.gp import GPSearch
@@ -25,12 +30,20 @@ from ..engine import EngineCore
 # GP 配置
 # ============================================================
 
-TERMINALS = ['CLOSE', 'HIGH', 'LOW', 'VOLUME', 'AMOUNT']
+# [重构] 2026-06-22 扩展 TERMINALS 和 PRIMITIVES，
+# 对齐 utils/ast/functions.py (72原语) 和 variables.py (70+变量前缀)
+TERMINALS = ['CLOSE', 'OPEN', 'HIGH', 'LOW', 'VOLUME', 'AMOUNT',
+             'RETURNS', 'VWAP']
 
 PRIMITIVES = {
-    # 一元函数 (带参数): func(leaf, period)
-    1: ['rsi', 'ts_roc', 'ts_zscore', 'ts_av_diff', 'ema', 'bb_width'],
-    # 多元函数 (固定参数, 不变): 用于种子初始化
+    # 一元函数 (带窗口参数): func(leaf, period)
+    1: ['rsi', 'ts_roc', 'ts_zscore', 'ts_av_diff', 'ema', 'bb_width',
+        'ts_mean', 'ts_std', 'ts_sum', 'ts_min', 'ts_max',
+        'ts_delta', 'ts_scale', 'ts_decay_linear',
+        'ts_regression_residual'],
+    # 二元函数 (两个数组参数+窗口): func(x, y, d)
+    2: ['ts_corr', 'ts_cov', 'ts_regression'],
+    # 种子表达式 (用于初始化)
     'seed': [
         "ts_mean(CLOSE, 20)", "ts_mean(CLOSE, 50)",
         "ts_std(CLOSE, 20)", "ts_rank(CLOSE, 20)",
@@ -40,8 +53,12 @@ PRIMITIVES = {
         "bb_width(CLOSE, 20)", "ema(CLOSE, 20)",
         "macd(CLOSE, 12, 26, 9)",
         "adx(HIGH, LOW, CLOSE, 14)",
+        "ts_zscore(amt_ratio(AMOUNT,5,20), 60)",
     ],
-    'cs': ['cs_rank', 'cs_zscore'],
+    # 截面函数
+    'cs': ['cs_rank', 'cs_zscore', 'cs_scale', 'cs_winsorize',
+           'cs_normalize', 'cs_quantile'],
+    # 算术运算
     'arith': ['+', '-', '*'],
 }
 

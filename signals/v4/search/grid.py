@@ -1,7 +1,9 @@
 """
-signals/v3/search/grid.py — 参数网格搜索 (v3 独立引擎版)
+signals/v4/search/grid.py — 参数网格搜索 (v4)
 =============================================================================
-v3 独立版，笛卡尔积展开 + v3.EngineCore.backtest(mode='fast|full')。
+基于 ? 占位符模板的笛卡尔积展开 + v4 EngineCore.backtest(mode='fast|full')。
+
+[修复] 2026-06-22 修正 docstring 标签 (v3→v4)
 =============================================================================
 """
 import itertools
@@ -15,10 +17,10 @@ from ..engine import EngineCore
 
 class GridSearch:
     """
-    v3 网格搜索器。
+    v4 网格搜索器 — 基于 ? 占位符模板的笛卡尔积回测。
 
     用法:
-        gs = GridSearch(template, param_grid, data, fs, start_date='2020-01-01')
+        gs = GridSearch(template, param_grid, data, start_date='2020-01-01')
         result = gs.run()
         print(result.head(5))
     """

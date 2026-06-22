@@ -5,6 +5,9 @@ V4 核心：Python ast 解析表达式 → 真实回测 → 交互式报告。
 
 用法：
   from signals.v4 import Expression, EngineCore
+  from signals.v4.search import GPSearch, GridSearch
+  from signals.v4.validate import validate_single, compare_signals, validate_walkforward
+  from signals.v4.market_breadth import calc_advance_decline_ratio, ...
 
   expr = Expression("(CLOSE / ts_mean(CLOSE, 50) - 1) * 100")
   signal = expr.generate(ohlcv_df)
@@ -12,7 +15,7 @@ V4 核心：Python ast 解析表达式 → 真实回测 → 交互式报告。
   print(f"Sharpe={analyzer.sharpe_ratio():.3f}")
 =============================================================================
 """
-# V4 DSL
+# V4 DSL（兼容重导出 → 权威源在 utils/ast）
 from .ast_dsl import (
     parse_expression, evaluate, get_variables, get_functions,
     DSLSecurityError, DSLSyntaxError,
@@ -23,6 +26,12 @@ from .registry import FUNC_REGISTRY, is_valid_variable, register_function, regis
 # V4 引擎（full/fast 统一返回 AccountAnalyzer）
 from .engine import EngineCore
 
+# V4 子模块
+from . import market_breadth
+from . import wf_result
+from . import search
+from . import validate
+
 __all__ = [
     'Expression',
     'EngineCore',
@@ -31,4 +40,8 @@ __all__ = [
     'FUNC_REGISTRY', 'is_valid_variable',
     'register_function', 'register_variable',
     'DSLSecurityError', 'DSLSyntaxError',
+    'market_breadth',
+    'wf_result',
+    'search',
+    'validate',
 ]

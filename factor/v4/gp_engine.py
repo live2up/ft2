@@ -40,7 +40,7 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
-from utils.ast.dsl import parse_expression
+from utils.ast.dsl import parse_expression, ast_depth, ast_node_count
 from .expression import _ExpressionFromAST
 
 logger = logging.getLogger(__name__)
@@ -134,8 +134,8 @@ class Individual:
         return Individual(
             tree=tree,
             expression_str=expr_str,
-            depth=_ast_depth(tree.body),
-            node_count=_count_nodes(tree.body),
+            depth=ast_depth(tree),
+            node_count=ast_node_count(tree),
             generation=generation,
             is_seed=is_seed,
         )
@@ -144,17 +144,6 @@ class Individual:
 # ============================================================
 # AST 工具函数
 # ============================================================
-
-def _ast_depth(node: ast.AST) -> int:
-    if not list(ast.iter_child_nodes(node)):
-        return 1
-    return 1 + max(_ast_depth(c) for c in ast.iter_child_nodes(node))
-
-
-def _count_nodes(node: ast.AST) -> int:
-    skip = (ast.Load, ast.Store, ast.Del, ast.Param)
-    return sum(1 for n in ast.walk(node) if not isinstance(n, skip))
-
 
 def _expr_str(tree: ast.Expression) -> str:
     try:
@@ -607,8 +596,8 @@ class GPEngine:
             return -999.0
 
         ind.expression_str = _expr_str(ind.tree)
-        ind.depth = _ast_depth(ind.tree.body)
-        ind.node_count = _count_nodes(ind.tree.body)
+        ind.depth = ast_depth(ind.tree)
+        ind.node_count = ast_node_count(ind.tree)
         penalty = self.parsimony_penalty * ind.node_count
         ind.fitness = fitness * (1.0 - penalty)
         return ind.fitness
@@ -652,7 +641,7 @@ class GPEngine:
             test_tree = copy.deepcopy(child_tree)
             _replace_subtree(test_tree, n1, copy.deepcopy(n2))
             ast.fix_missing_locations(test_tree)
-            if _ast_depth(test_tree.body) > self.max_depth:
+            if ast_depth(test_tree) > self.max_depth:
                 continue
 
             _replace_subtree(child_tree, n1, copy.deepcopy(n2))

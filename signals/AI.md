@@ -1,6 +1,6 @@
 # signals 模块 AI 助手指南
 
-> **版本：v4 | 更新日期：2026-06-21**
+> **版本：v4 | 更新日期：2026-06-22**
 
 ## 项目定位
 
@@ -10,59 +10,61 @@
 
 | 版本 | 状态 | 说明 |
 |------|------|------|
-| **v4** | **主力** | Python AST DSL, 67 原语, EngineCore, 探索灵活, `from signals.v4 import ...` |
-| v3 | 保留 | 仅供历史测试对照，自研 Parser + FeatureSpace，回测已统一到 ft2.core (EngineV3) |
+| **v4** | **主力** | Python AST DSL + `utils/ast` 公共基础设施, 72 原语, EngineCore |
+| v3 | 保留 | 仅供历史测试对照，自研 Parser + FeatureSpace |
 
-## v4 核心变革
-
-```
-v3:  FeatureSpace.precompute → 37列特征表 → 自研Parser → 0/1信号 → EngineV3
-     问题: Parser 400行, 特征表1200行, LLM需学自定义语法
-
-v4:  Python ast.parse() → 67原语实时计算 → 连续/0/1信号 → EngineCore
-     优势: 零自研Parser, 原生Python语法, LLM即学即用, 特征按需算, 探索灵活
-```
-
-## 架构总览
+## v4 核心架构
 
 ```
-                         OHLCV DataFrame (CLOSE/OPEN/HIGH/LOW/VOLUME/AMOUNT)
-                                          │
-                   ┌──────────────────────┼──────────────────────┐
-                   ▼                      ▼                      ▼
-           signals/v4/              signals/v4/            signals/v4/
-           ast_dsl.py               registry.py            engine.py
-           ast.parse()              67 原语注册表           EngineCore
-           安全白名单               ts_mean/rsi/atr/...    backtest(fast|full)
-                   │                      │                      │
-                   └──────────┬───────────┘                      │
-                              ▼                                  │
-                      signals/v4/                                │
-                      expression.py                              │
-                      Expression / evaluate_panel / rank_panel    │
-                              │                                  │
-                              └──────────────┬───────────────────┘
-                                             ▼
-                                    ┌──────────────┐
-                                    │   ft2.core    │
-                                    │ Engine/Account │
-                                    │ Analyzer/      │
-                                    │ Notebook       │
-                                    └───────────────┘
+v4:  Python ast.parse() → 72 原语实时计算 → 连续/0/1信号 → EngineCore
+                            │
+                    utils/ast (公共基础设施)
+                     ├── functions.py  (72原语注册表)
+                     ├── variables.py  (70+变量前缀白名单)
+                     ├── dsl.py        (AST解析/求值/安全校验)
+                     ├── resolver.py   (CsResolver 截面函数解算)
+                     ├── expr_base.py  (AstExpression 基类)
+                     └── spec.py       (构建器/GLM规格)
 ```
+
+## 依赖关系
+
+```
+                    signals/v4/               factor/v4/
+                  Expression               FactorExpression
+                       │                          │
+                       └──────────┬───────────────┘
+                                  ▼
+                           utils/ast/
+                    (公共 DSL 基础设施: 解析/求值/安全)
+                                  │
+                                  ▼
+                             ft2.core
+                       (Engine/Account/Analyzer)
+```
+
+重要的是：**DSL 的权威实现已全部迁移到 `utils/ast`**。`signals/v4/ast_dsl.py` 和 `signals/v4/registry.py` 现在仅保留向后兼容的 re-export 壳。
+
+新代码推荐：`from utils.ast import register_function, register_variable`
 
 ## 目录结构
 
 ```
 signals/
 ├── v4/                     # 主力 ←
-│   ├── ast_dsl.py          # Python ast Parser + 安全校验
-│   ├── registry.py         # 67 原语注册表
-│   ├── expression.py       # Expression 类 (generate/evaluate_panel/rank_panel)
+│   ├── ast_dsl.py          # [兼容重导出] 权威源 → utils/ast/dsl.py
+│   ├── registry.py         # [兼容重导出] 权威源 → utils/ast/registry.py + variables.py
+│   ├── expression.py       # Expression 类 (继承 AstExpression)
 │   ├── engine.py           # EngineCore (fast/full 双模式)
-│   ├── scoring.py           # 连续值打分 + 三区状态机
-│   ├── market_breadth.py   # 市场宽度
-│   ├── wf_result.py        # Walk-Forward 结果
+│   ├── market_breadth.py   # 市场宽度特征 (calc_* 核心函数)
+│   ├── wf_result.py        # WalkForwardResult 数据类 (v4 独立)
+│   ├── search/             # GP遗传算法 + 网格搜索
+│   │   ├── gp.py           # GPSearch (基于 Python ast)
+│   │   └── grid.py         # GridSearch (参数网格)
+│   ├── validate/           # 信号验证
+│   │   ├── single.py       # validate_single
+│   │   ├── compare.py      # compare_signals / signal_correlation
+│   │   └── walkforward.py  # validate_walkforward
 │   └── __init__.py         # 统一导出
 ├── v3/                     # 保留 (仅供历史测试对照)
 ```
@@ -124,8 +126,8 @@ analyzer.to_notebook("策略回测")
 ### 3. 表达式语法
 
 ```
-# 数据源 (6个)
-CLOSE  OPEN  HIGH  LOW  VOLUME  AMOUNT
+# 数据源 (8个)
+CLOSE  OPEN  HIGH  LOW  VOLUME  AMOUNT  VWAP  RETURNS
 
 # 时序统计 (25个)
 ts_mean(x, w)      ts_std(x, w)       ts_sum(x, w)
@@ -148,7 +150,7 @@ cs_winsorize(x)    cs_normalize(x)     cs_quantile(x)
 expanding_mean(x)        expanding_median(x)
 expanding_std(x)         expanding_percentile(x, p)
 
-# 特征计算 (21个, 从OHLCV实时算)
+# 特征计算 (22个, 从OHLCV实时算)
 rsi(CLOSE, period)       atr(HIGH, LOW, CLOSE, period)
 atr_sma(HIGH, LOW, CLOSE, period)   # SMA版ATR
 macd(CLOSE, fast, slow, signal)     adx(HIGH, LOW, CLOSE, period)
@@ -167,9 +169,10 @@ persist(expr, n)         # 连续 n 日同向才触发
 ts_scale(x, w)           # 滚动缩放到 ±1
 ts_quantile(x, w)        # 滚动分位数排名
 
-# 数学 (11个)
-abs(x)  log(x)  sqrt(x)  sign(x)  exp(x)  tanh(x)
-sigmoid(x)  relu(x)  signed_power(x, e)  safe_max(x,y)  safe_min(x,y)
+# 数学 (13个)
+abs(x)  log(x)  sqrt(x)  sign(x)  exp(x)  tanh(x)  sigmoid(x)
+relu(x)  signed_power(x, e)  safe_max(x,y)  safe_min(x,y)
+ts_var(x, w)  ts_logret(x)
 
 # Python 原生运算符
 + - * / // % **            # 算术
@@ -264,25 +267,29 @@ unregister_variable('MY_VAR')
 
 | 类别 | WorldQuant | Hubble | AKQuant | ft2 V4 |
 |------|:--:|:--:|:--:|:--:|
-| 时序 | 24 | 4 | 12 | **25** |
+| 时序 | 24 | 4 | 12 | **27** |
 | 截面 | 6 | 2 | 2 | **6** |
-| 特征计算 | 0 | 0 | 0 | **21** |
+| 特征计算 | 0 | 0 | 0 | **22** |
 | 扩张统计 | 0 | 0 | 0 | **4** |
-| 数学/逻辑 | 26 | 4 | 7 | **11** |
-| **总计** | **56** | **10** | **21** | **67** |
+| 数学/逻辑 | 26 | 4 | 7 | **13** |
+| **总计** | **56** | **10** | **21** | **72** |
+
+> **注意**: 权威原语定义在 `utils/ast/functions.py` (FUNC_REGISTRY)，非 signals/v4/registry.py。
+> `signals/v4/registry.py` 仅为向后兼容的 re-export。新增原语请用 `register_function()` 注册到
+> `utils/ast`，而非 signals/v4。
 
 ---
 
 ## 安全模型
 
 ```
-ast.parse(expr) → 三层白名单校验:
+ast.parse(expr) → 三层白名单校验 (实现在 utils/ast/dsl.py):
   1. 节点类型白名单 (Import/Attribute/Lambda 等35种禁止)
-  2. 函数名白名单 (67个注册原语 + 临时注册)
-  3. 变量名白名单 (6个OHLCV + 行业变量前缀)
-```
+  2. 函数名白名单 (72个注册原语 + 临时注册)
+  3. 变量名白名单 (70+合法变量前缀)
 
-**LLM 生成 → ast.parse → 白名单校验 → 回测 → 报告，全链路安全。**
+LLM 生成 → ast.parse → 白名单校验 → 回测 → 报告，全链路安全。
+```
 
 ## 行业结构变量 (extra_features 注入)
 
@@ -324,6 +331,7 @@ ast.parse(expr) → 三层白名单校验:
 - `evaluate_panel()` 确保索引对齐到 data 尾部（FeatureSpace 冷启动截断）
 - fast 模式内部走 `core.Engine.run_fast()` + `FastAccount`，不生成快照/交易记录；Sharpe 与 full 一致，`ctx.account` 接口统一
 - **滚动窗口预热**: `ts_zscore(60)` 等滚动函数要求满窗口才输出有效值（前59天为 NaN→0），避免早期样本不足时的假信号
-- **自定义注册**: `register_function()` / `register_variable()` 进程级全局，推荐脚本顶部注册、末尾注销
-- 67 原语覆盖 WorldQuant 时序算子的 96%，截面 100%
-- 扩展新原语：写函数 → `register_function()` 注册 → LLM 即用（无需改 registry.py）
+- **自定义注册**: `register_function()` / `register_variable()` 进程级全局，推荐脚本顶部注册、末尾注销。
+  新代码推荐直接使用 `from utils.ast import register_function, register_variable`
+- **72 原语覆盖 WorldQuant 时序算子的 96%**，截面 100%。权威清单在 `utils/ast/functions.py` (FUNC_REGISTRY)
+- 扩展新原语：写函数 → `register_function()` 注册 → LLM 即用（无需改 utils/ast/functions.py）

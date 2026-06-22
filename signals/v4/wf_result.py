@@ -1,35 +1,25 @@
 """
-signals/v3/wf_result.py — Walk-Forward 结果容器
+signals/v4/wf_result.py — Walk-Forward 结果容器 (v4 独立版)
 =============================================================================
-从 v2/walk_forward_v2.py 提取 WalkForwardCoreResult 数据类。
-v3 独立包，不依赖 v2。
+[重构] 2026-06-22 v4 独立副本，无 v3 依赖。
 =============================================================================
 """
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional
+from typing import Dict, List
 from dataclasses import dataclass, field
 
-# 窗口级指标映射
-WINDOW_METRICS = [
-    ('sharpe_ratio', 'sharpe'),
-    ('return_rate', 'total_return'),
-    ('annualized_return', 'annual_return'),
-    ('volatility', 'annual_vol'),
-    ('max_drawdown', 'max_drawdown'),
-    ('sortino_ratio', 'sortino'),
-    ('win_rate', 'win_rate'),
-    ('avg_profit_loss_ratio', 'profit_loss_ratio'),
-    ('avg_holding_period', 'avg_hold_days'),
-    ('var', 'var_95'),
-    ('cvar', 'cvar_95'),
-    ('kelly_criterion', 'kelly'),
+# [优化] 2026-06-22 直接使用 AccountAnalyzer 的 @metric 方法名，不重复包装
+METRICS = [
+    'sharpe_ratio', 'return_rate', 'annualized_return', 'volatility',
+    'max_drawdown', 'sortino_ratio', 'win_rate', 'avg_holding_period',
+    'var', 'cvar', 'kelly_criterion',
 ]
 
 
 @dataclass
-class WalkForwardCoreResult:
-    """core 引擎版 Walk-Forward 验证结果"""
+class WalkForwardResult:
+    """ft2.core 引擎版 Walk-Forward 验证结果 (v4)"""
 
     windows: List[Dict] = field(default_factory=list)
     summary: Dict = field(default_factory=dict)
@@ -37,11 +27,11 @@ class WalkForwardCoreResult:
 
     @property
     def train_sharpes(self) -> List[float]:
-        return [w.get('train', {}).get('sharpe', 0) or 0 for w in self.windows]
+        return [w.get('train', {}).get('sharpe_ratio', 0) or 0 for w in self.windows]
 
     @property
     def test_sharpes(self) -> List[float]:
-        return [w.get('test', {}).get('sharpe', 0) or 0 for w in self.windows]
+        return [w.get('test', {}).get('sharpe_ratio', 0) or 0 for w in self.windows]
 
     @property
     def stability_score(self) -> float:
@@ -76,10 +66,10 @@ class WalkForwardCoreResult:
             }
             for scope in ('train', 'test'):
                 metrics = w.get(scope, {})
-                for metric_key, short_key in WINDOW_METRICS:
-                    val = metrics.get(short_key)
+                for m in METRICS:
+                    val = metrics.get(m)
                     if val is not None:
-                        row[f'{scope}_{short_key}'] = round(val, 4)
+                        row[f'{scope}_{m}'] = round(val, 4)
             rows.append(row)
         return pd.DataFrame(rows)
 
@@ -87,10 +77,10 @@ class WalkForwardCoreResult:
         """窗口间指标稳定性报告"""
         report = {'n_windows': len(self.windows)}
         for scope in ('train', 'test'):
-            for _, short_key in WINDOW_METRICS:
-                vals = [w.get(scope, {}).get(short_key) for w in self.windows]
+            for m in METRICS:
+                vals = [w.get(scope, {}).get(m) for w in self.windows]
                 vals = [v for v in vals if v is not None]
                 if len(vals) >= 2:
-                    report[f'{scope}_{short_key}_mean'] = float(np.mean(vals))
-                    report[f'{scope}_{short_key}_std'] = float(np.std(vals, ddof=1))
+                    report[f'{scope}_{m}_mean'] = float(np.mean(vals))
+                    report[f'{scope}_{m}_std'] = float(np.std(vals, ddof=1))
         return report
