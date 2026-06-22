@@ -32,17 +32,21 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class GridSearchResult:
-    """单个网格搜索点的结果"""
+    """单个网格搜索点的结果
+
+    字段名与 AccountAnalyzer / FactorValidator 方法名一致。
+    """
     param_name: str
     lookback: int
     freq: str
     top_n: int = 5
     ic_mean: float = 0.0
     ic_ir: float = 0.0
-    sharpe: float = 0.0
-    annual_return: float = 0.0
+    sharpe_ratio: float = 0.0
+    annualized_return: float = 0.0
     max_drawdown: float = 0.0
     hit_rate: float = 0.0
+    analyzer: object = None  # AccountAnalyzer 引用
 
 
 class FactorGridSearch:
@@ -135,14 +139,15 @@ class FactorGridSearch:
                 lookback=lookback, freq=freq, top_n=top_n,
                 ic_mean=float(ic_mean),
                 ic_ir=float(ic_ir) if not np.isnan(ic_ir) else 0.0,
-                sharpe=float(sr) if sr is not None else 0.0,
-                annual_return=analyzer.annualized_return() or 0.0,
-                max_drawdown=analyzer.max_drawdown() or 0.0,
+                sharpe_ratio=float(sr) if sr is not None else 0.0,
+                annualized_return=analyzer.annualized_return() or 0.0,
+                max_drawdown=float(analyzer.max_drawdown()[0]) if analyzer.max_drawdown() else 0.0,
                 hit_rate=float(hr) if not np.isnan(hr) else 0.0,
+                analyzer=analyzer,
             )
             self.results.append(result)
 
-        self.results.sort(key=lambda r: r.sharpe, reverse=True)
+        self.results.sort(key=lambda r: r.sharpe_ratio, reverse=True)
         return self.results
 
     def best(self, n: int = 10) -> List[GridSearchResult]:
@@ -157,7 +162,7 @@ class FactorGridSearch:
                 '参数': r.param_name, 'Lookback': r.lookback,
                 '频率': r.freq, 'TopN': r.top_n,
                 'IC': round(r.ic_mean, 4), 'IR': round(r.ic_ir, 2),
-                'Sharpe': round(r.sharpe, 2), '年化': f"{r.annual_return:.1%}",
+                'Sharpe': round(r.sharpe_ratio, 2), '年化': f"{r.annualized_return:.1%}",
                 '最大回撤': f"{r.max_drawdown:.1%}",
             })
         return pd.DataFrame(rows)

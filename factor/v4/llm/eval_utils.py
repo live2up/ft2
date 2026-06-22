@@ -145,5 +145,5 @@ def quick_sharpe(expression: str,
     from factor.v4.engine import EngineCore
 
     ranked = quick_rank_panel(expression, assets)
-    result = EngineCore.backtest(ranked, assets, top_n=top_n, rebalance=rebalance)
-    return result.sharpe
+    analyzer = EngineCore.backtest(ranked, assets, top_n=top_n, rebalance=rebalance)
+    return analyzer.sharpe_ratio()

@@ -40,7 +40,7 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
-import signals.v4.ast_dsl as dsl
+from utils.ast.dsl import parse_expression
 from .expression import _ExpressionFromAST
 
 logger = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ class Individual:
     @staticmethod
     def from_expr(expr_str: str, generation: int = 0, is_seed: bool = False) -> 'Individual':
         """从表达式字符串创建个体"""
-        tree = dsl.parse_expression(expr_str)
+        tree = parse_expression(expr_str)
         return Individual(
             tree=tree,
             expression_str=expr_str,

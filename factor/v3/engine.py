@@ -610,20 +610,24 @@ def expression_factor(alpha_id: str, formulas: Dict[str, str] = None, **kwargs) 
 
 @dataclass
 class AlphaResult:
-    """单个 Alpha 因子的检验 + 回测结果"""
+    """单个 Alpha 因子的检验 + 回测结果
+
+    字段名与 AccountAnalyzer / FactorValidator 方法名一致。
+    """
     alpha_id: str
     ic_mean: float = 0.0
     ic_ir: float = 0.0
-    sharpe: float = 0.0
-    annual_return: float = 0.0
+    sharpe_ratio: float = 0.0
+    annualized_return: float = 0.0
     max_drawdown: float = 0.0
     hit_rate: float = 0.0
     expression: str = ''
     error: str = ''
+    analyzer: object = None  # AccountAnalyzer 引用（full/fast/vector 统一）
 
     def __repr__(self):
         return (f"AlphaResult({self.alpha_id}, IC={self.ic_mean:.4f}, "
-                f"IR={self.ic_ir:.2f}, Sharpe={self.sharpe:.2f})")
+                f"IR={self.ic_ir:.2f}, Sharpe={self.sharpe_ratio:.2f})")
 
 
 class AlphaExplorer:
@@ -692,13 +696,15 @@ class AlphaExplorer:
                 analyzer = FactorEngineCore.backtest(
                     fv, self.returns, top_n=self.top_n, rebalance=scheduler)
                 sr = analyzer.sharpe_ratio()
-                result = AlphaResult(alpha_id=aid, ic_mean=float(ic_mean),
-                                     ic_ir=float(ic_ir) if not np.isnan(ic_ir) else 0.0,
-                                     sharpe=float(sr) if sr is not None else 0.0,
-                                     annual_return=analyzer.annualized_return() or 0.0,
-                                     max_drawdown=analyzer.max_drawdown() or 0.0,
-                                     hit_rate=float(hr) if not np.isnan(hr) else 0.0,
-                                     expression=formula)
+                mdd = analyzer.max_drawdown()
+                result = AlphaResult(
+                    alpha_id=aid, ic_mean=float(ic_mean),
+                    ic_ir=float(ic_ir) if not np.isnan(ic_ir) else 0.0,
+                    sharpe_ratio=float(sr) if sr is not None else 0.0,
+                    annualized_return=analyzer.annualized_return() or 0.0,
+                    max_drawdown=float(mdd[0]) if mdd else 0.0,
+                    hit_rate=float(hr) if not np.isnan(hr) else 0.0,
+                    expression=formula, analyzer=analyzer)
                 self.results.append(result)
                 if verbose:
                     print(f"IC={ic_mean:.4f} IR={ic_ir:.2f} Sharpe={(sr if sr is not None else 0):.2f}")
@@ -712,7 +718,7 @@ class AlphaExplorer:
 
     def best(self, min_ic: float = 0.0, min_sharpe: float = 0.0, top_n: int = 20) -> List[AlphaResult]:
         filtered = [r for r in self.results
-                    if abs(r.ic_mean) >= min_ic and r.sharpe >= min_sharpe and not r.error]
+                    if abs(r.ic_mean) >= min_ic and r.sharpe_ratio >= min_sharpe and not r.error]
         return filtered[:top_n]
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -723,7 +729,7 @@ class AlphaExplorer:
             rows.append({
                 'Alpha': r.alpha_id, '|IC|': round(abs(r.ic_mean), 4),
                 'IC': round(r.ic_mean, 4), 'IR': round(r.ic_ir, 2),
-                'Sharpe': round(r.sharpe, 2), '年化收益': f"{r.annual_return:.1%}",
+                'Sharpe': round(r.sharpe_ratio, 2), '年化收益': f"{r.annualized_return:.1%}",
                 '最大回撤': f"{r.max_drawdown:.1%}", '命中率': f"{r.hit_rate:.1%}",
                 '错误': r.error[:40] if r.error else '',
             })

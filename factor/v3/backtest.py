@@ -538,24 +538,23 @@ class FactorPipeline:
         self.cost_rate = cost_rate
         self.rf_annual = rf_annual
 
-    def evaluate(self, factor_values: pd.DataFrame) -> BacktestResult:
-        """委托到 FactorEngineCore"""
+    def evaluate(self, factor_values: pd.DataFrame):
+        """委托到 FactorEngineCore，直接返回 AccountAnalyzer。
+
+        [重构] 2026-06-22 去掉 BacktestResult 翻译层，直接返回 AccountAnalyzer。
+        旧代码若依赖 BacktestResult 字段，改为调用 AccountAnalyzer 方法：
+          - result.sharpe_ratio → analyzer.sharpe_ratio()
+          - result.annual_return → analyzer.annualized_return()
+          - result.max_drawdown → analyzer.max_drawdown()[0]
+          - result.nav_series → analyzer.daily_returns()
+        """
         from .engine_core import FactorEngineCore
-        # 从 allocator 提取 top_n
+        from core.analyzer import AccountAnalyzer
+
         top_n = getattr(self.allocator, 'top_n', 3)
-        analyzer = FactorEngineCore.backtest(
+        return FactorEngineCore.backtest(
             factor_values, self.returns, top_n=top_n,
             rebalance=self.scheduler)
-
-        sr = analyzer.sharpe_ratio()
-        mdd = analyzer.max_drawdown()
-        result = BacktestResult(
-            sharpe_ratio=float(sr) if sr is not None else 0.0,
-            annual_return=analyzer.annualized_return() or 0.0,
-            max_drawdown=float(mdd[0]) if mdd else 0.0,
-            nav_series=analyzer.daily_returns(),
-        )
-        return result
 
     def __repr__(self) -> str:
         return (f"FactorPipeline[deprecated](scheduler={self.scheduler}, "

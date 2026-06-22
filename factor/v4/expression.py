@@ -1,39 +1,56 @@
-# [重构] 2026-06-12 对齐 signals/v4/expression.py 参数规范
+# [重构] 2026-06-22 继承 utils.ast.AstExpression 公共基类
 """
-factor/v4/expression.py — 因子表达式引擎 (基于 signals.v4 AST DSL)
+factor/v4/expression.py — 因子表达式引擎 (继承 AstExpression)
+=============================================================================
 
-薄包装层：直接使用 signals.v4 AST DSL 解析和求值，无语法转换。
+FactorExpression 是 AstExpression 的因子子类，在基类的解析+自省能力之上，
+增加 2D 面板 → ndarray(T,N) 的求值能力。
 
-因子表达式使用 Python infix 语法：
-    ts_rank((CLOSE - ts_delay(CLOSE, 20)), 10)
-    cs_rank(ts_corr(CLOSE, VOLUME, 20))
-    safe_max(CLOSE, ts_delay(CLOSE, 5)) if ...
+职责:
+  - evaluate(data_dict)         → 逐列求值 ndarray(T,N)
+  - evaluate_ranked(data_dict)  → 截面排名 0~1  (委托 CsResolver)
+
+对应的内部类 _ExpressionFromAST 是 GP 引擎使用的轻量包装器，
+接收已有 AST 树跳过 parse 步骤直接求值。
+
+与 signals/v4/Expression 的关系:
+  - 共同基类: utils.ast.AstExpression (parse→variables→functions→complexity)
+  - 差异: FactorExpression 输入 Dict[str, ndarray], 输出 ndarray(T,N)
+          Expression 输入 pd.DataFrame, 输出 pd.Series
 
 用法:
-    >>> from factor.v4 import FactorExpression
-    >>> expr = FactorExpression("ts_rank((CLOSE - ts_delay(CLOSE, 20)), 10)")
-    >>> panel = expr.evaluate(data_dict)  # → ndarray(T, N)
+  >>> from factor.v4 import FactorExpression
+  >>> expr = FactorExpression("cs_rank(ts_roc(CLOSE, 20))")
+  >>> panel = expr.evaluate(data_dict)    # ndarray(T,N)
+  >>> ranked = expr.evaluate_ranked(data_dict)  # 截面排名 0~1
+=============================================================================
 """
 import ast
 import numpy as np
 from typing import Dict
 
-import signals.v4.ast_dsl as dsl
-from utils.ast import (
-    CsResolver, _has_any_cs, _is_outer_cs_rank_call, _eval_colwise,
-    normalize_data_keys,
-)
+from utils.ast.expr_base import AstExpression
+from utils.ast.dsl import evaluate, eval_colwise
+from utils.ast import CsResolver, normalize_data_keys
 
 
 class _ExpressionFromAST:
-    """轻量 AST 包装器: 跳过 parse, 直接用已有 AST 树求值"""
+    """轻量 AST 包装器: 接收已有 AST 树直接求值 (跳过 parse)
+
+    使用场景: GP 引擎在内部生成/变异 ast.Expression 对象，
+    直接传入此包装器求值，避免反复 parse 字符串。
+
+    与 AstExpression 的区别:
+      - AstExpression: expr_str → parse → tree → evaluate
+      - _ExpressionFromAST: tree (已有) → evaluate
+    """
 
     def __init__(self, tree: ast.Expression, name: str = ''):
         self._tree = tree
         self.name = name
 
     def evaluate(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        """[重构] 2026-06-22 复用 normalize_data_keys + _eval_colwise"""
+        """逐列求值 1D 或 2D 数据 → ndarray"""
         data_norm = normalize_data_keys(data)
         T, N = None, None
         for v in data_norm.values():
@@ -42,20 +59,20 @@ class _ExpressionFromAST:
                 break
 
         if N is None:
-            result = dsl.evaluate(self._tree, data_norm)
+            result = evaluate(self._tree, data_norm)
             return np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
 
-        return _eval_colwise(self._tree, data_norm, T, N)
+        return eval_colwise(self._tree, data_norm, T, N)
 
 
-class FactorExpression:
+class FactorExpression(AstExpression):
     """因子表达式 — 字符串 → AST → ndarray(T,N)
 
-    对齐 signals/v4 Expression 参数规范:
-      - expr_str: 表达式字符串
-      - variables: 依赖变量列表
-      - functions: 依赖函数列表
-      - complexity: AST 节点数
+    继承 AstExpression 的解析+自省能力，提供 2D 面板求值。
+
+    Attributes (继承自 AstExpression):
+        expr_str, name, _tree, variables, functions, complexity
+        _has_cs, _is_outer_cs_rank
 
     Example:
         >>> expr = FactorExpression("cs_rank(ts_roc(CLOSE, 20))")
@@ -65,30 +82,14 @@ class FactorExpression:
         >>> print(expr.functions)               # ['cs_rank', 'ts_roc']
     """
 
-    def __init__(self, expr_str: str, name: str = None):
-        self.expr_str = expr_str.strip()
-        self.name = name or expr_str[:60]
-        self._tree = dsl.parse_expression(self.expr_str)
-        self.variables = dsl.get_variables(self._tree)
-        self.functions = dsl.get_functions(self._tree)
-        self.complexity = sum(1 for _ in ast.walk(self._tree.body))
-        # [重构] 2026-06-22 cs_rank 检测委托给 CsResolver (注册表驱动)
-        self._has_cs_rank = _has_any_cs(self._tree)
-        self._is_outer_cs_rank = _is_outer_cs_rank_call(self._tree)
-
-    @property
-    def features_used(self) -> list:
-        """[新增] 2026-06-22 对齐 signals/v4 Expression 参数规范"""
-        return self.variables
-
     def evaluate(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        """求值为 (T, N) ndarray。
+        """求值为 (T, N) ndarray（逐列求值，时序函数 1D 安全）
 
         注意: 含截面函数的表达式请使用 evaluate_ranked()。
         evaluate() 逐列求值, 截面函数收到 1D 数组会退化。
         """
-        # [新增] 2026-06-22 运行时警告: 含 cs_rank 的表达式走错入口
-        if self._has_cs_rank:
+        # 运行时警告: 含截面函数的表达式走错入口
+        if self._has_cs:
             import warnings
             warnings.warn(
                 f"FactorExpression.evaluate(): 表达式含截面函数, "
@@ -105,28 +106,20 @@ class FactorExpression:
 
         # 1D
         if N is None:
-            result = dsl.evaluate(self._tree, data_norm)
+            result = evaluate(self._tree, data_norm)
             return np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # 2D: 逐列 (复用 cs_resolver 的逐列求值器)
-        return _eval_colwise(self._tree, data_norm, T, N)
+        # 2D: 逐列求值
+        return eval_colwise(self._tree, data_norm, T, N)
 
     def evaluate_ranked(self, data: Dict[str, np.ndarray]) -> np.ndarray:
         """截面排名求值 → 0~1 排名矩阵
 
-        [重构] 2026-06-22 委托给 CsResolver 单遍 bottom-up 解析器。
-        支持注册表中所有截面函数的嵌套/组合。
+        委托给 CsResolver 单遍 bottom-up 解析器。
+        支持注册表中所有截面函数 (cs_rank/cs_zscore/cs_scale/...) 的嵌套/组合。
 
         Returns:
             ndarray(T,N), 每行截面排名(pct, 0~1), 值越大排名越高
         """
-        # 规范化数据
         data_norm = normalize_data_keys(data)
-
         return CsResolver().resolve(self._tree, data_norm)
-
-    def __repr__(self):
-        return f"FactorExpression({self.expr_str[:60]!r})"
-
-    def __str__(self):
-        return self.expr_str

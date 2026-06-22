@@ -73,6 +73,9 @@ from .resolver import (
     _get_cs_functions, _has_any_cs, _is_outer_cs_rank_call,
 )
 
+# ── 基类层 (expr_base.py) ──
+from .expr_base import AstExpression
+
 # ── 规格层 (spec.py) ──
 from .spec import (
     # 构建器
@@ -98,6 +101,9 @@ __all__ = [
     'eval_colwise', 'cross_sectional_rank',
     'ast_depth', 'ast_node_count',
     'DSLSecurityError', 'DSLSyntaxError',
+
+    # base — AST 表达式基类
+    'AstExpression',
 
     # functions — 原语层
     'FUNC_REGISTRY', 'SAFE_CONSTANTS',
