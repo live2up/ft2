@@ -19,10 +19,10 @@ import numpy as np
 from typing import Dict
 
 import signals.v4.ast_dsl as dsl
-from utils.ast import CsResolver, _has_any_cs, _is_outer_cs_rank_call, _eval_colwise
-
-# signals.v4 函数设计为 1D 数组，因子面板为 2D (T,N)，需逐列求值。
-_BASE_VARS = {'open', 'high', 'low', 'close', 'volume', 'amount'}
+from utils.ast import (
+    CsResolver, _has_any_cs, _is_outer_cs_rank_call, _eval_colwise,
+    normalize_data_keys,
+)
 
 
 class _ExpressionFromAST:
@@ -33,15 +33,13 @@ class _ExpressionFromAST:
         self.name = name
 
     def evaluate(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        """[重构] 2026-06-22 复用 _eval_colwise 消除重复逻辑"""
-        data_norm = {}
+        """[重构] 2026-06-22 复用 normalize_data_keys + _eval_colwise"""
+        data_norm = normalize_data_keys(data)
         T, N = None, None
-        for k, v in data.items():
-            arr = np.asarray(v, dtype=float)
-            if arr.ndim == 2:
-                T, N = arr.shape
-            key = k.upper() if k.lower() in _BASE_VARS else k
-            data_norm[key] = arr
+        for v in data_norm.values():
+            if isinstance(v, np.ndarray) and v.ndim == 2:
+                T, N = v.shape
+                break
 
         if N is None:
             result = dsl.evaluate(self._tree, data_norm)
@@ -98,14 +96,12 @@ class FactorExpression:
                 f"\n  表达式: {self.expr_str[:80]}"
             )
         # 规范化数据
-        data_norm = {}
+        data_norm = normalize_data_keys(data)
         T, N = None, None
-        for k, v in data.items():
-            arr = np.asarray(v, dtype=float)
-            if arr.ndim == 2:
-                T, N = arr.shape
-            key = k.upper() if k.lower() in _BASE_VARS else k
-            data_norm[key] = arr
+        for v in data_norm.values():
+            if isinstance(v, np.ndarray) and v.ndim == 2:
+                T, N = v.shape
+                break
 
         # 1D
         if N is None:
@@ -124,12 +120,8 @@ class FactorExpression:
         Returns:
             ndarray(T,N), 每行截面排名(pct, 0~1), 值越大排名越高
         """
-        # 规范化数据 (与 evaluate 共用逻辑)
-        data_norm = {}
-        for k, v in data.items():
-            arr = np.asarray(v, dtype=float)
-            key = k.upper() if k.lower() in _BASE_VARS else k
-            data_norm[key] = arr
+        # 规范化数据
+        data_norm = normalize_data_keys(data)
 
         return CsResolver().resolve(self._tree, data_norm)
 

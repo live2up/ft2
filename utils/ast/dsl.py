@@ -28,6 +28,35 @@ from .registry import (
 )
 
 # ============================================================
+# 数据键规范化 — 应用端统一入口 (ALL_CAPS 约定)
+# ============================================================
+
+def normalize_data_keys(data: Dict[str, Any]) -> Dict[str, np.ndarray]:
+    """规范化数据字典的键名, 统一大小写
+
+    规则:
+      1. 所有键统一转为大写 (ALL_CAPS 约定, 对齐 WQ/聚宽 等行业标准)
+      2. 所有值转为 float ndarray
+      3. 冲突处理: 同名键 (如同时有 close 和 CLOSE) 后者覆盖前者
+
+    业内规范:
+      WorldQuant (WQ101/GT191)、聚宽、RiceQuant 等量化平台均采用
+      ALL_CAPS 作为公式变量命名约定。数据源 (Yahoo/d2) 通常小写,
+      在进入 AST 引擎前统一归一化。
+
+    Args:
+        data: 原始数据字典, 键名大小写不敏感
+
+    Returns:
+        规范化后的字典 {全部大写键: ndarray}
+    """
+    result = {}
+    for k, v in data.items():
+        arr = np.asarray(v, dtype=float)
+        result[k.upper()] = arr
+    return result
+
+# ============================================================
 # 安全白名单 — 允许的 AST 节点类型
 # ============================================================
 

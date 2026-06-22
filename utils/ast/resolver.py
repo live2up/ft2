@@ -25,6 +25,7 @@ from typing import Dict, Set, Optional
 
 import signals.v4.ast_dsl as dsl  # [重构] 仍通过兼容重导出访问
 from .registry import FUNC_REGISTRY
+from .dsl import normalize_data_keys
 
 # ============================================================
 # 截面函数注册表 — 自动从 FUNC_REGISTRY 发现所有 cs_* 函数
@@ -34,8 +35,6 @@ CROSS_SECTIONAL_FUNCTIONS: Set[str] = {
     name for name in FUNC_REGISTRY
     if name.startswith('cs_')
 }
-
-_BASE_VARS = {'open', 'high', 'low', 'close', 'volume', 'amount'}
 
 
 # ============================================================
@@ -102,15 +101,13 @@ class CsResolver:
         return _cross_sectional_rank(vals)
 
     def _normalize_data(self, data: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-        """规范化数据 key: 基础变量转大写, 记录维度"""
-        result = {}
-        self._T, self._N = 0, 0
-        for k, v in data.items():
+        """[重构] 2026-06-22 复用 utils/ast normalize_data_keys"""
+        result = normalize_data_keys(data)
+        for v in result.values():
             arr = np.asarray(v, dtype=float)
             if arr.ndim == 2:
                 self._T, self._N = arr.shape
-            key = k.upper() if k.lower() in _BASE_VARS else k
-            result[key] = arr
+                break
         return result
 
     def _resolve_node(self, node: ast.Call, data: Dict[str, np.ndarray]) -> ast.Name:

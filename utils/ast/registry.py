@@ -653,10 +653,13 @@ def is_valid_variable(name: str) -> bool:
 # ============================================================
 #
 # 用法:
-#   from signals.v4.registry import register_function, register_variable
+#   from utils.ast.registry import register_function, register_variable
 #   register_function('my_indicator', lambda x, w: np.convolve(x, np.ones(w)/w, 'same'))
 #   register_variable('MY_VAR')
 #   expr = Expression("MY_VAR > 0 and my_indicator(CLOSE, 10) > 0")
+#
+# 兼容旧路径 (通过重导出仍可用):
+#   from signals.v4.registry import register_function, register_variable
 #
 # 注意: 注册是进程级全局操作，重复注册同名函数会覆盖。
 

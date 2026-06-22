@@ -1,8 +1,14 @@
 """
 signals/v4/registry.py — 兼容重导出
 
-[重构] 2026-06-22 逻辑已迁移至 utils/ast/registry.py,
-此文件保留向后兼容。
+[重构] 2026-06-22 权威源已迁移至 utils/ast/registry.py,
+此文件保留向后兼容。新代码请使用:
+
+    from utils.ast.registry import register_function, register_variable
+
+旧路径仍可用但建议迁移:
+
+    from signals.v4.registry import ...   # 仍生效，重导出链
 """
 from utils.ast.registry import *  # noqa: F401,F403
 from utils.ast.registry import FUNC_REGISTRY, SAFE_CONSTANTS, is_valid_variable, VALID_VAR_PREFIXES  # noqa: F401
