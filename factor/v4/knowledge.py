@@ -215,7 +215,7 @@ class FactorKnowledgeBase:
                 外部项目（如 AI_yinzi）推荐传入 PROJECT_ROOT，记忆与项目共存。
         """
         if memory_dir is not None:
-            memory_dir = Path(memory_dir)
+            memory_dir = Path(memory_dir) / 'memory'
         else:
             memory_dir = Path(__file__).resolve().parent.parent.parent / 'memory'
         self._log_path = memory_dir / DEFAULT_LOG_NAME
