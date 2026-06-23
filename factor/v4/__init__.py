@@ -48,10 +48,14 @@ from .cache import FactorCacheStore
 # ── gp_engine ──
 from .gp_engine import GPEngine, Individual
 
+# ── knowledge 因子知识树 ──
+from .knowledge import FactorKnowledgeBase, ExplorationRecord, ExplorationStatus, ALPHA_SOURCES
+
 __all__ = [
     'FacEngine',
     'FactorExpression',
     'GPEngine', 'Individual',
     'FactorCategory', 'FactorMetadata', 'FactorLibrary',
     'FactorValidator', 'ValidationResult', 'FactorCacheStore',
+    'FactorKnowledgeBase', 'ExplorationRecord', 'ExplorationStatus', 'ALPHA_SOURCES',
 ]

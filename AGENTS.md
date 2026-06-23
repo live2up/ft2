@@ -47,10 +47,12 @@ AI Agent 或外部项目调用 ft2 时，遵循以下原则保障上下文沟通
 | 场景 | ft2 规范 | 外部模块应使用 |
 |------|----------|---------------|
 | OHLCV 数据 | `data`（不是 `raw_data` / `df` / `klines`） | `data` |
-| 回测结果 | `analyzer` / `r`（不是 `result` / `backtest`） | `r = SigEngine.backtest(...)` |
+| 因子排名面板 | `panel`（不是 `ranked` / `factor_df` / `fv`） | `panel = expr.evaluate_ranked(data)` |
+| 回测结果 | `analyzer` / `r`（不是 `result` / `backtest`） | `r = FacEngine.backtest(...)` 或 `r = SigEngine.backtest(...)` |
 | 信号序列 | `signal`（不是 `sig` / `signals` / `pred`） | `signal` |
 | 额外特征 | `extra_features`（不是 `features` / `feats` / `ctx`） | `extra_features` |
-| 表达式字符串 | `expr` / `buy_expr` / `sell_expr` | `buy_expr` / `sell_expr` |
+| 表达式字符串 | `expr` / `buy_expr` / `sell_expr` | `expr` / `buy_expr` / `sell_expr` |
+| 品种名称映射 | `symbol_names`（如 `{'801010.SI': '农林牧渔(申万)'}`） | 嵌入 DataFrame `name` 列即可自动传递 |
 
 ### 2. 零封装原则
 
@@ -61,6 +63,11 @@ AI Agent 或外部项目调用 ft2 时，遵循以下原则保障上下文沟通
 from signals.v4 import stateful_signal, SigEngine
 signal = stateful_signal(data, buy_expr, sell_expr, max_hold=10)
 r = SigEngine.backtest(signal, data, mode='fast')
+
+# 好 — 直接调 factor.v4，无中间函数
+from factor.v4 import FactorExpression, FacEngine
+panel = FactorExpression("cs_rank(ts_roc(CLOSE, 20))").evaluate_ranked(data)
+r = FacEngine.backtest(panel, assets, top_n=3, mode='full')
 
 # 坏 — 又包一层，Agent 需要学两套 API
 def my_backtest(data, b, s):
@@ -76,6 +83,10 @@ r = my_backtest(data, buy_expr, sell_expr)
 signal = stateful_signal(data, buy_expr, sell_expr, extra_features=ef)
 r = SigEngine.backtest(signal, data, mode='fast', start_date=start_date)
 
+# 好 — factor.v4 显式传参
+r = FacEngine.backtest(panel, assets, top_n=3, mode='full',
+    bench_label='399317.SZ', fee_config={'commission_rate': 0.0003})
+
 # 坏 — 依赖闭包变量，模板复制后跑不通
 def stateful_engine(data, buy, sell):
     return stateful_signal(data, buy, sell, extra_features=extra_features)  # extra_features 从哪来？
@@ -90,25 +101,35 @@ ft2 已有功能的不要手写：
 from signals.v4.validate import signal_correlation
 corr = signal_correlation(signals, data)
 
+from factor.v4 import FactorExpression
+panel = FactorExpression("cs_rank(ts_roc(CLOSE, 20))").evaluate_ranked(data)
+
 # 坏 — 自实现同样逻辑
 def my_correlation(signals, data):
     ...  # 45 行手写计算
+
+def my_momentum(data):
+    ...  # 手写截面排名+时序ROC
 ```
 
 ### 5. 保持 import 链简单
 
 ```python
-# 好 — 直接从 v4 导入
+# 好 — 直接从 v4 顶层导入
 from signals.v4 import stateful_signal, SigEngine
+from factor.v4 import FacEngine, FactorExpression
 
 # 坏 — 多层 import 跳转
 from signals.v4.expression import stateful_signal
 from signals.v4.engine import SigEngine
+from factor.v4.engine import FacEngine
+from factor.v4.expression import FactorExpression
 ```
 
 ### 6. 调用链不超过 2 层
 
 ```
-  模板 -> signals.v4
-  模板 -> 自封装层 -> signals.v4  (中间层无新增价值)
+  模板 -> signals.v4          ✓ 好
+  模板 -> factor.v4           ✓ 好
+  模板 -> 自封装层 -> v4      ✗ 中间层无新增价值
 ```

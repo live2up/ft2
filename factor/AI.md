@@ -283,3 +283,8 @@ len(BASIC_FACTORS)  # 20    因子原子基元
 - 截面排名推荐使用 `evaluate_ranked()` 或 `Expression.rank_panel()`
 - 72 原语覆盖 WorldQuant 时序算子的 96%，截面 100%
 - 扩展新原语：`signals.v4.register_function()` 注册 → 因子模块即用
+- 频率后缀命名规范（探索模板 / knowledge 指标键）：
+  - `_d` = 日度（daily），对应 `rebalance='D'`
+  - `_w` = 周度（weekly），对应 `rebalance='W'`
+  - `_m` = 月度（monthly），对应 `rebalance='M'`
+  - 例：`sharpe_ratio_d`、`wf_avg_sharpe_d`、`sharpe_ratio_w`

@@ -2,7 +2,7 @@
 
 > 回测引擎核心 + HTML 报告（已融合 notebook 模块）
 >
-> **版本：v2.7 | 更新日期：2026-06-21**
+> **版本：v2.8 | 更新日期：2026-06-23**
 
 ---
 
@@ -23,6 +23,14 @@ run() →  AccountManager      run_fast() → FastAccount
               纯矩阵向量化, 跳过事件驱动, ~38ms/次 (73x)
                  → AccountAnalyzer(daily_assets)
 ```
+
+**v2.8 更新要点（2026-06-23）：**
+- 新增品种名称表：`Engine.add_data(symbol_name=...)` 记录品种名称，`_drive_timeline` 自动注入到 `account._symbol_names`，analyzer 报告交易记录表自动显示"名称"列
+- 自动适配数据源：未显式传入 `symbol_name` 时，自动从 DataFrame 的 `symbol_name`/`name` 列提取
+- `add_data()` 优先顺序：显式参数 > df['symbol_name'] > df['name'] > 空
+- 名称不进入 bar 数据、不进入 TradeRecord，仅作为元数据流向 analyzer 报告
+- FastAccount 无名称表（`hasattr` 守卫跳过），run_fast 模式下名称不参与回测
+- 名称表为空时 analyzer 不显示名称列，行为与改动前完全一致
 
 **v2.7 更新要点（2026-06-21）：**
 - factor/v4 新增 `mode='vector'`：纯矩阵向量化因子轮动，跳过 `_drive_timeline`，约 73x 快于 full
@@ -62,6 +70,10 @@ context.subscribe('399317.SZ', '1d', count=300)
 # 加载数据（DataFrame 需有 eob, symbol 列）
 engine.add_data('399317.SZ', '1d', df)
 
+# 带品种名称加载（报告交易记录表自动显示）
+engine.add_data('399317.SZ', '1d', df, symbol_name='国证A指')
+# 若 df 含 'name' 或 'symbol_name' 列，名称自动提取，无需显式传参
+
 # ── full 模式: AccountManager → TradeRecord + Snapshot → AccountAnalyzer(account) ──
 engine.run(MyStrategy, start_time, end_time)
 from core.analyzer import AccountAnalyzer
@@ -81,6 +93,8 @@ analyzer = engine.run_fast(FastStrategy(), start_time, end_time)
 - 引擎在 on_bar 后自动调用 `ctx.account.mark()` 记录日末净值，策略无需手动调用
 - `start/end` 自动 clamp 到时间线边界，`init_snapshot` 锚定时间线上 start 之前的真实 bar
 - `run()`/`run_fast()` 入口注册 `_active_engine`，退出时恢复，支持嵌套多引擎
+- `add_data(symbol_name=...)` 可传入品种名称，不传时自动从 DataFrame 的 `name`/`symbol_name` 列提取。
+  名称不进入 bar/TradeRecord，仅作为元数据流向 analyzer 报告显示。
 
 ### 三种模式对比
 
@@ -375,6 +389,12 @@ nb.export_html()  # → 输出到当前脚本所在目录
 - `freeze={'left': 2}` — 冻结前 2 列（标识列固定）
 - `heatmap={'start': 2, 'axis': 'column'}` — 数值列着色（红涨绿跌）
 - `page={'size': 20}` / `page=False` — 分页控制（≤20 行建议禁用）
+
+**品种名称列（交易记录自动显示）：**
+- 使用 `Engine.add_data(symbol_name=...)` 传入了品种名称，或 DataFrame 含 `name`/`symbol_name` 列时，
+  analyzer 自动在交易记录表插入"名称"列（冻结在标的代码右侧）。
+- 名称表为空时 `to_notebook/to_excel` 不显示该列，行为与改动前完全一致。
+- 名称仅作为元数据流向报告，不写入 bar 数据 / TradeRecord / 策略逻辑。
 
 ---
 

@@ -58,6 +58,7 @@ class FacEngine:
         Args:
             panel: 因子排名面板, index=日期, columns=品种, 值越大越好
             assets: {品种代码: OHLCV DataFrame} (优先于 returns)
+                    品种名称通过 assets[code] 的 name 列自动识别, 无需额外参数。
             returns: 日收益率 DataFrame (自动合成 OHLCV assets)
             top_n: 持仓品种数
             rebalance: 调仓频率 'D'/'W'/'M'/'ME'/'5D' 或 RebalanceScheduler 对象
