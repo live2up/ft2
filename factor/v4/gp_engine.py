@@ -92,6 +92,9 @@ RATIO_FUNCTIONS = {
     'vol_ratio': [(5, 20)],
 }
 
+# [新增] 2026-06-23 数学原语 (逐元素, 单参数, 无窗口)
+MATH_FUNCTIONS = ['sin', 'cos', 'exp', 'log', 'sqrt', 'abs', 'tanh']
+
 DEFAULT_GP_CONFIG = {
     'population_size': 200,
     'generations': 20,
@@ -279,6 +282,16 @@ def _random_ts_call(depth: int) -> ast.Call:
     )
 
 
+# [新增] 2026-06-23 数学原语树节点 (单参数, 无窗口)
+def _random_math_call(depth: int) -> ast.Call:
+    func_name = random.choice(MATH_FUNCTIONS)
+    arg = _grow_tree(depth - 1, prefer_variable=True)
+    return ast.Call(
+        func=ast.Name(id=func_name, ctx=ast.Load()),
+        args=[arg], keywords=[],
+    )
+
+
 def _random_feature_call(depth: int) -> ast.Call:
     r = random.random()
     if r < 0.5 and FEATURE_FUNCTIONS_1ARG:
@@ -333,22 +346,25 @@ def _grow_tree(depth: int, prefer_variable: bool = False) -> ast.AST:
 
     r = random.random()
 
-    if r < 0.30:
+    if r < 0.25:
         # 时序函数
         return _random_ts_call(depth)
-    elif r < 0.45:
+    elif r < 0.38:
         # 特征函数
         return _random_feature_call(depth)
-    elif r < 0.60:
+    elif r < 0.50:
+        # [新增] 2026-06-23 数学原语: sin, cos, exp, log, sqrt, abs, tanh
+        return _random_math_call(depth)
+    elif r < 0.63:
         # 比较: expr > 0
         return _random_compare(_grow_tree(depth - 1, prefer_variable=True))
-    elif r < 0.72:
+    elif r < 0.74:
         # 逻辑: ... and/or ...
         left = _grow_tree(depth - 1)
         right = _grow_tree(depth - 1)
         op = ast.And() if random.random() < 0.6 else ast.Or()
         return ast.BoolOp(op=op, values=[left, right])
-    elif r < 0.85:
+    elif r < 0.86:
         # 二元: a + b, a * b
         left = _grow_tree(depth - 1, prefer_variable=True)
         right = _grow_tree(depth - 1, prefer_variable=True)
