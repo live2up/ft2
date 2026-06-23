@@ -55,9 +55,11 @@ ALPHA_SOURCES = {
     "周期阶段/体制": "条件切换 / 自适应权重，框架层最优方向",
 }
 
-# 默认记忆路径（相对 ft2 根目录）
-DEFAULT_LOG_PATH = "memory/exploration_log.jsonl"
-DEFAULT_STATE_PATH = "memory/factor_knowledge_state.json"
+# 默认记忆相对于 ft2 根目录（从 __file__ 推算），外部项目应传 memory_dir 覆盖
+#   推荐: FactorKnowledgeBase(memory_dir=PROJECT_ROOT)
+#   默认: ft2/memory/exploration_log.jsonl + ft2/memory/factor_knowledge_state.json
+DEFAULT_LOG_NAME = "exploration_log.jsonl"
+DEFAULT_STATE_NAME = "factor_knowledge_state.json"
 
 
 class ExplorationStatus(Enum):
@@ -204,16 +206,20 @@ class FactorKnowledgeBase:
       - 不自动决策: 只辅助 Agent 判断方向
     """
 
-    def __init__(self, ft2_root: str = None):
+    def __init__(self, memory_dir: str = None):
         """
         Args:
-            ft2_root: ft2 项目根目录。None=自动从 __file__ 推算。
+            memory_dir: 记忆文件存放目录。
+                传入后知识库文件存在 memory_dir/exploration_log.jsonl + .../factor_knowledge_state.json。
+                None=默认放 ft2/memory/（ft2 根目录从 __file__ 推算）。
+                外部项目（如 AI_yinzi）推荐传入 PROJECT_ROOT，记忆与项目共存。
         """
-        if ft2_root is None:
-            ft2_root = Path(__file__).resolve().parent.parent.parent
-        self._ft2_root = Path(ft2_root)
-        self._log_path = self._ft2_root / DEFAULT_LOG_PATH
-        self._state_path = self._ft2_root / DEFAULT_STATE_PATH
+        if memory_dir is not None:
+            memory_dir = Path(memory_dir)
+        else:
+            memory_dir = Path(__file__).resolve().parent.parent.parent / 'memory'
+        self._log_path = memory_dir / DEFAULT_LOG_NAME
+        self._state_path = memory_dir / DEFAULT_STATE_NAME
 
         # 树结构: {(category, template): FactorTreeNode}
         self._tree: Dict[Tuple[str, str], FactorTreeNode] = {}
