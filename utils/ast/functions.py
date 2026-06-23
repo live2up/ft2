@@ -331,6 +331,14 @@ def safe_tanh(x):         return np.tanh(x)
 def safe_sigmoid(x):      return 1.0 / (1.0 + np.exp(-np.clip(x, -500, 500)))
 def safe_relu(x):         return np.maximum(x, 0.0)
 
+# [新增] 2026-06-23 钟形函数族: 中心最高, 两边递减, 不同尾重
+#   cos(x)      — 周期震荡, 主瓣单调到π后振荡, 窄范围等价于钟形
+#   gauss(x)    — exp(-x²), 轻尾钟形, 对极端值惩罚最重, 适合宽范围变量
+#   p4(x)       — exp(-x⁴), 平顶陡降, 对微小变化不敏感, 适合极窄范围
+#   exp_neg(x)  — exp(-|x|), 尖峰中尾, 介于cos和gauss之间
+def safe_gauss(x):        return np.exp(-np.asarray(x, float)**2)
+def safe_p4(x):           return np.exp(-np.asarray(x, float)**4)
+
 def signed_power(x, exponent=2.0):
     """带符号幂变换: sign(x) * |x|^exponent
     保留方向，非线性放大/压缩幅度。
@@ -597,6 +605,7 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'sign': safe_sign, 'exp': safe_exp, 'tanh': safe_tanh,
     'sigmoid': safe_sigmoid, 'relu': safe_relu,
     'sin': lambda x: np.sin(x), 'cos': lambda x: np.cos(x),
+    'gauss': safe_gauss, 'p4': safe_p4,
     'signed_power': signed_power,
     'safe_max': safe_max, 'safe_min': safe_min,
 
@@ -648,7 +657,7 @@ FUNC_CATEGORIES = {
                 'ema', 'tsf', 'kama', 'trima', 'wma', 'dema', 'hv', 'natr',
                 'var', 'linearreg', 'vol_ratio', 'amt_ratio', 'wilder_smooth'],
     '数学运算': ['abs', 'log', 'sqrt', 'sign', 'exp', 'tanh', 'sigmoid', 'relu',
-                'sin', 'cos',
+                'sin', 'cos', 'gauss', 'p4',
                 'signed_power', 'safe_max', 'safe_min'],
     '信号确认': ['persist'],
     'WQ101别名': ['corr', 'roc', 'kurt'],

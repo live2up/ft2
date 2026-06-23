@@ -93,7 +93,12 @@ RATIO_FUNCTIONS = {
 }
 
 # [新增] 2026-06-23 数学原语 (逐元素, 单参数, 无窗口)
-MATH_FUNCTIONS = ['sin', 'cos', 'exp', 'log', 'sqrt', 'abs', 'tanh']
+#   cos:   周期震荡, 主瓣[0,π]单调, 窄范围等价钟形
+#   gauss: exp(-x²), 轻尾钟形, 对极端值惩罚最重, 适合宽范围变量(std>100)
+#   p4:    exp(-x⁴), 平顶陡降, 对微小变化不敏感, 适合极窄范围(std~0.01)
+#   tanh:  S形, 保留符号方向, 适合有方向性的信号
+#   注: cos/gauss/p4 在窄范围(std<1)上等价, 因cs_rank后排序一致
+MATH_FUNCTIONS = ['sin', 'cos', 'exp', 'log', 'sqrt', 'abs', 'tanh', 'gauss', 'p4']
 
 DEFAULT_GP_CONFIG = {
     'population_size': 200,
