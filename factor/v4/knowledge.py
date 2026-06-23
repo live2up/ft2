@@ -121,6 +121,12 @@ class ExplorationRecord:
     note: str = ""
     """探索结论、教训、下一步建议"""
 
+    parent_templates: List[str] = field(default_factory=list)
+    """父模板列表（DAG边）。空列表=独立发现，1个=单亲进化，2个=融合"""
+
+    evolution_note: str = ""
+    """演化说明。例如: '在P9基础上把固定权重改为条件切换'"""
+
     def __post_init__(self):
         # 兼容旧日志：timestamp 字段可能不存在
         if not self.timestamp:
@@ -241,6 +247,8 @@ class FactorKnowledgeBase:
                metrics: Dict[str, float] = None,
                exhausted: bool = False,
                note: str = "",
+               parent_templates: List[str] = None,
+               evolution_note: str = "",
                ) -> ExplorationRecord:
         """记录一次探索结果（追加到 JSONL，更新树）
 
@@ -253,6 +261,8 @@ class FactorKnowledgeBase:
             metrics:    最优参数的性能指标字典
             exhausted:  True=参数网格已全部跑完
             note:       探索结论/教训
+            parent_templates: 父模板列表（DAG边），空=独立发现，1个=单亲进化，2+=融合
+            evolution_note:   演化说明
 
         Returns:
             ExplorationRecord: 刚创建的记录对象
@@ -286,6 +296,8 @@ class FactorKnowledgeBase:
             metrics=metrics or {},
             exhausted=exhausted,
             note=note,
+            parent_templates=parent_templates or [],
+            evolution_note=evolution_note,
         )
 
         # 追加到 JSONL
@@ -344,6 +356,7 @@ class FactorKnowledgeBase:
                 "status": ..., "best_sharpe_ratio_d": ...,
                 "best_params": ..., "explored_ratio": ...,
                 "records": ..., "note": ...,
+                "evolution_note": ..., "parent_templates": ...,
             }, ...]
         """
         results = []
@@ -365,9 +378,12 @@ class FactorKnowledgeBase:
                 continue
 
             summary = node.summary()
-            # 补充最新 note
+            # 补充最新 note + 演化信息
             if node.records:
-                summary["note"] = node.records[-1].note
+                latest = node.records[-1]
+                summary["note"] = latest.note
+                summary["evolution_note"] = latest.evolution_note
+                summary["parent_templates"] = latest.parent_templates
             results.append(summary)
 
         # 按指定频率的 Sharpe 降序
@@ -381,7 +397,7 @@ class FactorKnowledgeBase:
           1. 覆盖率低的类别（该类别已有节点数 < 3）
           2. 已探索但参数在边界上的模板（PARTIAL）
           3. 高 Sharpe 模板的 orthogonal 方向
-          4. 主动发现：未被充分探索的 category
+          4. 同一类别下独立根节点的融合推荐
 
         Returns:
             [{"category": ..., "template": ...,
@@ -436,11 +452,125 @@ class FactorKnowledgeBase:
                     "priority": "medium",
                 })
 
+        # 4. 融合推荐：同一类别下独立根节点的正交配对
+        root_by_cat = {}
+        for r in self._records:
+            if not r.parent_templates:
+                root_by_cat.setdefault(r.category, []).append(r.template)
+        for cat, roots in root_by_cat.items():
+            if len(roots) >= 2:
+                suggestions.append({
+                    "category": cat,
+                    "template": None,
+                    "reason": (f"类别 '{cat}' 有 {len(roots)} 个独立根节点"
+                               f"可尝试融合: {roots[:3]}"),
+                    "priority": "medium",
+                })
+
         # 按优先级排序
         priority_map = {"high": 0, "medium": 1, "low": 2}
         suggestions.sort(key=lambda s: priority_map.get(s["priority"], 99))
 
         return suggestions[:top_k]
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # DAG 演化追踪
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _find_record(self, template: str) -> Optional[ExplorationRecord]:
+        """按模板字符串查找最新记录（反向遍历取最新）"""
+        for r in reversed(self._records):
+            if r.template == template:
+                return r
+        return None
+
+    def get_evolution_chain(self, template: str, full: bool = False,
+                            _visited: set = None) -> List[Dict]:
+        """返回指定模板的完整演化链（从根到当前节点）
+
+        Args:
+            template: 模板字符串
+            full: 是否完整展开 DAG（多父节点子树）
+
+        Returns:
+            [{template, metrics, note, parents}, ...] 从根到叶
+        """
+        # 防循环保护（JSONL 被手动篡改时可能产生循环引用）
+        if _visited is None:
+            _visited = set()
+        if template in _visited:
+            return []
+        _visited.add(template)
+
+        chain = []
+        record = self._find_record(template)
+        if not record:
+            return chain
+
+        node_info = {
+            "template": template,
+            "sharpe_ratio_d": record.metrics.get("sharpe_ratio_d"),
+            "note": record.note,
+            "evolution_note": record.evolution_note,
+        }
+
+        if record.parent_templates:
+            node_info["parent_templates"] = record.parent_templates
+            if full:
+                node_info["ancestry"] = [
+                    self.get_evolution_chain(p, full=True, _visited=_visited)
+                    for p in record.parent_templates
+                ]
+
+        chain.append(node_info)
+
+        # 沿主父链回溯
+        if record.parent_templates:
+            chain.extend(
+                self.get_evolution_chain(
+                    record.parent_templates[0], full=full, _visited=_visited
+                )
+            )
+
+        return list(reversed(chain))
+
+    def find_fusion_candidates(self, category: str = None) -> List[Dict]:
+        """找独立根节点，推荐正交配对融合
+
+        Args:
+            category: 可选，限制类别
+
+        Returns:
+            [{cat, root_templates, count, sharpe_range, suggestion}, ...]
+        """
+        roots = {}  # {cat: [(template, sharpe), ...]}
+        for r in self._records:
+            if not r.parent_templates:
+                cat = r.category
+                if category and cat != category:
+                    continue
+                if cat not in roots:
+                    roots[cat] = []
+                shp = r.metrics.get("sharpe_ratio_d", 0) or 0
+                roots[cat].append((r.template, shp))
+
+        results = []
+        for cat, items in roots.items():
+            if len(items) >= 2:
+                items.sort(key=lambda x: x[1], reverse=True)
+                sharpe_range = f"{items[-1][1]:.3f}~{items[0][1]:.3f}"
+                results.append({
+                    "category": cat,
+                    "root_templates": [t for t, _ in items],
+                    "count": len(items),
+                    "sharpe_range": sharpe_range,
+                    "suggestion": (
+                        f"尝试融合 {items[0][0]} (SR={items[0][1]:.3f}) "
+                        f"和 {items[1][0]} (SR={items[1][1]:.3f})"
+                    ),
+                })
+
+        return sorted(results, key=lambda x: x["count"], reverse=True)
 
     def list_categories(self) -> List[Dict]:
         """按类别统计探索状态"""
