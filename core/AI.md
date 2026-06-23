@@ -398,6 +398,20 @@ nb.export_html()  # → 输出到当前脚本所在目录
 
 ---
 
+### 变量命名规范（回测引擎）
+
+| 场景 | 规范写法 | 避免写法 |
+|:-----|:---------|:---------|
+| OHLCV 数据 | `data` | `df` / `klines` / `ohlcv` |
+| 品种代码列表 | `symbol`（单） / `symbols`（多） | `code` / `ticker` |
+| 回测结果 | `analyzer` | `result` / `r` / `bt` |
+| 策略类 | `MyStrategy` 或 `类名+Strategy` | 匿名类（除非内部内联） |
+| 引擎实例 | `engine` | `eng` / `e` |
+| 账户对象 | `account`（通过 `ctx.account`） | `acct` |
+| 费率配置 | `fee_config` | `fees` / `commission` |
+| 品种名称表 | `symbol_names` 或 DataFrame `name` 列 | 单独传参 |
+| 基准标签 | `bench_label` | `benchmark` / `bench` |
+
 ## 关键设计原则
 
 1. **计算层返回纯数字，呈现层负责格式化** — 方法返回 `0.159`，`fmt='.1%'` 控制输出 `15.9%`

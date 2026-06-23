@@ -283,8 +283,16 @@ len(BASIC_FACTORS)  # 20    因子原子基元
 - 截面排名推荐使用 `evaluate_ranked()` 或 `Expression.rank_panel()`
 - 72 原语覆盖 WorldQuant 时序算子的 96%，截面 100%
 - 扩展新原语：`signals.v4.register_function()` 注册 → 因子模块即用
-- 频率后缀命名规范（探索模板 / knowledge 指标键）：
-  - `_d` = 日度（daily），对应 `rebalance='D'`
-  - `_w` = 周度（weekly），对应 `rebalance='W'`
-  - `_m` = 月度（monthly），对应 `rebalance='M'`
-  - 例：`sharpe_ratio_d`、`wf_avg_sharpe_d`、`sharpe_ratio_w`
+- 知识库指标键频率后缀：`sharpe_ratio_d`（日度）、`sharpe_ratio_w`（周度）、`sharpe_ratio_m`（月度）
+
+### 变量命名规范（因子探索）
+
+| 场景 | 规范写法 | 避免写法 |
+|------|---------|---------|
+| 因子排名面板 | `panel` | `ranked` / `factor_df` / `fv` |
+| OHLCV 字典 | `assets` | `data` / `ohlcv_dict` |
+| 面板数据字典 | `data` 或 `panel_data` |  |
+| 回测结果 | `analyzer` | `result` / `r` / `bt` |
+| 品种代码列表 | `symbols` | `codes` / `tickers` |
+| 表达式字符串 | `expr` | `formula` / `expr_str` |
+| 品种名称映射 | 嵌入 DataFrame `name` 列 | 显式传参 |

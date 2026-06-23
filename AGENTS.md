@@ -48,7 +48,7 @@ AI Agent 或外部项目调用 ft2 时，遵循以下原则保障上下文沟通
 |------|----------|---------------|
 | OHLCV 数据 | `data`（不是 `raw_data` / `df` / `klines`） | `data` |
 | 因子排名面板 | `panel`（不是 `ranked` / `factor_df` / `fv`） | `panel = expr.evaluate_ranked(data)` |
-| 回测结果 | `analyzer` / `r`（不是 `result` / `backtest`） | `r = FacEngine.backtest(...)` 或 `r = SigEngine.backtest(...)` |
+| 回测结果 | `analyzer`（不是 `result` / `backtest` / `r` / `bt`） | `analyzer = FacEngine.backtest(...)` 或 `analyzer = SigEngine.backtest(...)` |
 | 信号序列 | `signal`（不是 `sig` / `signals` / `pred`） | `signal` |
 | 额外特征 | `extra_features`（不是 `features` / `feats` / `ctx`） | `extra_features` |
 | 表达式字符串 | `expr` / `buy_expr` / `sell_expr` | `expr` / `buy_expr` / `sell_expr` |

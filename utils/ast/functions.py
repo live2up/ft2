@@ -596,6 +596,7 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'abs': safe_abs, 'log': safe_log, 'sqrt': safe_sqrt,
     'sign': safe_sign, 'exp': safe_exp, 'tanh': safe_tanh,
     'sigmoid': safe_sigmoid, 'relu': safe_relu,
+    'sin': lambda x: np.sin(x), 'cos': lambda x: np.cos(x),
     'signed_power': signed_power,
     'safe_max': safe_max, 'safe_min': safe_min,
 
@@ -647,6 +648,7 @@ FUNC_CATEGORIES = {
                 'ema', 'tsf', 'kama', 'trima', 'wma', 'dema', 'hv', 'natr',
                 'var', 'linearreg', 'vol_ratio', 'amt_ratio', 'wilder_smooth'],
     '数学运算': ['abs', 'log', 'sqrt', 'sign', 'exp', 'tanh', 'sigmoid', 'relu',
+                'sin', 'cos',
                 'signed_power', 'safe_max', 'safe_min'],
     '信号确认': ['persist'],
     'WQ101别名': ['corr', 'roc', 'kurt'],
