@@ -160,10 +160,18 @@ def ts_kurt(x, d):
     return _rolling(x, d, f)
 
 def ts_argmax(x, d):
-    return _rolling(x, d, lambda a: len(a) - 1 - np.argmax(a))
+    def _nanargmax(a):
+        if np.all(np.isnan(a)):
+            return np.nan
+        return len(a) - 1 - np.nanargmax(a)
+    return _rolling(x, d, _nanargmax)
 
 def ts_argmin(x, d):
-    return _rolling(x, d, lambda a: len(a) - 1 - np.argmin(a))
+    def _nanargmin(a):
+        if np.all(np.isnan(a)):
+            return np.nan
+        return len(a) - 1 - np.nanargmin(a)
+    return _rolling(x, d, _nanargmin)
 
 def ts_roc(x, d):
     """Rate of change: (x[t]-x[t-d])/x[t-d]"""
@@ -259,6 +267,9 @@ def expanding_percentile(x, p, min_p=20):
 # ============================================================
 
 def cs_rank(x):
+    """[修正] 2026-06-25 改为 method='min' (最小排名), 对齐 WQ/DolphinDB 行业标准.
+    WQ rank 规范: 并列值取最小排名, range [1/N, 1]. 见 DolphinDB WQ101 实现.
+    旧版 average 排名对离散信号(ts_argmax等)引入虚假区分度, 连续信号无影响."""
     x = np.asarray(x, float)
     if x.ndim == 1: return np.full_like(x, 0.5)
     from scipy.stats import rankdata
@@ -266,7 +277,7 @@ def cs_rank(x):
     for i in range(x.shape[0]):
         v = ~np.isnan(x[i])
         if v.sum() > 0:
-            rk = rankdata(x[i][v]) / v.sum()
+            rk = rankdata(x[i][v], method='min') / v.sum()
             r[i][v] = rk
     return r
 

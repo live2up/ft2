@@ -502,6 +502,7 @@ def eval_colwise(tree: ast.Expression, data: Dict[str, np.ndarray],
 def cross_sectional_rank(vals: np.ndarray) -> np.ndarray:
     """每日截面排名 → 0~1 (与 signals/v4 cs_rank 逻辑一致)
 
+    [修正] 2026-06-25 改为 method='min', 对齐 WQ/DolphinDB 行业标准.
     [重构] 2026-06-22 从 resolver.py 移动到 dsl.py (通用工具)
     """
     from scipy.stats import rankdata
@@ -514,7 +515,7 @@ def cross_sectional_rank(vals: np.ndarray) -> np.ndarray:
         row = vals[t]
         valid = ~np.isnan(row)
         if valid.sum() > 0:
-            rk = rankdata(row[valid])
+            rk = rankdata(row[valid], method='min')
             ranked[t, valid] = np.nan_to_num(
                 rk / valid.sum(), nan=0.5, posinf=0.5, neginf=0.5)
     return ranked
