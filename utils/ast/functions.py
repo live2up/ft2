@@ -29,16 +29,35 @@ utils/ast/functions.py — 原语层 (公共基础设施)
       函数: rsi(CLOSE, 14)     → 实时算, 参数灵活
       变量: ts_rank(RSI_14, 60) → 预计算, 性能优先
 
-  ◆ 统计量约定
-    ddof=1 (样本)   ts_std, ts_skew, ts_kurt, ts_cov, cs_zscore, cs_winsorize
-    理由: 金融时间序列为样本数据, WQ101/GT191 均使用样本统计量
+  ◆ 统计量约定 (对齐 WQ101 / GT191)
+    ddof=1 (样本):   ts_std, ts_skew, ts_kurt, ts_cov, cs_zscore, cs_winsorize
+    NaN 处理:        NaN = 缺失数据应忽略, 使用 nan* 版本函数
+                     (nanmean/nanmax/nanargmax 等)
+    cs_rank 并列:    competition ranking (method='min'), 见 SciPy rankdata 文档
 
 原则:
   - 所有滚动窗口只用历史数据（无前向偏差）
   - 冷启动保护：前 window-1 天返回 NaN
   - 1D 数组输入, 1D 数组输出 (由上层逐列调用实现 2D 面板)
 
+═══════════════════════════════════════════════════════════════
+公共模式 / 可复用抽象
+
+  # 防除零模式 (6处: ts_roc/ts_zscore/ts_scale/cs_zscore/cs_scale/ts_regression)
+  result = value / divisor if divisor > 1e-10 else 0.0
+
+  # NaN过滤模式 (7处: ts_product/ts_regression/ts_regression_residual/
+  #                  ts_decay_linear/ts_scale/cs_zscore/cs_scale/cs_winsorize)
+  valid = ~np.isnan(arr)
+  # 当前分散在各函数中, 未来可抽为 _nan_filter(seg, min_valid=1) 辅助函数
+
+  # 防除零+NaN (可抽公共函数, 暂时分散):
+  def _safe_div(num, den, fallback=0.0, eps=1e-10):
+      return num / den if abs(den) > eps else fallback
+
+═══════════════════════════════════════════════════════════════
 [重构] 2026-06-22 从 registry.py 拆分, 独立为 functions.py
+[修正] 2026-06-25 cs_rank→min排名, ts_*→nan*版, 对齐WQ标准
 =============================================================================
 """
 import numpy as np
@@ -51,7 +70,11 @@ from typing import Dict, Callable
 # ============================================================
 
 def _rolling(x: np.ndarray, window: int, func, *a, **kw):
-    """[修复] 2026-06-22 加 2D 防护: 时序函数只接受 1D, 误传 2D 会静默错误"""
+    """[修复] 2026-06-22 加 2D 防护: 时序函数只接受 1D, 误传 2D 会静默错误
+
+    设计选择: 不过滤 NaN, 由各 func 自行处理 (各函数语义不同: nanmean/argmax 等)
+    调用方约定: func 应使用 nan 安全版本 (np.nanmean, np.nanmax 等)
+    [对齐] WQ标准: NaN=缺失数据应忽略, 不应污染窗口"""
     x = np.asarray(x, dtype=float)
     if x.ndim != 1:
         raise ValueError(
@@ -103,20 +126,15 @@ def _persist(x: np.ndarray, n: int) -> np.ndarray:
 # 时序函数 (ts_) — 窗口滚动, 只用历史数据
 # ============================================================
 
-def ts_mean(x, d):       return _rolling(x, d, np.mean)
-def ts_std(x, d):        return _rolling(x, d, lambda a: np.std(a, ddof=1))
+# [修正] 2026-06-25 改用 nan* 版本, 对齐 WQ NaN=缺失数据应忽略的规范
+def ts_mean(x, d):       return _rolling(x, d, np.nanmean)
+def ts_std(x, d):        return _rolling(x, d, lambda a: np.nanstd(a, ddof=1))
 def ts_sum(x, d):
-    """滚动窗口求和。
-
-    典型用法:
-      ts_sum(CLOSE > OPEN, 20)  → 过去20天有几天涨 (比较运算输出0/1, sum=计数)
-      ts_sum(vol_ratio(x, v, 5, 20) > 1, 10) → 过去10天有几天放量
-      ts_sum(ts_roc(CLOSE, 5), 20) → 过去20天累计收益率
-    """
-    return _rolling(x, d, np.sum)
-def ts_max(x, d):        return _rolling(x, d, np.max)
-def ts_min(x, d):        return _rolling(x, d, np.min)
-def ts_median(x, d):     return _rolling(x, d, np.median)
+    """滚动窗口求和, 忽略 NaN"""
+    return _rolling(x, d, np.nansum)
+def ts_max(x, d):        return _rolling(x, d, np.nanmax)
+def ts_min(x, d):        return _rolling(x, d, np.nanmin)
+def ts_median(x, d):     return _rolling(x, d, np.nanmedian)
 
 def ts_delta(x, d):
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
@@ -185,10 +203,14 @@ def ts_zscore(x, d):
     return np.where(sg > 1e-10, (np.asarray(x, float) - mu) / sg, 0)
 
 def ts_scale(x, d):
-    """Rolling scale: sum(abs(x)) in window -> 1"""
+    """[修正] 2026-06-25 过滤 NaN, 对齐 WQ 标准"""
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
     for i in range(d - 1, len(x)):
-        seg = x[i - d + 1 : i + 1]; s = np.sum(np.abs(seg))
+        seg = x[i - d + 1 : i + 1]
+        valid = ~np.isnan(seg)
+        if valid.sum() == 0:
+            continue
+        s = np.sum(np.abs(seg[valid]))
         r[i] = x[i] / s if s > 1e-10 else 0
     return r
 
@@ -201,13 +223,17 @@ def ts_av_diff(x, d):
     return np.asarray(x, float) - ts_mean(x, d)
 
 def ts_decay_linear(x, d):
-    """Linear decay weighted mean"""
+    """[修正] 2026-06-25 过滤 NaN 后加权, 对齐 WQ 标准"""
     x = np.asarray(x, float)
     r = np.full_like(x, np.nan)
-    weights = np.arange(1, d + 1, dtype=float)
-    w_sum = weights.sum()
     for i in range(d - 1, len(x)):
-        r[i] = np.sum(x[i - d + 1 : i + 1] * weights) / w_sum
+        seg = x[i - d + 1 : i + 1]
+        valid = ~np.isnan(seg)
+        if valid.sum() == 0:
+            continue
+        n_valid = valid.sum()
+        weights = np.arange(1, n_valid + 1, dtype=float)
+        r[i] = np.sum(seg[valid] * weights) / weights.sum()
     return r
 
 def ts_product(x, d):
