@@ -204,14 +204,14 @@ def _check_node_safety(node: ast.AST):
         _check_node_safety(child)
 
 
-def _check_complexity(node: ast.AST, max_depth: int = 15, max_nodes: int = 200):
-    """检查表达式复杂度"""
-    # 深度
+def _check_complexity(node: ast.AST, max_depth: int = 30, max_nodes: int = 500):
+    """检查表达式复杂度
+    [修正] 2026-06-25 max_depth 15→30, max_nodes 200→500.
+    原限制 15 深度不足以支撑分层组合(多组 cs_rank 嵌套+算术)."""
     depth = _ast_depth(node)
     if depth > max_depth:
         raise DSLSecurityError(f"表达式深度 {depth} 超过上限 {max_depth}")
     
-    # 节点数
     node_count = sum(1 for _ in ast.walk(node))
     if node_count > max_nodes:
         raise DSLSecurityError(f"表达式节点数 {node_count} 超过上限 {max_nodes}")
@@ -225,8 +225,8 @@ def _ast_depth(node: ast.AST) -> int:
 
 
 def parse_expression(expr_str: str, 
-                     max_depth: int = 15,
-                     max_nodes: int = 200) -> ast.Expression:
+                     max_depth: int = 30,
+                     max_nodes: int = 500) -> ast.Expression:
     """
     解析并校验表达式字符串
     

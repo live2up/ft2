@@ -58,7 +58,25 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 ═══════════════════════════════════════════════════════════════
 [重构] 2026-06-22 从 registry.py 拆分, 独立为 functions.py
 [修正] 2026-06-25 cs_rank→min排名, ts_*→nan*版, 对齐WQ标准
-=============================================================================
+
+═══════════════════════════════════════════════════════════════
+WQ BRAIN 算子对标状态 (2026-06-25审计)
+
+  ✅ 已对齐 43/66 个算子的核心功能:
+    算术: abs/log/sqrt/sign/power/min/max 等 13/15
+    时序: ts_* 全部20/24 (缺 backfill/count_nans/step/hump/kth/last/change)
+    截面: cs_* 全部 6/6 (排名并列已用 competition ranking)
+    逻辑: and/or/not/if_else 4/11 (缺 is_nan 等)
+
+  ❌ 缺失 23 个 (暂不需要, 后续扩展):
+    组别6个:    group_rank/zscore/neutralize/scale/mean/backfill
+    辅助7个:    densify/is_nan/ts_backfill/ts_count_nans/ts_step/
+               hump/kth_element/last_diff_value/days_from_last_change
+    变换2个:    bucket/trade_when
+    向量2个:    vec_sum/vec_avg
+
+  注: 缺失算子不影响当前31行业因子探索, 个股级或行业中性化时需要扩展。
+═══════════════════════════════════════════════════════════════
 """
 import numpy as np
 import talib
