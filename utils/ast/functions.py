@@ -394,6 +394,27 @@ def safe_relu(x):         return np.maximum(x, 0.0)
 def safe_gauss(x):        return np.exp(-np.asarray(x, float)**2)
 def safe_p4(x):           return np.exp(-np.asarray(x, float)**4)
 
+def safe_softsign(x):
+    """Soft Sign: x / (1 + |x|), 值域 (-1, 1)
+    奇函数，奇性: 奇（f(-x)=-f(x)），原点斜率=1
+    与 tanh 差异: 多项式尾 vs 指数尾，极端值仍有区分度
+    tanh(2)=0.96, softsign(2)=0.67
+    tanh(5)=0.9999, softsign(5)=0.833
+    排序假设: "方向重要，且方向和幅度都有区分度"
+    """
+    x = np.asarray(x, float)
+    return x / (1.0 + np.abs(x))
+
+def safe_square_sigmoid(x):
+    """平方 sigmoid: x²/(1+x²), 值域 [0, 1)
+    倒钟形: 谷在0=0, ±1=0.5, ±3=0.9, ±5=0.96, ±10=0.99
+    与钟形族(cos/gauss/p4)相反: 它们峰在0，这个是谷在0
+    排序假设: "偏离0才有信息，越极端置信度越高"
+    组合用法: sign(x)*square_sigmoid(x) 同时获取方向+极端度
+    """
+    x = np.asarray(x, float)
+    return x**2 / (1.0 + x**2)
+
 def signed_power(x, exponent=2.0):
     """带符号幂变换: sign(x) * |x|^exponent
     保留方向，非线性放大/压缩幅度。
@@ -658,9 +679,9 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     # ── 数学 ──
     'abs': safe_abs, 'log': safe_log, 'sqrt': safe_sqrt,
     'sign': safe_sign, 'exp': safe_exp, 'tanh': safe_tanh,
-    'sigmoid': safe_sigmoid, 'relu': safe_relu,
+    'sigmoid': safe_sigmoid, 'relu': safe_relu, 'softsign': safe_softsign,
     'sin': lambda x: np.sin(x), 'cos': lambda x: np.cos(x),
-    'gauss': safe_gauss, 'p4': safe_p4,
+    'gauss': safe_gauss, 'p4': safe_p4, 'square_sigmoid': safe_square_sigmoid,
     'signed_power': signed_power,
     'safe_max': safe_max, 'safe_min': safe_min,
 
@@ -712,7 +733,7 @@ FUNC_CATEGORIES = {
                 'ema', 'tsf', 'kama', 'trima', 'wma', 'dema', 'hv', 'natr',
                 'var', 'linearreg', 'vol_ratio', 'amt_ratio', 'wilder_smooth'],
     '数学运算': ['abs', 'log', 'sqrt', 'sign', 'exp', 'tanh', 'sigmoid', 'relu',
-                'sin', 'cos', 'gauss', 'p4',
+                'sin', 'cos', 'gauss', 'p4', 'softsign', 'square_sigmoid',
                 'signed_power', 'safe_max', 'safe_min'],
     '信号确认': ['persist'],
     'WQ101别名': ['corr', 'roc', 'kurt'],
