@@ -65,7 +65,6 @@ class Notebook:
     """
     
     def __init__(self, title: str = "Notebook Report"):
-        import inspect
         
         self.nb_title = title
         self.children: List[CellLike] = []
@@ -73,17 +72,7 @@ class Notebook:
         self._cell_counter = 0
         self._section_stack: List[SectionContext] = []
         self._chartg_buffer = []
-        
-        caller_frame = None
-        for frame_info in inspect.stack():
-            if frame_info.filename != __file__:
-                caller_frame = frame_info
-                break
-        
-        if caller_frame:
-            self.base_dir = os.path.dirname(os.path.abspath(caller_frame.filename))
-        else:
-            self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.base_dir = None
     
     def _push_section(self, section):
         """进入 Section"""
@@ -417,8 +406,22 @@ class Notebook:
     # [新增] 2026-05-21 CDN 远程前缀常量，与本地模式对应
     _CDN_PREFIX = 'https://cdn.jsdelivr.net/gh/livepu/ft2@master/template'
 
+    def _resolve_base_dir(self, base_dir: str = None) -> str:
+        """路径优先级: 显式传入 > 实例属性 > 当前工作目录
+
+        [重构] 2026-06-30 去掉 inspect 调用者检测。
+          原方案遍历调用栈猜用户脚本目录，封装层一多就命中错文件；
+          改为与 open()/savefig() 一致的 cwd 默认，子目录场景由调用方
+          显式传 base_dir 或设 nb.base_dir。
+        """
+        if base_dir:
+            return os.path.abspath(base_dir)
+        if self.base_dir:
+            return os.path.abspath(self.base_dir)
+        return os.getcwd()
+
     def export_html(self, name: str = None, template_path: str = None,
-                    local_assets: bool = False):
+                    local_assets: bool = False, base_dir: str = None):
         """
         导出为HTML文件
         
@@ -427,13 +430,15 @@ class Notebook:
         :param local_assets: 是否使用本地资源文件
             - False (默认): 使用远程 CDN 资源
             - True: 使用本地 template 目录的资源（file:// 协议），方便离线测试
+        :param base_dir: 输出目录（None=自动: 实例 base_dir > 调用者目录）
         :return: 输出文件路径
         """
         self._flush_chartg()
         if name is None:
             name = self.nb_title.replace('/', '_').replace('\\', '_')
         
-        output_path = os.path.join(self.base_dir, f"{name}.html")
+        _dir = self._resolve_base_dir(base_dir)
+        output_path = os.path.join(_dir, f"{name}.html")
         if template_path is None:
             template_dir = Path(__file__).parent.parent / 'template'
             template_path = str(template_dir / 'notebook.html')

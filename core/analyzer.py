@@ -75,7 +75,6 @@ from datetime import datetime, date
 from typing import Dict, List, Tuple, Any, Optional, Union
 from dataclasses import dataclass
 from pathlib import Path
-import inspect
 from functools import wraps
 # [修复] 2026-05-30 _calculate_profit 需要用 OrderSide 枚举做比较
 from .account import OrderSide
@@ -184,8 +183,7 @@ class AccountAnalyzer:
     │
     └── [底层]
         ├── _aggregate_daily_assets()   #  快照列表 → Dict[date, nav] (同日期取最后)
-        ├── _calculate_profit()         #  FIFO 匹配计算逐笔盈亏
-        └── _get_caller_dir()           #  调用者目录 (报告输出路径基准)
+        └── _calculate_profit()         #  FIFO 匹配计算逐笔盈亏
     """
 
     def __init__(self, account=None, daily_assets=None):
@@ -243,7 +241,9 @@ class AccountAnalyzer:
             self._daily_assets = {}
             self._trade_profits = []
 
-        self.base_dir = self._get_caller_dir()
+        # base_dir=None 表示走 cwd；调用方可设 analyzer.base_dir 或
+        # 在 to_notebook(..., base_dir=...) 传参指定输出目录。
+        self.base_dir = None
 
     @property
     def daily_assets(self) -> Dict:
@@ -1265,11 +1265,17 @@ class AccountAnalyzer:
             with nb.section("交易记录"):
                 nb.table(trades, page={'size': 10})
 
-    def to_notebook(self, title: str = "回测报告", header=None, footer=None):
+    def to_notebook(self, title: str = "回测报告", header=None, footer=None,
+                    base_dir: str = None):
         """导出为 Notebook 交互式报告
 
         标准报告 = 指标分析 → 收益走势图 → 交易记录
         header/footer 回调可在标准内容前后插入自定义模块
+
+        输出路径优先级: base_dir 参数 > analyzer.base_dir > os.getcwd()
+          - 默认: 落到当前工作目录 (cwd)，与 open()/savefig() 行为一致
+          - 子目录场景: 传 base_dir="./output" 或设 analyzer.base_dir
+          - 脚本旁目录: 用 __file__ 自算路径后传入（推荐子目录脚本用此方式）
 
         Args:
             title: 报告标题
@@ -1277,41 +1283,36 @@ class AccountAnalyzer:
                     回调内容置于标题下、标准分析段之前
             footer: 可选的 footer 回调，签名为 footer(nb: Notebook) -> None
                     回调内容置于标准分析段之后
+            base_dir: 输出目录（None=走实例 base_dir，再 None=走 cwd）
 
         Returns:
             str: HTML 文件路径
 
         Example:
-            # 简单导出（向后兼容）
+            # 默认导出到 cwd
             analyzer.to_notebook("策略分析")
 
-            # 添加前置说明
-            analyzer.to_notebook("策略分析",
-                header=lambda nb: nb.text("## 策略设计思路"))
+            # 指定输出目录
+            analyzer.to_notebook("策略分析", base_dir="./output")
 
-            # 添加后置总结
-            analyzer.to_notebook("策略分析",
-                footer=lambda nb: nb.text("## 总结与展望"))
+            # 子目录脚本：用 __file__ 锚定自身目录
+            HERE = os.path.dirname(os.path.abspath(__file__))
+            analyzer.to_notebook("报告", base_dir=os.path.join(HERE, "output"))
 
-            # 前后都加
-            def add_header(nb):
-                nb.text("## 策略逻辑")
-                nb.markdown("动量因子选股...")
-
+            # 前后插入自定义内容
+            def add_header(nb): nb.text("## 策略逻辑")
             def add_footer(nb):
                 with nb.section("归因分析"):
                     nb.table(factor_data)
-
             analyzer.to_notebook("策略分析",
                 header=add_header, footer=add_footer)
         """
         # [新增] 2026-06-04 header/footer 回调参数
-        #   用户可通过回调在标准报告前后插入任意 notebook 内容
-        #   不影响 to_notebook() 的一行导出行为
+        # [重构] 2026-06-30 去掉 inspect 自动检测，默认走 cwd；
+        #   子目录场景由调用方传 base_dir 或设 analyzer.base_dir
         from notebook import Notebook
 
         nb = Notebook(title)
-        nb.base_dir = self.base_dir
 
         if header:
             header(nb)
@@ -1321,7 +1322,8 @@ class AccountAnalyzer:
         if footer:
             footer(nb)
 
-        return nb.export_html()
+        _dir = base_dir or self.base_dir
+        return nb.export_html(base_dir=_dir)
 
     def to_excel(self, report_name: str = "回测报告", output_dir: str = "."):
         """导出 Excel 文件，与 notebook 报告结构对应
@@ -1334,7 +1336,7 @@ class AccountAnalyzer:
         Args:
             report_name: 报告名称，用于生成文件名
                        格式：{report_name}_{YYYYMMDD_HHMM}.xlsx
-            output_dir: 输出目录（相对路径，基于调用者所在目录）
+            output_dir: 输出目录（相对路径，基于 base_dir；默认 "." 即 base_dir 自身）
         """
         import openpyxl
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -1480,7 +1482,8 @@ class AccountAnalyzer:
         # 保存
         from pathlib import Path
         current_datetime = datetime.now().strftime("%Y%m%d_%H%M")
-        output_path = Path(self.base_dir) / output_dir / f"{report_name}_{current_datetime}.xlsx"
+        base = self.base_dir or os.getcwd()
+        output_path = Path(base) / output_dir / f"{report_name}_{current_datetime}.xlsx"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         wb.save(output_path)
         print(f'Excel 已生成至: {output_path}')
@@ -1607,31 +1610,5 @@ class AccountAnalyzer:
 
         return processed_trades
 
-    def _get_caller_dir(self) -> str:
-        """
-        获取调用者所在目录
-        
-        使用 inspect 模块获取调用当前方法的代码所在的目录
-        用于确定 HTML 报告的输出路径基准
-        
-        Returns:
-            str: 调用者脚本的绝对目录路径
-            
-        Example:
-            # 如果在 d:\\project\\backtest\\main.py 中调用
-            # analyzer._get_caller_dir() 返回 "d:\\project\\backtest"
-        """
-        frame = inspect.currentframe()
-        try:
-            caller_frame = None
-            for frame_info in inspect.stack():
-                if frame_info.filename != __file__:
-                    caller_frame = frame_info
-                    break
 
-            if caller_frame:
-                return os.path.dirname(os.path.abspath(caller_frame.filename))
-            else:
-                return os.path.dirname(os.path.abspath(__file__))
-        finally:
-            del frame
+
