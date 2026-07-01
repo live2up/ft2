@@ -10,7 +10,7 @@ ft2.core - 核心回测模块
 
 v2.4 (2026-06-09): 移除全局 account/engine 实例，每 Engine() 自带独立账户
 v2.5 (2026-06-30): 新增 Backtester — Engine 二次封装, 简化调用不丢灵活性
-v2.6 (2026-07-01): Backtester.add_datas(assets) — 一步传入全量数据, 消除构造+add_data 冗余拆分
+v2.6 (2026-07-01): Backtester 接口重构 — add_data(symbol, data, symbol_name=None) 逐个传入对齐 Engine 风格; add_datas() deprecated; 删除 set_symbol_names()
 """
 
 from .engine import Engine
