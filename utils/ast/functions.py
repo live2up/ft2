@@ -5,7 +5,7 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 
 在五层架构中的位置: 第2层(原语) — 定义"能算什么"
 
-  函数定义 = 82 个 | FUNC_REGISTRY 条目 = 87 个
+  函数定义 = 80 个 | FUNC_REGISTRY 条目 = 87 个
 
 ═══════════════════════════════════════════════════════════════
 命名规范 (对齐 WQ101 行业标准)
@@ -386,7 +386,7 @@ def ts_regression(y, x, d, rettype=2):
     return r
 
 
-def ts_resi(x, window):
+def ts_resid(x, window):
     """时序回归残差: 对时间做线性回归 x=a+b*t，返回当前值-预测值"""
     x = np.asarray(x, float); window = int(window)
     if window < 3:
@@ -408,11 +408,6 @@ def ts_resi(x, window):
     return r
 
 
-def ts_resid(x, window):
-    """别名: ts_resi, 统计学标准缩写"""
-    return ts_resi(x, window)
-
-
 def ts_slope(x, window):
     """时序线性回归斜率: 对时间做线性回归 x=a+b*t，返回斜率 b"""
     x = np.asarray(x, float); window = int(window)
@@ -432,7 +427,7 @@ def ts_slope(x, window):
     return r
 
 
-def ts_rsquare(x, window):
+def ts_rsq(x, window):
     """时序线性回归 R²: 对时间做线性回归 x=a+b*t，返回 R²"""
     x = np.asarray(x, float); window = int(window)
     if window < 3:
@@ -454,11 +449,6 @@ def ts_rsquare(x, window):
         ss_tot = np.sum((valid - np.mean(valid)) ** 2)
         r[i] = 1 - ss_res / ss_tot if ss_tot > 1e-10 else 0.0
     return r
-
-
-def ts_rsq(x, window):
-    """别名: ts_rsquare, 统计学标准缩写"""
-    return ts_rsquare(x, window)
 
 
 def ts_intercept(x, window):
@@ -905,9 +895,9 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'amt_ratio':   _feature_amt_ratio,
 
     # ── 旧名别名 — [2026-07-03] 已停止生产使用, 后续删除 ──
-    'ts_resi': ts_resi,                      # → 改用 ts_resid
-    'ts_regression_residual': ts_resi,       # → 改用 ts_resid
-    'ts_rsquare': ts_rsquare,                # → 改用 ts_rsq
+    'ts_resi': ts_resid,                     # → 改用 ts_resid
+    'ts_regression_residual': ts_resid,      # → 改用 ts_resid
+    'ts_rsquare': ts_rsq,                    # → 改用 ts_rsq
 }
 
 # 安全常量 (表达式中的 True/False/None/pi/e)
