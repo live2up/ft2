@@ -21,7 +21,7 @@ from .account import (
     BenchHolder,
 )
 from .analyzer import AccountAnalyzer
-from .backtest import Backtester, PositionsStrategy
+from .backtest import Backtester
 
 __all__ = [
     'Engine',
@@ -34,5 +34,4 @@ __all__ = [
     'BenchHolder',     # 内置买入持有基准策略
     'AccountAnalyzer',
     'Backtester',      # positions 驱动的简化回测入口
-    'PositionsStrategy',
 ]

@@ -17,9 +17,8 @@ core/backtest.py — 简化回测入口 (Engine 二次封装)
 用法 — 自定义 Strategy (完整事件驱动能力):
   >>> from core import Backtester
   >>> bt = Backtester()
-  >>> bt.set_init_cash(1_000_000).set_benchmark('399317.SZ')
+  >>> bt.set_init_cash(1_000_000).set_benchmark('399317.SZ', df_399317, '国证A指')
   >>> bt.add_data('600000.SH', df_600000, symbol_name='浦发银行')
-  >>> bt.add_data('399317.SZ', df_399317, symbol_name='国证A指')
   >>> analyzer = bt.run(MyStrategy(), start_time, end_time, mode='full')
 
 逃生舱: bt.engine 可直接拿原始 Engine 做高级操作。
@@ -83,9 +82,33 @@ class Backtester:
         self._fee_config = fee_config
         return self
 
-    def set_benchmark(self, bench_label: str) -> 'Backtester':
-        """设置基准品种代码 (full 模式自动跑 BenchHolder 注入对比)"""
+    def set_benchmark(self, bench_label: str, bench_data: pd.DataFrame,
+                      symbol_name: str = None) -> 'Backtester':
+        """设置基准品种 (标签+数据一起传, full 模式自动跑 BenchHolder)
+
+        对齐 FacEngine 的 bench_label 参数，基准数据只存不加入主引擎。
+
+        Args:
+            bench_label: 基准品种代码 (如 '399317.SZ')
+            bench_data: OHLCV DataFrame
+            symbol_name: 品种名称 (可选, 仅用于显示)
+        """
         self._bench_label = bench_label
+
+        # 标准化数据
+        df = bench_data.copy()
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+        if 'eob' not in df.columns:
+            df['eob'] = df.index
+
+        # 基准数据只存 _symbol_data, 不加入主引擎
+        self._symbol_data[bench_label] = df
+        if symbol_name:
+            self._symbol_names[bench_label] = symbol_name
+        elif 'name' in df.columns:
+            self._symbol_names[bench_label] = df['name'].iloc[-1]
+
         return self
 
     def set_freq(self, freq: str) -> 'Backtester':
@@ -96,7 +119,9 @@ class Backtester:
     # ── 数据注入 ──
 
     def add_data(self, symbol: str, data: pd.DataFrame, symbol_name: str = None) -> 'Backtester':
-        """添加单个品种数据，对齐 Engine.add_data 风格
+        """添加策略品种数据，对齐 Engine.add_data 风格
+
+        注意: 基准数据请通过 set_benchmark(label, data) 传入，不走 add_data。
 
         封装:
           - Engine 创建 (首次 add_data 时)
@@ -118,9 +143,8 @@ class Backtester:
 
         Example:
             >>> from core import Backtester
-            >>> bt = Backtester().set_init_cash(1e6).set_benchmark('399317.SZ')
+            >>> bt = Backtester().set_init_cash(1e6).set_benchmark('399317.SZ', df_399317, '国证A指')
             >>> bt.add_data('600000.SH', df_600000, symbol_name='浦发银行')
-            >>> bt.add_data('399317.SZ', df_399317, symbol_name='国证A指')
             >>> analyzer = bt.run(MyStrategy(), start, end)
         """
         # 首次 add_data 时创建 Engine
@@ -140,13 +164,6 @@ class Backtester:
         context.subscribe(symbol, self._freq, count=300)
         self.engine.add_data(symbol, self._freq, df, symbol_name=symbol_name)
 
-        # 存标准化后的数据（供 _inject_benchmark 使用）
-        self._symbol_data[symbol] = df
-
-        # 保存品种名称（可选，仅用于显示）
-        if symbol_name:
-            self._symbol_names[symbol] = symbol_name
-
         return self
 
     # ── 执行 (接受任意 Strategy) ──
@@ -165,9 +182,8 @@ class Backtester:
             AccountAnalyzer
 
         Example:
-            >>> bt = Backtester().set_init_cash(1e6).set_benchmark('399317.SZ')
+            >>> bt = Backtester().set_init_cash(1e6).set_benchmark('399317.SZ', df_399317)
             >>> bt.add_data('600000.SH', df_600000)
-            >>> bt.add_data('399317.SZ', df_399317)
             >>> analyzer = bt.run(MyStrategy(), start, end, mode='full')
         """
         if self.engine is None:
@@ -195,24 +211,25 @@ class Backtester:
 
         # 直接使用已标准化的数据
         if bench_label not in self._symbol_data:
-            raise ValueError(f"基准品种 {bench_label} 未通过 add_data() 注入")
+            raise ValueError(f"基准品种 {bench_label} 未通过 set_benchmark() 注入")
 
         bench_df = self._symbol_data[bench_label].copy()
 
         # 创建基准 Engine
         bench_eng = Engine(init_cash=self._init_cash, fee_config=self._fee_config)
-        context.mode = 'backtest'
+
+        # 基准数据需要单独 subscribe + add_data（因为没加入主引擎）
         context.unsubscribe(bench_label, self._freq)
         context.subscribe(bench_label, self._freq, count=3000)
 
-        # 传入 symbol_name（如果有的话）
+        # 获取品种名称（用于显示，没有则回退到代码）
         bench_name = self._symbol_names.get(bench_label)
+
+        # 传入 symbol_name（如果有的话）
         bench_eng.add_data(bench_label, self._freq, bench_df, symbol_name=bench_name)
 
         bench_eng.run(BenchHolder, start_time, end_time)
         bench_an = AccountAnalyzer(bench_eng.account)
 
-        # 使用保存的品种名称（如果有的话）
-        bench_name = self._symbol_names.get(bench_label, bench_label)
-        analyzer.set_benchmark(bench_an.daily_assets, bench_name)
+        analyzer.set_benchmark(bench_an.daily_assets, bench_name or bench_label)
         return analyzer
