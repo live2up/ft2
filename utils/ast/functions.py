@@ -5,7 +5,7 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 
 在五层架构中的位置: 第2层(原语) — 定义"能算什么"
 
-  函数 = 操作动词 (FUNC_REGISTRY): 72 函数
+  函数定义 = 78 个 | FUNC_REGISTRY 条目 = 78 个
 
 ═══════════════════════════════════════════════════════════════
 命名规范 (对齐 WQ101 行业标准)
@@ -41,6 +41,87 @@ utils/ast/functions.py — 原语层 (公共基础设施)
   - 1D 数组输入, 1D 数组输出 (由上层逐列调用实现 2D 面板)
 
 ═══════════════════════════════════════════════════════════════
+现有函数清单 (81 个 FUNC_REGISTRY 条目, 按分类)
+
+  ┌─ 内部工具 (3)
+  │  _rolling / _expanding / _persist
+
+  ├─ 时序 ts_ (26 + 2 lambda + 1 别名 = 29 条目)
+  │  基础:      mean / std / sum / max / min / median
+  │  周期:      delta / delay / roc
+  │  统计:      rank / zscore / scale / quantile / av_diff
+  │             var(λ) / logret(λ) / decay_linear / product
+  │  相关:      corr / cov
+  │  分布形状:  skew / kurt / argmax / argmin
+  │  回归:      regression / resi / slope / rsquare
+  │  [别名]     ts_regression_residual(=ts_resi)
+
+  ├─ 扩张 expanding_ (4)
+  │  expanding_mean / expanding_median / expanding_std / expanding_percentile
+
+  ├─ 截面 cs_ (6)
+  │  cs_rank / cs_zscore / cs_scale / cs_winsorize
+  │  cs_normalize / cs_quantile(=cs_rank)
+
+  ├─ 数学 (17)
+  │  基础:      abs / log / sqrt / sign / exp / safe_max / safe_min
+  │  三角函数:  sin / cos
+  │  激活:      tanh / sigmoid / relu / softsign
+  │  钟形族:    gauss / p4
+  │  自定义:    signed_power / square_sigmoid
+
+  ├─ 信号 (1)
+  │  persist
+
+  ├─ 特征 ta-lib (21)
+  │  趋势:      ema / wma / dema / kama / trima / tsf / linearreg
+  │  波动:      atr / atr_sma / natr / stddev / var / hv / bb_width
+  │  动量:      rsi / macd / adx / cci
+  │  量比:      vol_ratio / amt_ratio
+  │  平滑:      wilder_smooth
+
+  ├─ WQ别名 (3) — 逐步取缔, 统一改用 ts_ 版
+  │  corr          → 改用 ts_corr
+  │  roc           → 改用 ts_roc
+  │  kurt          → 改用 ts_kurt
+
+  └─ 注册 (2)
+     register_function / unregister_function
+
+═══════════════════════════════════════════════════════════════
+潜在扩展函数 (按优先级, 从 WQ101/GT191/Alpha158 需求整理)
+
+  ★ P0 — 逻辑/条件 (无此算子会导致表达式级功能缺失)
+    is_nan(x)                    → 判断 NaN (当前用 `x != x` 替代, 不直观)
+    if_else(cond, a, b)         → 条件选择 (当前用 cond*a+(1-cond)*b 替代, 欠明确)
+    ts_last(x, d)               → 取窗口内最后一个有效值 (等价延迟, 语义清晰)
+    ts_count_nans(x, d)         → 窗口内 NaN 计数 (诊断缺失率)
+
+  ★ P1 — 组别运算 (31行业/个股级需要)
+    group_rank(x, group)        → 组内排名 (替代 cs_rank 后加行业层)
+    group_zscore(x, group)      → 组内标准化
+    group_mean(x, group)        → 组内均值 (去行业均值 = 行业中性化)
+    group_neutralize(x, group)   → 行业中性化
+
+  ★ P2 — 时序辅助 (提升表达力)
+    ts_step(x, d)               → 窗口内是否从未为 0 (持久性检测)
+    ts_backfill(x, d)           → 前向填充 NaN (数据修复)
+    ts_hump(x, d)               → 窗口内是否中间高两端低 (驼峰检测)
+    ts_kth_element(x, d, k)     → 窗口内第 k 大/小值 (稳健极值)
+
+  ★ P3 — 高级统计 (特定策略需求)
+    ts_hurst(x, d)              → Hurst 指数 (均值回归/趋势检测)
+    ts_entropy(x, d)            → 样本熵/近似熵 (复杂度测量)
+    ts_dcorr(x, y, d)           → 距离相关性 (非线性相关性)
+    ts_variance_ratio(x, d, k)  → 方差比检验 (随机游走检测)
+    cs_winsorize_quantile(x, l, u) → 分位数截尾 (现行 std 版外的新变体)
+
+  ★ P4 — 变换/向量 (低优先级)
+    bucket(x, n)                → 连续值分箱 (截面离散化)
+    vec_sum(x) / vec_avg(x)     → 向量归约 (替代 ts_sum 的语义更明确)
+    trade_when(cond, expr)      → 条件触发执行 (状态机逻辑)
+
+═══════════════════════════════════════════════════════════════
 公共模式 / 可复用抽象
 
   # 防除零模式 (6处: ts_roc/ts_zscore/ts_scale/cs_zscore/cs_scale/ts_regression)
@@ -58,24 +139,6 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 ═══════════════════════════════════════════════════════════════
 [重构] 2026-06-22 从 registry.py 拆分, 独立为 functions.py
 [修正] 2026-06-25 cs_rank→min排名, ts_*→nan*版, 对齐WQ标准
-
-═══════════════════════════════════════════════════════════════
-WQ BRAIN 算子对标状态 (2026-06-25审计)
-
-  ✅ 已对齐 43/66 个算子的核心功能:
-    算术: abs/log/sqrt/sign/power/min/max 等 13/15
-    时序: ts_* 全部20/24 (缺 backfill/count_nans/step/hump/kth/last/change)
-    截面: cs_* 全部 6/6 (排名并列已用 competition ranking)
-    逻辑: and/or/not/if_else 4/11 (缺 is_nan 等)
-
-  ❌ 缺失 23 个 (暂不需要, 后续扩展):
-    组别6个:    group_rank/zscore/neutralize/scale/mean/backfill
-    辅助7个:    densify/is_nan/ts_backfill/ts_count_nans/ts_step/
-               hump/kth_element/last_diff_value/days_from_last_change
-    变换2个:    bucket/trade_when
-    向量2个:    vec_sum/vec_avg
-
-  注: 缺失算子不影响当前31行业因子探索, 个股级或行业中性化时需要扩展。
 ═══════════════════════════════════════════════════════════════
 """
 import numpy as np
@@ -305,6 +368,71 @@ def ts_regression(y, x, d, rettype=2):
     return r
 
 
+def ts_resi(x, window):
+    """时序回归残差: 对时间做线性回归 x=a+b*t，返回当前值-预测值"""
+    x = np.asarray(x, float); window = int(window)
+    if window < 3:
+        return np.zeros_like(x)
+    r = np.full_like(x, 0.0)
+    for i in range(window - 1, len(x)):
+        seg = x[i - window + 1: i + 1]
+        valid = seg[~np.isnan(seg)]
+        if len(valid) < 3:
+            continue
+        t = np.arange(len(valid), dtype=float)
+        cov = np.cov(t, valid)
+        if cov[0, 0] < 1e-15:
+            continue
+        b = cov[0, 1] / cov[0, 0]
+        a = np.mean(valid) - b * np.mean(t)
+        predicted = a + b * (len(valid) - 1)
+        r[i] = valid[-1] - predicted
+    return r
+
+
+def ts_slope(x, window):
+    """时序线性回归斜率: 对时间做线性回归 x=a+b*t，返回斜率 b"""
+    x = np.asarray(x, float); window = int(window)
+    if window < 3:
+        return np.zeros_like(x)
+    r = np.full_like(x, np.nan)
+    for i in range(window - 1, len(x)):
+        seg = x[i - window + 1: i + 1]
+        valid = seg[~np.isnan(seg)]
+        if len(valid) < 3:
+            continue
+        t = np.arange(len(valid), dtype=float)
+        cov = np.cov(t, valid)
+        if cov[0, 0] < 1e-15:
+            continue
+        r[i] = cov[0, 1] / cov[0, 0]
+    return r
+
+
+def ts_rsquare(x, window):
+    """时序线性回归 R²: 对时间做线性回归 x=a+b*t，返回 R²"""
+    x = np.asarray(x, float); window = int(window)
+    if window < 3:
+        return np.zeros_like(x)
+    r = np.full_like(x, np.nan)
+    for i in range(window - 1, len(x)):
+        seg = x[i - window + 1: i + 1]
+        valid = seg[~np.isnan(seg)]
+        if len(valid) < 3:
+            continue
+        t = np.arange(len(valid), dtype=float)
+        cov = np.cov(t, valid)
+        if cov[0, 0] < 1e-15:
+            continue
+        b = cov[0, 1] / cov[0, 0]
+        a = np.mean(valid) - b * np.mean(t)
+        y_pred = a + b * t
+        ss_res = np.sum((valid - y_pred) ** 2)
+        ss_tot = np.sum((valid - np.mean(valid)) ** 2)
+        r[i] = 1 - ss_res / ss_tot if ss_tot > 1e-10 else 0.0
+    return r
+
+
 # ============================================================
 # 扩张统计 (expanding_) — 起始→当前, 无固定窗口
 # ============================================================
@@ -435,69 +563,8 @@ def signed_power(x, exponent=2.0):
 def safe_max(x, y):    return np.maximum(x, y)
 def safe_min(x, y):    return np.minimum(x, y)
 
-def ts_resi(x, window):
-    """时序回归残差: 对时间做线性回归 x=a+b*t，返回当前值-预测值"""
-    x = np.asarray(x, float); window = int(window)
-    if window < 3:
-        return np.zeros_like(x)
-    r = np.full_like(x, 0.0)
-    for i in range(window - 1, len(x)):
-        seg = x[i - window + 1: i + 1]
-        valid = seg[~np.isnan(seg)]
-        if len(valid) < 3:
-            continue
-        t = np.arange(len(valid), dtype=float)
-        cov = np.cov(t, valid)
-        if cov[0, 0] < 1e-15:
-            continue
-        b = cov[0, 1] / cov[0, 0]
-        a = np.mean(valid) - b * np.mean(t)
-        predicted = a + b * (len(valid) - 1)
-        r[i] = valid[-1] - predicted
-    return r
 
 
-def ts_slope(x, window):
-    """时序线性回归斜率: 对时间做线性回归 x=a+b*t，返回斜率 b"""
-    x = np.asarray(x, float); window = int(window)
-    if window < 3:
-        return np.zeros_like(x)
-    r = np.full_like(x, np.nan)
-    for i in range(window - 1, len(x)):
-        seg = x[i - window + 1: i + 1]
-        valid = seg[~np.isnan(seg)]
-        if len(valid) < 3:
-            continue
-        t = np.arange(len(valid), dtype=float)
-        cov = np.cov(t, valid)
-        if cov[0, 0] < 1e-15:
-            continue
-        r[i] = cov[0, 1] / cov[0, 0]
-    return r
-
-
-def ts_rsquare(x, window):
-    """时序线性回归 R²: 对时间做线性回归 x=a+b*t，返回 R²"""
-    x = np.asarray(x, float); window = int(window)
-    if window < 3:
-        return np.zeros_like(x)
-    r = np.full_like(x, np.nan)
-    for i in range(window - 1, len(x)):
-        seg = x[i - window + 1: i + 1]
-        valid = seg[~np.isnan(seg)]
-        if len(valid) < 3:
-            continue
-        t = np.arange(len(valid), dtype=float)
-        cov = np.cov(t, valid)
-        if cov[0, 0] < 1e-15:
-            continue
-        b = cov[0, 1] / cov[0, 0]
-        a = np.mean(valid) - b * np.mean(t)
-        y_pred = a + b * t
-        ss_res = np.sum((valid - y_pred) ** 2)
-        ss_tot = np.sum((valid - np.mean(valid)) ** 2)
-        r[i] = 1 - ss_res / ss_tot if ss_tot > 1e-10 else 0.0
-    return r
 
 
 # ============================================================
@@ -718,11 +785,6 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'ts_slope': ts_slope,
     'ts_rsquare': ts_rsquare,
 
-    # ── WQ101 兼容别名 (短名) ──
-    'corr': ts_corr,
-    'roc':  ts_roc,
-    'kurt': ts_kurt,
-
     # ── 扩张统计 (expanding_) ──
     'expanding_mean': expanding_mean, 'expanding_median': expanding_median,
     'expanding_std':  expanding_std,  'expanding_percentile': expanding_percentile,
@@ -792,7 +854,6 @@ FUNC_CATEGORIES = {
                 'sin', 'cos', 'gauss', 'p4', 'softsign', 'square_sigmoid',
                 'signed_power', 'safe_max', 'safe_min'],
     '信号确认': ['persist'],
-    'WQ101别名': ['corr', 'roc', 'kurt'],
 }
 
 
