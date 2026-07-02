@@ -46,7 +46,7 @@ utils/ast/functions.py — 原语层 (公共基础设施)
   # 防除零模式 (6处: ts_roc/ts_zscore/ts_scale/cs_zscore/cs_scale/ts_regression)
   result = value / divisor if divisor > 1e-10 else 0.0
 
-  # NaN过滤模式 (7处: ts_product/ts_regression/ts_regression_residual/
+  # NaN过滤模式 (7处: ts_product/ts_regression/ts_resi/
   #                  ts_decay_linear/ts_scale/cs_zscore/cs_scale/cs_winsorize)
   valid = ~np.isnan(arr)
   # 当前分散在各函数中, 未来可抽为 _nan_filter(seg, min_valid=1) 辅助函数
@@ -232,9 +232,19 @@ def ts_scale(x, d):
         r[i] = x[i] / s if s > 1e-10 else 0
     return r
 
-def ts_quantile(x, d):
-    """Rolling quantile rank 0~1"""
-    return ts_rank(x, d)
+def ts_quantile(x, d, p=0.5):
+    """滚动分位数值: 返回窗口内 p 分位数的值 (非排名)
+    
+    p=0.5 → 中位数, p=0.8 → 80%分位数, p=0.2 → 20%分位数
+    """
+    x = np.asarray(x, float)
+    r = np.full_like(x, np.nan)
+    for i in range(d - 1, len(x)):
+        seg = x[i - d + 1 : i + 1]
+        if np.all(np.isnan(seg)):
+            continue
+        r[i] = np.nanpercentile(seg, p * 100)
+    return r
 
 def ts_av_diff(x, d):
     """Current minus rolling mean (deviation)"""
@@ -425,7 +435,7 @@ def signed_power(x, exponent=2.0):
 def safe_max(x, y):    return np.maximum(x, y)
 def safe_min(x, y):    return np.minimum(x, y)
 
-def ts_regression_residual(x, window):
+def ts_resi(x, window):
     """时序回归残差: 对时间做线性回归 x=a+b*t，返回当前值-预测值"""
     x = np.asarray(x, float); window = int(window)
     if window < 3:
@@ -444,6 +454,49 @@ def ts_regression_residual(x, window):
         a = np.mean(valid) - b * np.mean(t)
         predicted = a + b * (len(valid) - 1)
         r[i] = valid[-1] - predicted
+    return r
+
+
+def ts_slope(x, window):
+    """时序线性回归斜率: 对时间做线性回归 x=a+b*t，返回斜率 b"""
+    x = np.asarray(x, float); window = int(window)
+    if window < 3:
+        return np.zeros_like(x)
+    r = np.full_like(x, np.nan)
+    for i in range(window - 1, len(x)):
+        seg = x[i - window + 1: i + 1]
+        valid = seg[~np.isnan(seg)]
+        if len(valid) < 3:
+            continue
+        t = np.arange(len(valid), dtype=float)
+        cov = np.cov(t, valid)
+        if cov[0, 0] < 1e-15:
+            continue
+        r[i] = cov[0, 1] / cov[0, 0]
+    return r
+
+
+def ts_rsquare(x, window):
+    """时序线性回归 R²: 对时间做线性回归 x=a+b*t，返回 R²"""
+    x = np.asarray(x, float); window = int(window)
+    if window < 3:
+        return np.zeros_like(x)
+    r = np.full_like(x, np.nan)
+    for i in range(window - 1, len(x)):
+        seg = x[i - window + 1: i + 1]
+        valid = seg[~np.isnan(seg)]
+        if len(valid) < 3:
+            continue
+        t = np.arange(len(valid), dtype=float)
+        cov = np.cov(t, valid)
+        if cov[0, 0] < 1e-15:
+            continue
+        b = cov[0, 1] / cov[0, 0]
+        a = np.mean(valid) - b * np.mean(t)
+        y_pred = a + b * t
+        ss_res = np.sum((valid - y_pred) ** 2)
+        ss_tot = np.sum((valid - np.mean(valid)) ** 2)
+        r[i] = 1 - ss_res / ss_tot if ss_tot > 1e-10 else 0.0
     return r
 
 
@@ -660,7 +713,10 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'ts_decay_linear': ts_decay_linear,
     'ts_product':  ts_product,
     'ts_regression': ts_regression,
-    'ts_regression_residual': ts_regression_residual,
+    'ts_resi': ts_resi,                      # Alpha158 短名
+    'ts_regression_residual': ts_resi,       # [别名] 旧名兼容 kb01/kb02
+    'ts_slope': ts_slope,
+    'ts_rsquare': ts_rsquare,
 
     # ── WQ101 兼容别名 (短名) ──
     'corr': ts_corr,
@@ -726,7 +782,7 @@ FUNC_CATEGORIES = {
                 'ts_skew', 'ts_kurt', 'ts_argmax', 'ts_argmin',
                 'ts_roc', 'ts_zscore', 'ts_scale', 'ts_quantile',
                 'ts_av_diff', 'ts_decay_linear', 'ts_product', 'ts_var', 'ts_logret',
-                'ts_regression', 'ts_regression_residual'],
+                'ts_regression', 'ts_resi'],
     '扩张统计': ['expanding_mean', 'expanding_median', 'expanding_std', 'expanding_percentile'],
     '截面算子': ['cs_rank', 'cs_zscore', 'cs_scale', 'cs_winsorize', 'cs_normalize', 'cs_quantile'],
     '特征计算': ['rsi', 'atr', 'atr_sma', 'macd', 'adx', 'cci', 'bb_width', 'stddev',
