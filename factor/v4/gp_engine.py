@@ -68,11 +68,19 @@ TS_FUNCTIONS = {
     'ts_skew': [20, 60],
     'ts_kurt': [20, 60],
     'ts_resid': [10, 20],
+    'ts_slope': [10, 20],
+    'ts_rsq': [10, 20],
+    'ts_intercept': [10, 20],
+    'ts_predict': [10, 20],
 }
 
-# 双参数时序函数（需要两个输入序列）
+# 双参数时序函数（需要两个输入序列）— 只能通过种子/交叉传播
 TS_FUNCTIONS_2ARG = {
     'ts_corr': [10, 20, 60],
+    'ts_cov': [10, 20],
+    'ts_reg_slope': [5, 10],
+    'ts_reg_resid': [5, 10],
+    'ts_reg_rsq': [5, 10],
 }
 
 # 特征函数
