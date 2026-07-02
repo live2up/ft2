@@ -311,7 +311,7 @@ AST_GRAMMAR_SPEC = """
    ts_median, ts_delta, ts_delay, ts_rank, ts_corr, ts_cov,
    ts_skew, ts_kurt, ts_argmax, ts_argmin, ts_roc, ts_zscore,
    ts_scale, ts_quantile, ts_av_diff, ts_decay_linear, ts_product,
-   ts_var, ts_logret, ts_regression, ts_regression_residual
+   ts_var, ts_logret, ts_regression, ts_resid
 
 2. **扩张统计** (expanding_*): expanding_mean, expanding_median,
    expanding_std, expanding_percentile

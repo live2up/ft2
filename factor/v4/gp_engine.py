@@ -67,7 +67,7 @@ TS_FUNCTIONS = {
     'ts_decay_linear': [5, 10, 20],
     'ts_skew': [20, 60],
     'ts_kurt': [20, 60],
-    'ts_regression_residual': [10, 20],
+    'ts_resid': [10, 20],
 }
 
 # 双参数时序函数（需要两个输入序列）

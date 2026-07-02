@@ -40,7 +40,7 @@ PRIMITIVES = {
     1: ['rsi', 'ts_roc', 'ts_zscore', 'ts_av_diff', 'ema', 'bb_width',
         'ts_mean', 'ts_std', 'ts_sum', 'ts_min', 'ts_max',
         'ts_delta', 'ts_scale', 'ts_decay_linear',
-        'ts_regression_residual'],
+        'ts_resid'],
     # 二元函数 (两个数组参数+窗口): func(x, y, d)
     2: ['ts_corr', 'ts_cov', 'ts_regression'],
     # 种子表达式 (用于初始化)

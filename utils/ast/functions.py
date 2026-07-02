@@ -5,7 +5,7 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 
 在五层架构中的位置: 第2层(原语) — 定义"能算什么"
 
-  函数定义 = 78 个 | FUNC_REGISTRY 条目 = 78 个
+  函数定义 = 82 个 | FUNC_REGISTRY 条目 = 87 个
 
 ═══════════════════════════════════════════════════════════════
 命名规范 (对齐 WQ101 行业标准)
@@ -13,9 +13,21 @@ utils/ast/functions.py — 原语层 (公共基础设施)
   ◆ 函数命名 (snake_case, 小写 + 前缀)
     前缀约定:
       ts_       → Time Series (窗口滚动, 只用历史数据)
+      ts_reg_   → 双变量滚动线性回归 y~x (ts_reg_slope/y~x残差等)
       cs_       → Cross Sectional (截面统计, 需完整 2D 面板)
       expanding_→ 扩展窗口 (起始→当前, 无固定窗口)
       无前缀    → 逐元素数学 / talib 特征 / 信号
+
+    回归函数命名区分:
+      ts_reg_*(y, x, d)  → 双变量 y~x 回归 (如 CLOSE~VOLUME)
+      ts_*(x, w)         → 单变量 x~t 趋势回归 (如 CLOSE~time)
+
+    回归后缀统一 (统计学标准缩写):
+      slope      = 斜率
+      intercept  = 截距
+      resid      = residual (残差), 保留 ts_resi 别名兼容 Alpha158
+      predict    = 预测值
+      rsq        = R-squared (R²), 保留 ts_rsquare 别名兼容
 
     参数约定:
       窗口: d         (对齐 WQ101, 非 w=window)
@@ -46,15 +58,16 @@ utils/ast/functions.py — 原语层 (公共基础设施)
   ┌─ 内部工具 (3)
   │  _rolling / _expanding / _persist
 
-  ├─ 时序 ts_ (26 + 2 lambda + 1 别名 = 29 条目)
+  ├─ 时序 ts_ (28 + 2 lambda + 5 别名 = 35 条目)
   │  基础:      mean / std / sum / max / min / median
   │  周期:      delta / delay / roc
   │  统计:      rank / zscore / scale / quantile / av_diff
   │             var(λ) / logret(λ) / decay_linear / product
   │  相关:      corr / cov
   │  分布形状:  skew / kurt / argmax / argmin
-  │  回归:      regression / resi / slope / rsquare
-  │  [别名]     ts_regression_residual(=ts_resi)
+  │  x~t趋势:   slope / resid / rsq / intercept / predict
+  │  [y~x回归]  ts_reg_slope / ts_reg_intercept / ts_reg_resid
+  │             ts_reg_predict / ts_reg_rsq (均调用 ts_regression)
 
   ├─ 扩张 expanding_ (4)
   │  expanding_mean / expanding_median / expanding_std / expanding_percentile
@@ -84,6 +97,11 @@ utils/ast/functions.py — 原语层 (公共基础设施)
   │  corr          → 改用 ts_corr
   │  roc           → 改用 ts_roc
   │  kurt          → 改用 ts_kurt
+
+  ├─ 旧名别名 (3) — [2026-07-03] 已停止生产使用, 后续删除
+  │  ts_resi                    → 改用 ts_resid
+  │  ts_regression_residual     → 改用 ts_resid
+  │  ts_rsquare                 → 改用 ts_rsq
 
   └─ 注册 (2)
      register_function / unregister_function
@@ -390,6 +408,11 @@ def ts_resi(x, window):
     return r
 
 
+def ts_resid(x, window):
+    """别名: ts_resi, 统计学标准缩写"""
+    return ts_resi(x, window)
+
+
 def ts_slope(x, window):
     """时序线性回归斜率: 对时间做线性回归 x=a+b*t，返回斜率 b"""
     x = np.asarray(x, float); window = int(window)
@@ -430,6 +453,52 @@ def ts_rsquare(x, window):
         ss_res = np.sum((valid - y_pred) ** 2)
         ss_tot = np.sum((valid - np.mean(valid)) ** 2)
         r[i] = 1 - ss_res / ss_tot if ss_tot > 1e-10 else 0.0
+    return r
+
+
+def ts_rsq(x, window):
+    """别名: ts_rsquare, 统计学标准缩写"""
+    return ts_rsquare(x, window)
+
+
+def ts_intercept(x, window):
+    """时序线性回归截距: 对时间做线性回归 x=a+b*t，返回截距 a"""
+    x = np.asarray(x, float); window = int(window)
+    if window < 3:
+        return np.zeros_like(x)
+    r = np.full_like(x, np.nan)
+    for i in range(window - 1, len(x)):
+        seg = x[i - window + 1: i + 1]
+        valid = seg[~np.isnan(seg)]
+        if len(valid) < 3:
+            continue
+        t = np.arange(len(valid), dtype=float)
+        cov = np.cov(t, valid)
+        if cov[0, 0] < 1e-15:
+            continue
+        b = cov[0, 1] / cov[0, 0]
+        r[i] = np.mean(valid) - b * np.mean(t)
+    return r
+
+
+def ts_predict(x, window):
+    """时序线性回归预测值: 对时间做线性回归 x=a+b*t，返回当前时刻预测值 a+b*(w-1)"""
+    x = np.asarray(x, float); window = int(window)
+    if window < 3:
+        return np.zeros_like(x)
+    r = np.full_like(x, np.nan)
+    for i in range(window - 1, len(x)):
+        seg = x[i - window + 1: i + 1]
+        valid = seg[~np.isnan(seg)]
+        if len(valid) < 3:
+            continue
+        t = np.arange(len(valid), dtype=float)
+        cov = np.cov(t, valid)
+        if cov[0, 0] < 1e-15:
+            continue
+        b = cov[0, 1] / cov[0, 0]
+        a = np.mean(valid) - b * np.mean(t)
+        r[i] = a + b * (len(valid) - 1)
     return r
 
 
@@ -780,10 +849,16 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'ts_decay_linear': ts_decay_linear,
     'ts_product':  ts_product,
     'ts_regression': ts_regression,
-    'ts_resi': ts_resi,                      # Alpha158 短名
-    'ts_regression_residual': ts_resi,       # [别名] 旧名兼容 kb01/kb02
+    'ts_reg_slope':      lambda y, x, d: ts_regression(y, x, d, 0),
+    'ts_reg_intercept':  lambda y, x, d: ts_regression(y, x, d, 1),
+    'ts_reg_resid':      lambda y, x, d: ts_regression(y, x, d, 2),
+    'ts_reg_predict':    lambda y, x, d: ts_regression(y, x, d, 3),
+    'ts_reg_rsq':        lambda y, x, d: ts_regression(y, x, d, 4),
+    'ts_resid': ts_resid,                    # 统计学标准缩写
     'ts_slope': ts_slope,
-    'ts_rsquare': ts_rsquare,
+    'ts_rsq': ts_rsq,                        # 统计学标准缩写
+    'ts_intercept': ts_intercept,
+    'ts_predict': ts_predict,
 
     # ── 扩张统计 (expanding_) ──
     'expanding_mean': expanding_mean, 'expanding_median': expanding_median,
@@ -828,6 +903,11 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'linearreg':   _feature_linearreg,
     'vol_ratio':   _feature_vol_ratio,
     'amt_ratio':   _feature_amt_ratio,
+
+    # ── 旧名别名 — [2026-07-03] 已停止生产使用, 后续删除 ──
+    'ts_resi': ts_resi,                      # → 改用 ts_resid
+    'ts_regression_residual': ts_resi,       # → 改用 ts_resid
+    'ts_rsquare': ts_rsquare,                # → 改用 ts_rsq
 }
 
 # 安全常量 (表达式中的 True/False/None/pi/e)
@@ -844,7 +924,9 @@ FUNC_CATEGORIES = {
                 'ts_skew', 'ts_kurt', 'ts_argmax', 'ts_argmin',
                 'ts_roc', 'ts_zscore', 'ts_scale', 'ts_quantile',
                 'ts_av_diff', 'ts_decay_linear', 'ts_product', 'ts_var', 'ts_logret',
-                'ts_regression', 'ts_resi'],
+                'ts_regression', 'ts_resi', 'ts_reg_slope', 'ts_reg_intercept',
+                'ts_reg_resid', 'ts_reg_predict', 'ts_reg_rsq',
+                'ts_intercept', 'ts_predict', 'ts_resid', 'ts_rsq'],
     '扩张统计': ['expanding_mean', 'expanding_median', 'expanding_std', 'expanding_percentile'],
     '截面算子': ['cs_rank', 'cs_zscore', 'cs_scale', 'cs_winsorize', 'cs_normalize', 'cs_quantile'],
     '特征计算': ['rsi', 'atr', 'atr_sma', 'macd', 'adx', 'cci', 'bb_width', 'stddev',
