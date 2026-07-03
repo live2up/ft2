@@ -407,7 +407,7 @@ def on_bar(bar):
 </div>
     """)
     
-    nb.export_html(local_assets=True)
+    nb.export_html(local_static=True)
     
 
 
