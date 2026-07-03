@@ -106,7 +106,52 @@ RATIO_FUNCTIONS = {
 #   p4:    exp(-x⁴), 平顶陡降, 对微小变化不敏感, 适合极窄范围(std~0.01)
 #   tanh:  S形, 保留符号方向, 适合有方向性的信号
 #   注: cos/gauss/p4 在窄范围(std<1)上等价, 因cs_rank后排序一致
-MATH_FUNCTIONS = ['sin', 'cos', 'exp', 'log', 'sqrt', 'abs', 'tanh', 'gauss', 'p4']
+MATH_FUNCTIONS = ['sin', 'cos', 'exp', 'log', 'sqrt', 'abs', 'tanh', 'gauss', 'p4', 'neg']
+
+# [新增] 2026-07-03 TreeGenConfig — 树生成概率配置 (WFGP: Weight-Focused GP)
+#   三层级偏置: group_weights(大类) → fn_weights(子函数) → var_weights(变量)
+#   默认 = 现有等概率行为 (100% 兼容，无需改动调用方)
+@dataclass
+class TreeGenConfig:
+    """树生成概率配置
+
+    控制 GP 随机生树时变量/函数的选择偏置，引导搜索往特定方向聚焦。
+    默认 None = 等概率 (完全兼容现有行为)。
+
+    用法:
+        cfg = TreeGenConfig(
+            var_weights={'AMOUNT': 3, 'VOLUME': 2},
+            ts_weights={'ts_corr': 3, 'ts_cov': 3, 'amt_ratio': 3},
+        )
+        engine = GPEngine(..., tree_gen_config=cfg)
+
+    Attributes:
+        group_weights: 函数大类权重
+            {'ts_function': 25, 'feature_function': 13, 'math_function': 12,
+             'comparison': 13, 'logic': 11, 'binary_op': 12,
+             'unary_op': 9, 'ternary': 5}
+        ts_weights:  时序子函数权重 (key=函数名, value=权重, 默认各 1.0)
+        math_weights: 数学子函数权重 (默认各 1.0)
+        feature_weights: 特征子组权重
+            {'feature_1arg': 0.5, 'feature_3arg': 0.3, 'ratio': 0.2}
+        var_weights: 变量权重 (默认=None=等概率)
+            例: {'AMOUNT': 3, 'VOLUME': 2, 'CLOSE': 1}
+    """
+    group_weights: Optional[Dict[str, float]] = None
+    ts_weights: Optional[Dict[str, float]] = None
+    math_weights: Optional[Dict[str, float]] = None
+    feature_weights: Optional[Dict[str, float]] = None
+    var_weights: Optional[Dict[str, float]] = None
+
+DEFAULT_TREE_GEN_CONFIG = TreeGenConfig(
+    group_weights={'ts_function':25, 'feature_function':13, 'math_function':12,
+                   'comparison':13, 'logic':11, 'binary_op':12,
+                   'unary_op':9, 'ternary':5},
+    ts_weights={fn: 1.0 for fn in TS_FUNCTIONS},
+    math_weights={fn: 1.0 for fn in MATH_FUNCTIONS},
+    feature_weights={'feature_1arg': 0.5, 'feature_3arg': 0.3, 'ratio': 0.2},
+)
+_TREE_GEN_CONFIG: TreeGenConfig = DEFAULT_TREE_GEN_CONFIG
 
 DEFAULT_GP_CONFIG = {
     'population_size': 200,
@@ -271,6 +316,11 @@ def _replace_subtree(tree: ast.Expression, old_node: ast.AST, new_node: ast.AST)
 # ============================================================
 
 def _random_variable() -> ast.Name:
+    vw = _TREE_GEN_CONFIG.var_weights
+    if vw:
+        var_names = list(vw.keys())
+        var_weights = [vw[v] for v in var_names]
+        return ast.Name(id=random.choices(var_names, weights=var_weights, k=1)[0], ctx=ast.Load())
     return ast.Name(id=random.choice(GP_VARIABLES), ctx=ast.Load())
 
 
@@ -285,8 +335,14 @@ def _random_terminal() -> ast.AST:
 
 
 def _random_ts_call(depth: int) -> ast.Call:
-    func_name = random.choice(list(TS_FUNCTIONS.keys()))
-    windows = TS_FUNCTIONS[func_name]
+    tw = _TREE_GEN_CONFIG.ts_weights
+    if tw:
+        func_names = list(tw.keys())
+        func_weights = [tw[fn] for fn in func_names]
+        func_name = random.choices(func_names, weights=func_weights, k=1)[0]
+    else:
+        func_name = random.choice(list(TS_FUNCTIONS.keys()))
+    windows = TS_FUNCTIONS.get(func_name, [10, 20])
     arg = _grow_tree(depth - 1, prefer_variable=True)
     window = ast.Constant(value=random.choice(windows))
     return ast.Call(
@@ -297,7 +353,13 @@ def _random_ts_call(depth: int) -> ast.Call:
 
 # [新增] 2026-06-23 数学原语树节点 (单参数, 无窗口)
 def _random_math_call(depth: int) -> ast.Call:
-    func_name = random.choice(MATH_FUNCTIONS)
+    mw = _TREE_GEN_CONFIG.math_weights
+    if mw:
+        func_names = list(mw.keys())
+        func_weights = [mw[fn] for fn in func_names]
+        func_name = random.choices(func_names, weights=func_weights, k=1)[0]
+    else:
+        func_name = random.choice(MATH_FUNCTIONS)
     arg = _grow_tree(depth - 1, prefer_variable=True)
     return ast.Call(
         func=ast.Name(id=func_name, ctx=ast.Load()),
@@ -306,8 +368,22 @@ def _random_math_call(depth: int) -> ast.Call:
 
 
 def _random_feature_call(depth: int) -> ast.Call:
-    r = random.random()
-    if r < 0.5 and FEATURE_FUNCTIONS_1ARG:
+    # 特征子组选择 (feature_1arg / feature_3arg / ratio)
+    fw = _TREE_GEN_CONFIG.feature_weights
+    if fw:
+        groups = list(fw.keys())
+        weights = [fw[g] for g in groups]
+        chosen = random.choices(groups, weights=weights, k=1)[0]
+    else:
+        r = random.random()
+        if r < 0.5:
+            chosen = 'feature_1arg'
+        elif r < 0.8:
+            chosen = 'feature_3arg'
+        else:
+            chosen = 'ratio'
+
+    if chosen == 'feature_1arg' and FEATURE_FUNCTIONS_1ARG:
         func_name = random.choice(list(FEATURE_FUNCTIONS_1ARG.keys()))
         windows = FEATURE_FUNCTIONS_1ARG[func_name]
         arg = _grow_tree(depth - 1, prefer_variable=True)
@@ -315,7 +391,7 @@ def _random_feature_call(depth: int) -> ast.Call:
             func=ast.Name(id=func_name, ctx=ast.Load()),
             args=[arg, ast.Constant(value=random.choice(windows))], keywords=[],
         )
-    elif r < 0.8 and FEATURE_FUNCTIONS_3ARG:
+    elif chosen == 'feature_3arg' and FEATURE_FUNCTIONS_3ARG:
         func_name = random.choice(list(FEATURE_FUNCTIONS_3ARG.keys()))
         windows = FEATURE_FUNCTIONS_3ARG[func_name]
         return ast.Call(
@@ -353,37 +429,43 @@ def _grow_tree(depth: int, prefer_variable: bool = False) -> ast.AST:
     - 支持逻辑: and, or
     - 支持三元: a if cond else b
     - 支持 not
+
+    大类权重来自 _TREE_GEN_CONFIG.group_weights，默认与原有硬编码一致。
     """
     if depth <= 1 or (prefer_variable and random.random() < 0.7):
         return _random_terminal()
 
-    r = random.random()
+    # 从 TreeGenConfig 读函数大类权重
+    gw = _TREE_GEN_CONFIG.group_weights
+    groups = list(gw.keys())
+    gweights = [gw[g] for g in groups]
+    chosen = random.choices(groups, weights=gweights, k=1)[0]
 
-    if r < 0.25:
+    if chosen == 'ts_function':
         # 时序函数
         return _random_ts_call(depth)
-    elif r < 0.38:
+    elif chosen == 'feature_function':
         # 特征函数
         return _random_feature_call(depth)
-    elif r < 0.50:
+    elif chosen == 'math_function':
         # [新增] 2026-06-23 数学原语: sin, cos, exp, log, sqrt, abs, tanh
         return _random_math_call(depth)
-    elif r < 0.63:
+    elif chosen == 'comparison':
         # 比较: expr > 0
         return _random_compare(_grow_tree(depth - 1, prefer_variable=True))
-    elif r < 0.74:
+    elif chosen == 'logic':
         # 逻辑: ... and/or ...
         left = _grow_tree(depth - 1)
         right = _grow_tree(depth - 1)
         op = ast.And() if random.random() < 0.6 else ast.Or()
         return ast.BoolOp(op=op, values=[left, right])
-    elif r < 0.86:
+    elif chosen == 'binary_op':
         # 二元: a + b, a * b
         left = _grow_tree(depth - 1, prefer_variable=True)
         right = _grow_tree(depth - 1, prefer_variable=True)
         op = random.choice([ast.Add(), ast.Sub(), ast.Mult(), ast.Div()])
         return ast.BinOp(left=left, op=op, right=right)
-    elif r < 0.95:
+    elif chosen == 'unary_op':
         # 一元: -x, not x
         operand = _grow_tree(depth - 1)
         if random.random() < 0.5:
@@ -551,6 +633,8 @@ class GPEngine:
                  config: Dict = None,
                  seed_expressions: List[str] = None,
                  random_seed: int = None,
+                 # [新增] 2026-07-03 三层级加权偏置引导
+                 tree_gen_config: TreeGenConfig = None,
                  # 向后兼容的别名（discover.py 可能传这些参数）
                  future_returns=None, returns=None):
         self.data = data
@@ -585,6 +669,9 @@ class GPEngine:
 
         # 种子
         self.seed_expressions = seed_expressions or []
+
+        # [新增] 2026-07-03 树生成概率配置
+        self.tree_gen_config = tree_gen_config
 
         # 数据形状
         self._shape = None
@@ -763,32 +850,38 @@ class GPEngine:
 
     def run(self, verbose: bool = True) -> 'GPEngine':
         """运行 GP 搜索"""
-        self._initialize_population()
-        for gen in range(self.generations):
-            self._evaluate_population()
-            gen_best = max(self.population, key=lambda x: x.fitness)
+        global _TREE_GEN_CONFIG
+        _old_config = _TREE_GEN_CONFIG
+        if self.tree_gen_config:
+            _TREE_GEN_CONFIG = self.tree_gen_config
+        try:
+            self._initialize_population()
+            for gen in range(self.generations):
+                self._evaluate_population()
+                gen_best = max(self.population, key=lambda x: x.fitness)
 
-            valid = [i for i in self.population if i.fitness > -999]
-            gen_stats = {
-                'generation': gen,
-                'best_fitness': gen_best.fitness,
-                'best_depth': gen_best.depth,
-                'best_expression': gen_best.expression_str,
-                'avg_fitness': np.mean([i.fitness for i in valid]) if valid else -999,
-                'valid_count': len(valid),
-            }
-            self.history.append(gen_stats)
+                valid = [i for i in self.population if i.fitness > -999]
+                gen_stats = {
+                    'generation': gen,
+                    'best_fitness': gen_best.fitness,
+                    'best_depth': gen_best.depth,
+                    'best_expression': gen_best.expression_str,
+                    'avg_fitness': np.mean([i.fitness for i in valid]) if valid else -999,
+                    'valid_count': len(valid),
+                }
+                self.history.append(gen_stats)
 
-            if verbose and gen % 5 == 0:
-                logger.info(f"Gen {gen:3d} | best_f={gen_best.fitness:.3f} "
-                            f"depth={gen_best.depth} valid={gen_stats['valid_count']}")
+                if verbose and gen % 5 == 0:
+                    logger.info(f"Gen {gen:3d} | best_f={gen_best.fitness:.3f} "
+                                f"depth={gen_best.depth} valid={gen_stats['valid_count']}")
 
-            if self.best_individual is None or gen_best.fitness > self.best_individual.fitness:
-                self.best_individual = gen_best
+                if self.best_individual is None or gen_best.fitness > self.best_individual.fitness:
+                    self.best_individual = gen_best
 
-            if gen < self.generations - 1:
-                self.population = self._next_generation(gen)
-
+                if gen < self.generations - 1:
+                    self.population = self._next_generation(gen)
+        finally:
+            _TREE_GEN_CONFIG = _old_config
         return self
 
     def best(self) -> Optional[Individual]:

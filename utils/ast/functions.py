@@ -588,6 +588,9 @@ def safe_relu(x):         return np.maximum(x, 0.0)
 #   gauss(x)    — exp(-x²), 轻尾钟形, 对极端值惩罚最重, 适合宽范围变量
 #   p4(x)       — exp(-x⁴), 平顶陡降, 对微小变化不敏感, 适合极窄范围
 #   exp_neg(x)  — exp(-|x|), 尖峰中尾, 介于cos和gauss之间
+def safe_neg(x):
+    return -np.asarray(x, float)
+
 def safe_gauss(x):        return np.exp(-np.asarray(x, float)**2)
 def safe_p4(x):           return np.exp(-np.asarray(x, float)**4)
 
@@ -864,7 +867,7 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     'sign': safe_sign, 'exp': safe_exp, 'tanh': safe_tanh,
     'sigmoid': safe_sigmoid, 'relu': safe_relu, 'softsign': safe_softsign,
     'sin': lambda x: np.sin(x), 'cos': lambda x: np.cos(x),
-    'gauss': safe_gauss, 'p4': safe_p4, 'square_sigmoid': safe_square_sigmoid,
+    'gauss': safe_gauss, 'p4': safe_p4, 'neg': safe_neg, 'square_sigmoid': safe_square_sigmoid,
     'signed_power': signed_power,
     'safe_max': safe_max, 'safe_min': safe_min,
 

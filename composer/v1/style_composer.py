@@ -1,5 +1,5 @@
 """
-composer/v4/style_composer.py — 多风格组合管理器
+composer/v1/style_composer.py — 多风格组合管理器
 ============================================================
 
 定位：因子信号器 → 回测引擎 之间的组合管理层。
@@ -11,7 +11,7 @@ composer/v4/style_composer.py — 多风格组合管理器
   StyleBacktest   — 回测入口 (委托 core.Engine)
 
 用法:
-  >>> from composer.v4 import StyleManager, StyleConfig, StyleBacktest
+  >>> from composer.v1 import StyleManager, StyleConfig, StyleBacktest
   >>> 
   >>> mgr = StyleManager([
   >>>     StyleConfig(name='强势', panel=panel_strength, capital_weight=0.5, top_n=2),
