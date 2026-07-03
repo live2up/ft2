@@ -61,16 +61,16 @@ nb = Notebook(title: str = "Notebook Report")
 ### 输出
 
 ```python
-nb.export_html(name=None, template_path=None, local_assets=False)
+nb.export_html(name=None, template_path=None, local_static=False)
 # name: 输出文件名（不含 .html 扩展名），默认使用标题
 # template_path: 自定义模板路径，默认 ../template/notebook.html
-# local_assets: True=本地 file:// 资源（离线），False=CDN 资源（默认）
+# local_static: True=本地 file:// 资源（离线），False=CDN 资源（默认）
 nb.to_json()                                    # 导出 JSON 字符串
 nb.to_dict()                                    # 导出字典
 ```
 
 **输出路径规则：** HTML 文件输出到 **调用者脚本所在目录**（`base_dir`），非 notebook 模块目录。
-**本地测试：** 使用 `local_assets=True`，浏览器通过 `file://` 协议加载本地 JS/CSS。
+**本地测试：** 使用 `local_static=True`，浏览器通过 `file://` 协议加载本地 JS/CSS。
 
 ---
 

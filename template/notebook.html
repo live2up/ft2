@@ -4,12 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }}</title>
-    <link rel="stylesheet" href="{{ asset_prefix }}/js/notebook3D.css">
-    <script src="{{ asset_prefix }}/js/vue.global.prod.js"></script>
-    <script src="{{ asset_prefix }}/js/ft-table.js"></script>
-    <script src="{{ asset_prefix }}/js/echarts.min.js"></script>
-    <script src="{{ asset_prefix }}/js/marked.min.js"></script>
-    <script src="{{ asset_prefix }}/js/snapdom.min.js"></script>
+    <link rel="stylesheet" href="{{ static_prefix }}/js/notebook3D.css">
+    <script src="{{ static_prefix }}/js/vue.global.prod.js"></script>
+    <script src="{{ static_prefix }}/js/ft-table.js"></script>
+    <script src="{{ static_prefix }}/js/echarts.min.js"></script>
+    <script src="{{ static_prefix }}/js/marked.min.js"></script>
+    <script src="{{ static_prefix }}/js/snapdom.min.js"></script>
 
     <!-- AI 优先读取：Notebook 结构化数据（JSON-LD） -->
     <script id="notebook-data" type="application/ld+json">{{ data_json | safe }}</script>
@@ -55,7 +55,7 @@
     {% endraw %}
 
     <!-- Notebook Vue3 JS -->
-    <script src="{{ asset_prefix }}/js/notebook3D.js"></script>
+    <script src="{{ static_prefix }}/js/notebook3D.js"></script>
     <script>
         // 从 Jinja2 注入的数据创建配置
         const dataElement = document.getElementById('notebook-data');

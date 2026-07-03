@@ -404,7 +404,7 @@ class Notebook:
         return json.dumps(data, ensure_ascii=False, indent=2)
     
     # [新增] 2026-05-21 CDN 远程前缀常量，与本地模式对应
-    _CDN_PREFIX = 'https://cdn.jsdelivr.net/gh/livepu/ft2@master/template'
+    _CDN_PREFIX = 'https://cdn.jsdelivr.net/gh/live2up/ft2@master/template'
 
     def _resolve_base_dir(self, base_dir: str = None) -> str:
         """路径优先级: 显式传入 > 实例属性 > 当前工作目录
@@ -421,13 +421,13 @@ class Notebook:
         return os.getcwd()
 
     def export_html(self, name: str = None, template_path: str = None,
-                    local_assets: bool = False, base_dir: str = None):
+                    local_static: bool = False, base_dir: str = None):
         """
         导出为HTML文件
         
         :param name: 输出文件名（不含扩展名），默认使用标题
         :param template_path: 自定义模板路径
-        :param local_assets: 是否使用本地资源文件
+        :param local_static: 是否使用本地静态资源
             - False (默认): 使用远程 CDN 资源
             - True: 使用本地 template 目录的资源（file:// 协议），方便离线测试
         :param base_dir: 输出目录（None=自动: 实例 base_dir > 调用者目录）
@@ -446,13 +446,13 @@ class Notebook:
             template_dir = Path(template_path).parent
             template_path = str(template_path)
         
-        # [新增] 2026-05-21 根据 local_assets 计算 asset_prefix
+        # [调整] 2026-07-03 local_assets → local_static，与 static_prefix 命名一致
         # 远程模式: CDN URL 前缀
         # 本地模式: file:// + template 绝对路径，浏览器可直接读取本地文件
-        if local_assets:
-            asset_prefix = Path(template_dir).as_uri()
+        if local_static:
+            static_prefix = Path(template_dir).as_uri()
         else:
-            asset_prefix = self._CDN_PREFIX
+            static_prefix = self._CDN_PREFIX
         
         env = Environment(loader=FileSystemLoader(str(template_dir)))
         template = env.get_template(Path(template_path).name)
@@ -470,7 +470,7 @@ class Notebook:
         html_content = template.render(
             title=self.nb_title, 
             data_json=data_json,
-            asset_prefix=asset_prefix
+            static_prefix=static_prefix
         )
         
         output_path = Path(output_path)
