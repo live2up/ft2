@@ -111,6 +111,7 @@ MATH_FUNCTIONS = ['sin', 'cos', 'exp', 'log', 'sqrt', 'abs', 'tanh', 'gauss', 'p
 # [新增] 2026-07-03 TreeGenConfig — 树生成概率配置 (WFGP: Weight-Focused GP)
 #   三层级偏置: group_weights(大类) → fn_weights(子函数) → var_weights(变量)
 #   默认 = 现有等概率行为 (100% 兼容，无需改动调用方)
+# [重构] 2026-07-04 增加 mode + var_allowlist/func_allowlist，fill_value 默认改为 0
 @dataclass
 class TreeGenConfig:
     """树生成概率配置
@@ -119,29 +120,32 @@ class TreeGenConfig:
     默认 None = 等概率 (完全兼容现有行为)。
 
     用法:
+        # 权重偏置：指定方向权重更高，未指定的权重=0 (不出现)
         cfg = TreeGenConfig(
             var_weights={'AMOUNT': 3, 'VOLUME': 2},
-            ts_weights={'ts_corr': 3, 'ts_cov': 3, 'amt_ratio': 3},
+            ts_weights={'ts_corr': 3, 'ts_cov': 3},
         )
-        engine = GPEngine(..., tree_gen_config=cfg)
+        # 白名单：只允许指定变量 (其余=0，完全禁止)
+        cfg = TreeGenConfig(var_allowlist={'AMOUNT', 'VOLUME', 'SHARE'})
+        # 模式过滤：continuous 禁用 comparison/logic/ternary
+        cfg = TreeGenConfig(mode='continuous')
 
     Attributes:
+        mode: 表达式模式 'continuous'/'predicate'/'hybrid' (None=hybrid兼容)
         group_weights: 函数大类权重
-            {'ts_function': 25, 'feature_function': 13, 'math_function': 12,
-             'comparison': 13, 'logic': 11, 'binary_op': 12,
-             'unary_op': 9, 'ternary': 5}
-        ts_weights:  时序子函数权重 (key=函数名, value=权重, 默认各 1.0)
-        math_weights: 数学子函数权重 (默认各 1.0)
-        feature_weights: 特征子组权重
-            {'feature_1arg': 0.5, 'feature_3arg': 0.3, 'ratio': 0.2}
-        var_weights: 变量权重 (默认=None=等概率)
-            例: {'AMOUNT': 3, 'VOLUME': 2, 'CLOSE': 1}
+        ts_weights:  时序子函数权重 (未指定=0，完全不出现在随机生成中)
+        var_weights: 变量权重 (未指定=0)
+        var_allowlist: 变量白名单 (None=不限制, set={'AMOUNT','VOLUME'}=只允许这些)
+        func_allowlist: 函数白名单 (None=不限制)
     """
+    mode: Optional[str] = None           # continuous | predicate | hybrid
     group_weights: Optional[Dict[str, float]] = None
     ts_weights: Optional[Dict[str, float]] = None
     math_weights: Optional[Dict[str, float]] = None
     feature_weights: Optional[Dict[str, float]] = None
     var_weights: Optional[Dict[str, float]] = None
+    var_allowlist: Optional[set] = None    # [新增] 变量白名单 (None=不限制)
+    func_allowlist: Optional[set] = None   # [新增] 函数白名单
 
 DEFAULT_TREE_GEN_CONFIG = TreeGenConfig(
     group_weights={'ts_function':25, 'feature_function':13, 'math_function':12,
@@ -153,30 +157,39 @@ DEFAULT_TREE_GEN_CONFIG = TreeGenConfig(
 )
 _TREE_GEN_CONFIG: TreeGenConfig = DEFAULT_TREE_GEN_CONFIG
 
-# 权重填充 — 用户没设的 key 自动填 0.1 (不重点看，但不完全禁止)
-# var_weights 的默认 key 集 = GP_VARIABLES (6个标准变量)
-# 其他权重字段的默认 key 集 = 对应 DEFAULT_TREE_GEN_CONFIG 的 key
-_FILL_VAR_KEYS = GP_VARIABLES[:]  # ['CLOSE','OPEN','HIGH','LOW','VOLUME','AMOUNT']
+# [重构] 2026-07-04 权重填充: 用户没设的 key 填 0 (禁止)，用户设了额外 key 保留
+# 与旧版区别: fill_value 从 0.1 改为 0 — 0 权重 = 真正不出现在随机生成中
+_FILL_VAR_KEYS = GP_VARIABLES[:]
 _FILL_TS_KEYS = list(TS_FUNCTIONS.keys())
 _FILL_MATH_KEYS = MATH_FUNCTIONS[:]
 _FILL_FEATURE_KEYS = list(DEFAULT_TREE_GEN_CONFIG.feature_weights.keys())
 _FILL_GROUP_KEYS = list(DEFAULT_TREE_GEN_CONFIG.group_weights.keys())
 
 
-def _fill_weights(user_weights, default_keys, fill_value=0.1):
-    """填充权重: 用户设了的用用户值，没设的填 0.1"""
+def _fill_weights(user_weights, default_keys, fill_value=0):
+    """填充权重: 用户设了的用用户值，没设的填 fill_value (默认 0=禁止)
+    
+    [重构] 2026-07-04 fill_value 从 0.1 改为 0: 权重=0 表示完全不出现在随机生成中。
+    用户添加额外 key 时保留原值，不受 fill_value 影响。
+    """
     filled = {}
     for key in default_keys:
         if user_weights and key in user_weights:
             filled[key] = user_weights[key]
         else:
             filled[key] = fill_value
-    # 用户可能加了额外 key (如预计算变量名)
+    # 用户可能加了额外 key (如预计算变量名) — 保留原始值
     if user_weights:
         for key in user_weights:
             if key not in filled:
                 filled[key] = user_weights[key]
-    return filled
+    # [新增] 过滤掉权重为 0 的 key (完全禁止)，但保留至少一个 key 防全空
+    nonzero = {k: v for k, v in filled.items() if v > 0}
+    if not nonzero and filled:
+        # 全为 0 → 降级为等概率 (全部 1.0)
+        nonzero = {k: 1.0 for k in filled}
+    return nonzero
+
 
 DEFAULT_GP_CONFIG = {
     'population_size': 200,
@@ -341,7 +354,16 @@ def _replace_subtree(tree: ast.Expression, old_node: ast.AST, new_node: ast.AST)
 # ============================================================
 
 def _random_variable() -> ast.Name:
-    vw = _TREE_GEN_CONFIG.var_weights
+    # [重构] 2026-07-04 支持 var_allowlist (白名单) 和 var_weights (权重偏置)
+    cfg = _TREE_GEN_CONFIG
+    # allowlist 优先: 只在白名单中等概率抽
+    if cfg.var_allowlist:
+        choices = list(cfg.var_allowlist & set(GP_VARIABLES))
+        if choices:
+            return ast.Name(id=random.choice(choices), ctx=ast.Load())
+        # allowlist 与 GP_VARIABLES 无交集 → 退化到全变量
+    # 否则按权重抽
+    vw = cfg.var_weights
     if vw:
         var_names = list(vw.keys())
         var_weights = [vw[v] for v in var_names]
@@ -360,11 +382,24 @@ def _random_terminal() -> ast.AST:
 
 
 def _random_ts_call(depth: int) -> ast.Call:
-    tw = _TREE_GEN_CONFIG.ts_weights
+    # [重构] 2026-07-04 支持 func_allowlist (白名单) 和 ts_weights (权重偏置)
+    # [优化] 2026-07-04 func_allowlist 作为过滤器而非替代品: 先按权重选, 再卡白名单
+    cfg = _TREE_GEN_CONFIG
+    tw = cfg.ts_weights
     if tw:
+        # 权重组 → 选函数
         func_names = list(tw.keys())
         func_weights = [tw[fn] for fn in func_names]
+        if cfg.func_allowlist:
+            # [优化] 白名单过滤: 权重组 ∩ 白名单
+            filtered = [(n, w) for n, w in zip(func_names, func_weights) if n in cfg.func_allowlist]
+            if filtered:
+                func_names, func_weights = zip(*filtered)
+            # 交集为空 → 保留原权重组 (不降级)
         func_name = random.choices(func_names, weights=func_weights, k=1)[0]
+    elif cfg.func_allowlist:
+        available = [f for f in cfg.func_allowlist if f in TS_FUNCTIONS]
+        func_name = random.choice(available) if available else random.choice(list(TS_FUNCTIONS.keys()))
     else:
         func_name = random.choice(list(TS_FUNCTIONS.keys()))
     windows = TS_FUNCTIONS.get(func_name, [10, 20])
@@ -378,13 +413,19 @@ def _random_ts_call(depth: int) -> ast.Call:
 
 # [新增] 2026-06-23 数学原语树节点 (单参数, 无窗口)
 def _random_math_call(depth: int) -> ast.Call:
-    mw = _TREE_GEN_CONFIG.math_weights
-    if mw:
-        func_names = list(mw.keys())
-        func_weights = [mw[fn] for fn in func_names]
-        func_name = random.choices(func_names, weights=func_weights, k=1)[0]
+    # [重构] 2026-07-04 支持 func_allowlist
+    cfg = _TREE_GEN_CONFIG
+    if cfg.func_allowlist:
+        available = [f for f in cfg.func_allowlist if f in MATH_FUNCTIONS]
+        func_name = random.choice(available) if available else random.choice(MATH_FUNCTIONS)
     else:
-        func_name = random.choice(MATH_FUNCTIONS)
+        mw = cfg.math_weights
+        if mw:
+            func_names = list(mw.keys())
+            func_weights = [mw[fn] for fn in func_names]
+            func_name = random.choices(func_names, weights=func_weights, k=1)[0]
+        else:
+            func_name = random.choice(MATH_FUNCTIONS)
     arg = _grow_tree(depth - 1, prefer_variable=True)
     return ast.Call(
         func=ast.Name(id=func_name, ctx=ast.Load()),
@@ -445,6 +486,27 @@ def _random_compare(left: ast.AST) -> ast.Compare:
     return ast.Compare(left=left, ops=[op], comparators=[ast.Constant(value=threshold)])
 
 
+def _mode_filtered_groups(gw: dict, mode: str) -> dict:
+    """按 mode 过滤函数大类
+    
+    [新增] 2026-07-04
+    continuous: 禁用 comparison/logic/ternary/unary_op(Not) — 只生成连续值表达式
+    predicate:  禁用 ts_function/feature_function/math_function — 只生成布尔表达式
+    hybrid/None: 全开放
+    """
+    if not mode or mode == 'hybrid':
+        return gw
+    if mode == 'continuous':
+        # 连续值模式: 禁用所有产出布尔值的节点类型
+        invalid = {'comparison', 'logic', 'ternary'}
+    elif mode == 'predicate':
+        # 布尔模式: 禁用所有产出连续值的节点类型
+        invalid = {'ts_function', 'feature_function', 'math_function', 'binary_op', 'unary_op'}
+    else:
+        return gw
+    return {k: v for k, v in gw.items() if k not in invalid}
+
+
 def _grow_tree(depth: int, prefer_variable: bool = False) -> ast.AST:
     """生长随机表达式树
 
@@ -455,13 +517,14 @@ def _grow_tree(depth: int, prefer_variable: bool = False) -> ast.AST:
     - 支持三元: a if cond else b
     - 支持 not
 
-    大类权重来自 _TREE_GEN_CONFIG.group_weights，默认与原有硬编码一致。
+    [重构] 2026-07-04 大类权重支持 mode 过滤
     """
     if depth <= 1 or (prefer_variable and random.random() < 0.7):
         return _random_terminal()
 
-    # 从 TreeGenConfig 读函数大类权重 (默认=DEFAULT_TREE_GEN_CONFIG，永远有值)
-    gw = _TREE_GEN_CONFIG.group_weights
+    # 从 TreeGenConfig 读函数大类权重，按 mode 过滤
+    cfg = _TREE_GEN_CONFIG
+    gw = _mode_filtered_groups(cfg.group_weights, cfg.mode)
     groups = list(gw.keys())
     gweights = [gw[g] for g in groups]
     chosen = random.choices(groups, weights=gweights, k=1)[0]
@@ -491,11 +554,27 @@ def _grow_tree(depth: int, prefer_variable: bool = False) -> ast.AST:
         op = random.choice([ast.Add(), ast.Sub(), ast.Mult(), ast.Div()])
         return ast.BinOp(left=left, op=op, right=right)
     elif chosen == 'unary_op':
-        # 一元: -x, not x
+        # 一元: -x (continuous 模式), not x (predicate 模式)
+        # [重构] 2026-07-04 continuous 模式下禁用 Not (无意义: not(连续值))
+        # [修复] 2026-07-04 消除 neg(neg(x)) → x (双重否定=恒等，省2节点)
         operand = _grow_tree(depth - 1)
-        if random.random() < 0.5:
+        if cfg.mode == 'continuous':
+            if isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.USub):
+                return operand.operand  # neg(neg(x)) → x
             return ast.UnaryOp(op=ast.USub(), operand=operand)
-        return ast.UnaryOp(op=ast.Not(), operand=operand)
+        elif cfg.mode == 'predicate':
+            if isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.Not):
+                return operand.operand  # not(not(x)) → x
+            return ast.UnaryOp(op=ast.Not(), operand=operand)
+        else:
+            # hybrid: 各 50%
+            if random.random() < 0.5:
+                if isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.USub):
+                    return operand.operand
+                return ast.UnaryOp(op=ast.USub(), operand=operand)
+            if isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.Not):
+                return operand.operand
+            return ast.UnaryOp(op=ast.Not(), operand=operand)
     else:
         # 三元: a if cond else b
         cond = _grow_tree(depth - 1)
@@ -508,6 +587,65 @@ def _random_tree(max_depth: int = 6) -> ast.Expression:
     depth = random.randint(2, max_depth)
     body = _grow_tree(depth)
     tree = ast.Expression(body=body)
+    ast.fix_missing_locations(tree)
+    # [新增] 2026-07-04 随机生成后简化 AST
+    return _simplify_ast(tree)
+
+
+# [新增] 2026-07-04 AST 轻量简化: 消除 neg(neg(x))/x*1/x+0 等冗余
+def _simplify_ast(tree: ast.Expression) -> ast.Expression:
+    """后处理简化 AST，消除双重否定和恒等运算。
+    
+    在随机生成/变异/交叉后调用，节省节点数并提升可读性。
+    不改变语义，只做结构简化。
+    """
+    def _walk(node):
+        if node is None:
+            return None
+        # 递归处理子节点
+        for child in ast.iter_child_nodes(node):
+            _walk_child = _walk(child)
+            # 替换子节点
+            for field_name, field_value in ast.iter_fields(node):
+                if isinstance(field_value, list):
+                    for i, item in enumerate(field_value):
+                        if item is child and _walk_child is not None:  # noqa: E711
+                            field_value[i] = _walk_child
+                elif field_value is child and _walk_child is not None:  # noqa: E711
+                    setattr(node, field_name, _walk_child)
+        
+        # neg(neg(x)) → x
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            if isinstance(node.operand, ast.UnaryOp) and isinstance(node.operand.op, ast.USub):
+                return node.operand.operand
+        # not(not(x)) → x
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            if isinstance(node.operand, ast.UnaryOp) and isinstance(node.operand.op, ast.Not):
+                return node.operand.operand
+        # x * 1 → x, 1 * x → x
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            if isinstance(node.right, ast.Constant) and node.right.value == 1:
+                return node.left
+            if isinstance(node.left, ast.Constant) and node.left.value == 1:
+                return node.right
+        # x + 0 → x, 0 + x → x
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            if isinstance(node.right, ast.Constant) and node.right.value == 0:
+                return node.left
+            if isinstance(node.left, ast.Constant) and node.left.value == 0:
+                return node.right
+        # x - 0 → x
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub):
+            if isinstance(node.right, ast.Constant) and node.right.value == 0:
+                return node.left
+        # x / 1 → x
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            if isinstance(node.right, ast.Constant) and node.right.value == 1:
+                return node.left
+        return node
+    
+    tree = copy.deepcopy(tree)
+    tree.body = _walk(tree.body)
     ast.fix_missing_locations(tree)
     return tree
 
@@ -526,7 +664,8 @@ def _mutate_subtree(tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
     replacement = _grow_tree(random.randint(1, max_depth))
     _replace_subtree(new_tree, target, replacement)
     ast.fix_missing_locations(new_tree)
-    return new_tree
+    # [新增] 2026-07-04 变异后简化 AST
+    return _simplify_ast(new_tree)
 
 
 def _mutate_constant(tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
@@ -695,27 +834,9 @@ class GPEngine:
         # 种子
         self.seed_expressions = seed_expressions or []
 
-        # [新增] 2026-07-03 树生成概率配置 (用户没设的 key 自动填 0.1)
-        if tree_gen_config:
-            filled = {}
-            for field in dataclass_fields(TreeGenConfig):
-                user_val = getattr(tree_gen_config, field.name)
-                default_val = getattr(DEFAULT_TREE_GEN_CONFIG, field.name)
-                if user_val is None:
-                    # 用户没设 → 用默认 (group/ts/math/feature 有默认值, var 为 None)
-                    filled[field.name] = default_val
-                else:
-                    key_set = {
-                        'group_weights': _FILL_GROUP_KEYS,
-                        'ts_weights': _FILL_TS_KEYS,
-                        'math_weights': _FILL_MATH_KEYS,
-                        'feature_weights': _FILL_FEATURE_KEYS,
-                        'var_weights': _FILL_VAR_KEYS,
-                    }.get(field.name, [])
-                    filled[field.name] = _fill_weights(user_val, key_set)
-            self.tree_gen_config = TreeGenConfig(**filled)
-        else:
-            self.tree_gen_config = None
+        # [重构] 2026-07-04 树生成概率配置构建
+        # 用户设了的 key 保留，没设的填默认值；权重 fill_value=0 (禁止)
+        self.tree_gen_config = self._build_tree_config(tree_gen_config)
 
         # 数据形状
         self._shape = None
@@ -734,6 +855,34 @@ class GPEngine:
         if random_seed is not None:
             random.seed(random_seed)
             np.random.seed(random_seed)
+
+    # [重构] 2026-07-04 树配置构建逻辑从 __init__ 抽离
+    def _build_tree_config(self, user_config: TreeGenConfig = None) -> TreeGenConfig:
+        """构建最终的 TreeGenConfig: 用户配置 + 默认填充 + mode/allowlist 透传"""
+        if user_config is None:
+            return DEFAULT_TREE_GEN_CONFIG
+        filled = {}
+        for field in dataclass_fields(TreeGenConfig):
+            user_val = getattr(user_config, field.name)
+            default_val = getattr(DEFAULT_TREE_GEN_CONFIG, field.name)
+            if user_val is None:
+                # 用户没设 → 用默认
+                # mode/var_allowlist/func_allowlist 的默认值是 None (不做额外处理)
+                filled[field.name] = default_val
+            elif field.name in ('mode', 'var_allowlist', 'func_allowlist'):
+                # [新增] 透传模式和白名单 (不做 fill)
+                filled[field.name] = user_val
+            else:
+                # 权重字段 → 自动填充
+                key_set = {
+                    'group_weights': _FILL_GROUP_KEYS,
+                    'ts_weights': _FILL_TS_KEYS,
+                    'math_weights': _FILL_MATH_KEYS,
+                    'feature_weights': _FILL_FEATURE_KEYS,
+                    'var_weights': _FILL_VAR_KEYS,
+                }.get(field.name, [])
+                filled[field.name] = _fill_weights(user_val, key_set)
+        return TreeGenConfig(**filled)
 
     # ── 适应度评估 ──
 
@@ -893,11 +1042,12 @@ class GPEngine:
         return new_pop[:self.population_size]
 
     def run(self, verbose: bool = True) -> 'GPEngine':
-        """运行 GP 搜索"""
-        global _TREE_GEN_CONFIG
-        _old_config = _TREE_GEN_CONFIG
-        _TREE_GEN_CONFIG = self.tree_gen_config or DEFAULT_TREE_GEN_CONFIG
-        try:
+        """运行 GP 搜索
+        
+        [重构] 2026-07-04 用 _activate_config() 上下文管理器替替代手动 global 操作，
+        确保配置正确激活/恢复，避免嵌套 run() 或多实例场景下的污染。
+        """
+        with self._activate_config():
             self._initialize_population()
             for gen in range(self.generations):
                 self._evaluate_population()
@@ -923,9 +1073,29 @@ class GPEngine:
 
                 if gen < self.generations - 1:
                     self.population = self._next_generation(gen)
-        finally:
-            _TREE_GEN_CONFIG = _old_config
         return self
+
+    def _activate_config(self):
+        """上下文管理器: 激活当前实例的 tree_gen_config 到模块全局
+        
+        [重构] 2026-07-04 封装 global 操作为 context manager
+        """
+        class _ConfigContext:
+            def __enter__(self2):
+                global _TREE_GEN_CONFIG
+                self2._saved = _TREE_GEN_CONFIG
+                new_config = self.tree_gen_config
+                if new_config is None:
+                    new_config = DEFAULT_TREE_GEN_CONFIG
+                _TREE_GEN_CONFIG = new_config
+                return self
+            
+            def __exit__(self2, *args):
+                global _TREE_GEN_CONFIG
+                _TREE_GEN_CONFIG = self2._saved
+                return False
+        
+        return _ConfigContext()
 
     def best(self) -> Optional[Individual]:
         return self.best_individual
