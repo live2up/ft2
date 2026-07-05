@@ -390,12 +390,22 @@ def _random_tree(max_depth: int = 6) -> ast.Expression:
 def _random_tree_explore(max_depth: int = 6) -> ast.Expression:
     """ε-greedy 探索通道: 无视用户权重，用默认全空间生成树
     
-    [新增] 2026-07-05 P0: 临时切换到 DEFAULT_TREE_GEN_CONFIG 生成。
-    15% 的个体来自此路径 → 侦察兵在自由空间乱窜，发现全新方向。
-    """
+    [新增] 2026-07-05 P0: 用等概率权重但继承用户的 mode。
+    保持权重全部开放，但保留类型安全（continuous不含if）。"""
     global _TREE_GEN_CONFIG
     saved = _TREE_GEN_CONFIG
-    _TREE_GEN_CONFIG = DEFAULT_TREE_GEN_CONFIG
+    user_mode = saved.mode if saved else None
+    if user_mode:
+        # 继承用户 mode + DEFAULT 的权重配置
+        _TREE_GEN_CONFIG = TreeGenConfig(
+            mode=user_mode,
+            group_weights=DEFAULT_TREE_GEN_CONFIG.group_weights,
+            ts_weights=DEFAULT_TREE_GEN_CONFIG.ts_weights,
+            math_weights=DEFAULT_TREE_GEN_CONFIG.math_weights,
+            feature_weights=DEFAULT_TREE_GEN_CONFIG.feature_weights,
+        )
+    else:
+        _TREE_GEN_CONFIG = DEFAULT_TREE_GEN_CONFIG
     try:
         depth = random.randint(2, max_depth)
         body = _grow_tree(depth)
@@ -436,6 +446,10 @@ def _simplify_ast(tree: ast.Expression) -> ast.Expression:
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             if isinstance(node.operand, ast.UnaryOp) and isinstance(node.operand.op, ast.Not):
                 return node.operand.operand
+        # cos(neg(x)) → cos(x) (cos 是偶函数)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'cos':
+            if node.args and isinstance(node.args[0], ast.UnaryOp) and isinstance(node.args[0].op, ast.USub):
+                node.args[0] = node.args[0].operand
         # x * 1 → x, 1 * x → x
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
             if isinstance(node.right, ast.Constant) and node.right.value == 1:
@@ -456,12 +470,91 @@ def _simplify_ast(tree: ast.Expression) -> ast.Expression:
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
             if isinstance(node.right, ast.Constant) and node.right.value == 1:
                 return node.left
+        # x - x → 0 (自减恒为0)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub):
+            try:
+                if ast.unparse(node.left) == ast.unparse(node.right):
+                    return ast.Constant(value=0.0)
+            except Exception:
+                pass
+        # x / x → 1 (自除恒为1)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            try:
+                if ast.unparse(node.left) == ast.unparse(node.right):
+                    return ast.Constant(value=1.0)
+            except Exception:
+                pass
         return node
     
     tree = copy.deepcopy(tree)
     tree.body = _walk(tree.body)
     ast.fix_missing_locations(tree)
     return tree
+
+
+# [新增] 2026-07-05 AST 规范化：用于缓存 key 语义去重
+# 仅做不改变数值语义的安全变换：交换律排序、纯常数折叠
+# 注意：规范化后的表达式仅用于缓存匹配，报告展示仍用原始 expression_str
+_CANONICALIZE_MEMO: Dict[int, ast.Expression] = {}
+
+def _canonicalize_ast(tree: ast.Expression) -> ast.Expression:
+    """AST 规范化，用于同义不同形表达式的缓存去重。
+
+    安全规则：
+      - Add/Mult 交换律排序（按子树字符串字典序）
+      - 纯常数折叠（1+2→3 等）
+      - 不处理非交换函数参数（如 ts_corr(a,b) ≠ ts_corr(b,a)）
+
+    返回的表达式不一定最可读，只作为缓存 key。
+    """
+    tree_id = id(tree.body)
+    if tree_id in _CANONICALIZE_MEMO:
+        return _CANONICALIZE_MEMO[tree_id]
+
+    def _canonicalize(node):
+        # 自底向上递归处理子节点
+        for field_name, field_value in ast.iter_fields(node):
+            if isinstance(field_value, list):
+                new_list = []
+                for item in field_value:
+                    if isinstance(item, ast.AST):
+                        new_list.append(_canonicalize(item))
+                    else:
+                        new_list.append(item)
+                setattr(node, field_name, new_list)
+            elif isinstance(field_value, ast.AST):
+                setattr(node, field_name, _canonicalize(field_value))
+
+        # 纯常数折叠
+        if isinstance(node, ast.BinOp):
+            if isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant):
+                try:
+                    l, r = node.left.value, node.right.value
+                    if isinstance(node.op, ast.Add):
+                        return ast.Constant(value=l + r)
+                    elif isinstance(node.op, ast.Sub):
+                        return ast.Constant(value=l - r)
+                    elif isinstance(node.op, ast.Mult):
+                        return ast.Constant(value=l * r)
+                    elif isinstance(node.op, ast.Div) and r != 0:
+                        return ast.Constant(value=l / r)
+                except Exception:
+                    pass
+
+            # 交换律排序：Add/Mult 按子树字符串排序
+            if isinstance(node.op, (ast.Add, ast.Mult)):
+                left_str = ast.unparse(node.left)
+                right_str = ast.unparse(node.right)
+                if right_str < left_str:
+                    node.left, node.right = node.right, node.left
+
+        return node
+
+    new_tree = copy.deepcopy(tree)
+    new_tree.body = _canonicalize(new_tree.body)
+    ast.fix_missing_locations(new_tree)
+    _CANONICALIZE_MEMO[tree_id] = new_tree
+    return new_tree
 
 
 # ============================================================
@@ -483,7 +576,7 @@ def _mutate_subtree(tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
 
 
 def _mutate_constant(tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
-    """常数微调变异"""
+    """常数微调变异 — 小常量(<0.1)仅做离散跳变，防过拟合精度"""
     new_tree = copy.deepcopy(tree)
     constants = [n for n in ast.walk(new_tree.body)
                  if isinstance(n, ast.Constant) and isinstance(n.value, (int, float))]
@@ -494,9 +587,12 @@ def _mutate_constant(tree: ast.Expression, max_depth: int = 4) -> ast.Expression
     if isinstance(v, int):
         delta = random.choice([-5, -2, -1, 1, 2, 5])
         target.value = max(1, v + delta)
+    elif abs(v) < 0.1:
+        # ε常量/除法稳定项 → 离散跳变到标准值，不加噪声
+        target.value = random.choice([0.001, 0.01, 0.02, 0.05])
     else:
         noise = random.gauss(0, abs(v) * 0.1 + 0.01)
-        target.value = v + noise
+        target.value = round(v + noise, 2)  # 四舍五入到2位
     return new_tree
 
 
@@ -783,16 +879,51 @@ class GPEngine:
 
     # ── 适应度评估 ──
 
+    def _quick_filter(self, ind: Individual) -> bool:
+        """[新增] 预筛: 快速拒绝明显无效的表达式，省去昂贵回测
+        
+        Reject:
+          - window=1 时序函数 (纯噪声)
+          - 裸变量无函数 (在截面中无数学变换=无区分力)
+          - 纯常数
+          - 自指运算: x-x=0, x/x=1 (被_simplify_ast消除，但防变异逃逸)
+        """
+        expr = ind.expression_str or _expr_str(ind.tree)
+        import re
+        # window=1: ts_roc(x, 1) / ts_delta(x, 1) etc.
+        if re.search(r'ts_\w+\([^,]+, 1\)', expr):
+            return False
+        # 纯常数: 0.05, 1.0/R, etc.
+        vars_found = set(re.findall(r'\b[A-Z][A-Z_0-9]+\b', expr))
+        if not vars_found:
+            return False
+        # 裸变量(无函数): CLOSE, HIGH → 无数学变换，截面区分力弱
+        funcs_found = set(re.findall(r'([a-z_]+)\(', expr))
+        if not funcs_found and len(vars_found) <= 2:
+            return False
+        # ts 函数输入常数: ts_roc(0.5, 20) → 无时序变化，纯浪费
+        if re.search(r'ts_\w+\(-?\d+\.?\d*,', expr):
+            return False
+        return True
+
     def _evaluate_individual(self, ind: Individual) -> float:
         # [新增] 2026-07-04 表达式缓存: 命中直接返回 (含 metadata)
-        key = ind.expression_str or _expr_str(ind.tree)
-        if key and key in self._fitness_cache:
+        # [新增] 2026-07-05 用规范化 AST 生成缓存 key，实现语义去重
+        #        保留原始 expression_str 用于报告展示
+        if not ind.expression_str:
+            ind.expression_str = _expr_str(ind.tree)
+        key = _expr_str(_canonicalize_ast(ind.tree))
+
+        if key in self._fitness_cache:
             cached_fit, cached_depth, cached_nodes = self._fitness_cache[key]
             ind.fitness = cached_fit
             ind.depth = cached_depth
             ind.node_count = cached_nodes
-            ind.expression_str = key
             return cached_fit
+
+        # [新增] 预筛: 跳过明显无效的表达式
+        if not self._quick_filter(ind):
+            return -999.0
 
         try:
             if self._evaluator:
@@ -813,7 +944,6 @@ class GPEngine:
         if fitness < -998.0:
             return -999.0
 
-        ind.expression_str = key
         ind.depth = ast_depth(ind.tree)
         ind.node_count = ast_node_count(ind.tree)
         penalty = self.parsimony_penalty * ind.node_count
@@ -1007,7 +1137,7 @@ class GPEngine:
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        # 预计算 expression_str
+        # 预计算 expression_str（原始可读）和规范化缓存 key
         for ind in individuals:
             if not ind.expression_str:
                 ind.expression_str = _expr_str(ind.tree)
@@ -1017,9 +1147,9 @@ class GPEngine:
 
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
             for ind in individuals:
-                # 先查缓存
-                key = ind.expression_str
-                if key and key in self._fitness_cache:
+                # 先查缓存（用规范化 AST 生成 key，实现语义去重）
+                key = _expr_str(_canonicalize_ast(ind.tree))
+                if key in self._fitness_cache:
                     ind.fitness, ind.depth, ind.node_count = self._fitness_cache[key]
                     continue
                 futures_map[executor.submit(
