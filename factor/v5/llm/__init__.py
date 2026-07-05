@@ -1,5 +1,5 @@
 """
-factor/v4/llm — LLM 辅助因子发现内核
+factor/v5/llm — LLM 辅助因子发现内核
 
 设计原则:
   - LLM = 表达式编译器（自然语言→AST），不是研究主管
@@ -12,7 +12,7 @@ factor/v4/llm — LLM 辅助因子发现内核
   eval_utils.py — 快速评估 (IC/IR/回测)
 
 快速使用:
-  >>> from factor.v4.llm import LLMGenerator, quick_ic_batch
+  >>> from factor.v5.llm import LLMGenerator, quick_ic_batch
   >>> gen = LLMGenerator(provider="deepseek")
   >>> exprs = gen.generate("量价背离反转", n=10)
   >>> results = quick_ic_batch(exprs, panel_data, returns)

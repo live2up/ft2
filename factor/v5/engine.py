@@ -1,6 +1,6 @@
 # [重构] 2026-06-12 从 backtest.py 重命名，对齐 signals/v4/engine.py
 """
-factor/v4/engine.py — 因子轮动回测引擎 (ft2.core 驱动)
+factor/v5/engine.py — 因子轮动回测引擎 (ft2.core 驱动)
 
 对齐 signals/v4 FacEngine 架构:
   full   — Engine.run() + AccountManager.order_percent() → AccountAnalyzer (完整指标/交易记录/notebook)
@@ -8,7 +8,7 @@ factor/v4/engine.py — 因子轮动回测引擎 (ft2.core 驱动)
   vector — 纯矩阵向量化, 跳过事件驱动循环 → AccountAnalyzer (~50~100x 快于 full)
 
 用法:
-  from factor.v4 import FacEngine
+  from factor.v5 import FacEngine
 
   # 三种模式统一返回 AccountAnalyzer，调用接口一致
   analyzer = FacEngine.backtest(panel, assets, mode='vector', top_n=3, rebalance='W')

@@ -13,7 +13,7 @@ factor/v4/translate_v3.py — v3 前缀表达式 → v4 Python DSL 翻译器
   - sma(x,w,k) 保持不变（需在 v4 registry 注册）
 
 用法:
-    >>> from factor.v4.translate_v3 import translate_expr, translate_dict
+    >>> from factor.v5.translate_v3 import translate_expr, translate_dict
     >>> v4_expr = translate_expr('sub(cs_rank(delay(close, 5)), 0.5)')
     >>> # → '(cs_rank(ts_delay(CLOSE, 5)) - 0.5)'
     >>>

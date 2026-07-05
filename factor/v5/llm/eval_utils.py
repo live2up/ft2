@@ -12,8 +12,8 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
 from signals.v4 import Expression
-from factor.v4.expression import FactorExpression
-from factor.v4.validator import FactorValidator
+from factor.v5.expression import FactorExpression
+from factor.v5.validator import FactorValidator
 
 
 @dataclass
@@ -142,7 +142,7 @@ def quick_sharpe(expression: str,
     Returns:
         年化 Sharpe
     """
-    from factor.v4.engine import FacEngine
+    from factor.v5.engine import FacEngine
 
     ranked = quick_rank_panel(expression, assets)
     analyzer = FacEngine.backtest(ranked, assets, top_n=top_n, rebalance=rebalance)

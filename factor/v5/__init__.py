@@ -1,5 +1,5 @@
 """
-factor/v4 — 因子发现引擎 (基于 signals.v4 AST DSL + ft2.core Engine)
+factor/v5 — 因子发现引擎 (基于 signals.v4 AST DSL + ft2.core Engine + 权重聚焦GP)
 
 与 v3 的区别：
   - 自研 Parser + 原语 → signals.v4 Expression + registry (共用)
@@ -20,7 +20,7 @@ factor/v4 — 因子发现引擎 (基于 signals.v4 AST DSL + ft2.core Engine)
   formulas/        — 公式库 (WQ101/GT191，语法适配 V4)
 
 Quick Start:
-  >>> from factor.v4 import FactorExpression, FacEngine, FactorLibrary, GPEngine
+  >>> from factor.v5 import FactorExpression, FacEngine, FactorLibrary, GPEngine
   >>> expr = FactorExpression("cs_rank(ts_roc(CLOSE, 20))")
   >>> panel = expr.evaluate_ranked(data_dict)   # ndarray(T,N) 截面排名
   >>> result = FacEngine.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')

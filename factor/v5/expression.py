@@ -1,6 +1,6 @@
 # [重构] 2026-06-22 继承 utils.ast.AstExpression 公共基类
 """
-factor/v4/expression.py — 因子表达式引擎 (继承 AstExpression)
+factor/v5/expression.py — 因子表达式引擎 (继承 AstExpression)
 =============================================================================
 
 FactorExpression 是 AstExpression 的因子子类，在基类的解析+自省能力之上，
@@ -19,7 +19,7 @@ FactorExpression 是 AstExpression 的因子子类，在基类的解析+自省�
           Expression 输入 pd.DataFrame, 输出 pd.Series
 
 用法:
-  >>> from factor.v4 import FactorExpression
+  >>> from factor.v5 import FactorExpression
   >>> expr = FactorExpression("cs_rank(ts_roc(CLOSE, 20))")
   >>> panel = expr.evaluate(data_dict)    # ndarray(T,N)
   >>> ranked = expr.evaluate_ranked(data_dict)  # 截面排名 0~1

@@ -1,5 +1,5 @@
 """
-factor/v4/gp_engine.py — 因子组合优化 GP 引擎 (Python AST 原生)
+factor/v5/gp_engine.py — 因子组合优化 GP 引擎 (Python AST 原生)
 =============================================================================
 
 定位：配合智能体做精细因子组合搜索，而非大规模符号回归。
@@ -15,7 +15,7 @@ factor/v4/gp_engine.py — 因子组合优化 GP 引擎 (Python AST 原生)
   - v4: Python ast 模块, 原生支持 x+y / x>y / x and y / a if c else b
 
 用法：
-  >>> from factor.v4.gp_engine import GPEngine
+  >>> from factor.v5.gp_engine import GPEngine
   >>> engine = GPEngine(
   ...     data=data_dict,
   ...     fitness_calculator=fitness_calc,
@@ -37,7 +37,7 @@ import copy
 import random
 import logging
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from dataclasses import dataclass, fields as dataclass_fields
 
 from utils.ast.dsl import parse_expression, ast_depth, ast_node_count
@@ -414,18 +414,22 @@ def _random_ts_call(depth: int) -> ast.Call:
 # [新增] 2026-06-23 数学原语树节点 (单参数, 无窗口)
 def _random_math_call(depth: int) -> ast.Call:
     # [重构] 2026-07-04 支持 func_allowlist
+    # [优化] 2026-07-04 func_allowlist 作为过滤器而非替代品
     cfg = _TREE_GEN_CONFIG
-    if cfg.func_allowlist:
+    mw = cfg.math_weights
+    if mw:
+        func_names = list(mw.keys())
+        func_weights = [mw[fn] for fn in func_names]
+        if cfg.func_allowlist:
+            filtered = [(n, w) for n, w in zip(func_names, func_weights) if n in cfg.func_allowlist]
+            if filtered:
+                func_names, func_weights = zip(*filtered)
+        func_name = random.choices(func_names, weights=func_weights, k=1)[0]
+    elif cfg.func_allowlist:
         available = [f for f in cfg.func_allowlist if f in MATH_FUNCTIONS]
         func_name = random.choice(available) if available else random.choice(MATH_FUNCTIONS)
     else:
-        mw = cfg.math_weights
-        if mw:
-            func_names = list(mw.keys())
-            func_weights = [mw[fn] for fn in func_names]
-            func_name = random.choices(func_names, weights=func_weights, k=1)[0]
-        else:
-            func_name = random.choice(MATH_FUNCTIONS)
+        func_name = random.choice(MATH_FUNCTIONS)
     arg = _grow_tree(depth - 1, prefer_variable=True)
     return ast.Call(
         func=ast.Name(id=func_name, ctx=ast.Load()),
@@ -852,6 +856,13 @@ class GPEngine:
         self.best_individual: Optional[Individual] = None
         self.history: List[Dict] = []
 
+        # [新增] 2026-07-04 表达式缓存 + 多进程
+        self._fitness_cache: Dict[str, tuple] = {}  # expr_str → (fitness, depth, nodes)
+        self._parallel_workers: int = config.get('parallel_workers', 0) if config else 0
+
+        # [新增] 2026-07-05 方向演化追踪 — 按语义签名分组，观察探索路径
+        self.direction_log: Dict[str, List[float]] = {}  # signature → [fitness_per_gen]
+
         if random_seed is not None:
             random.seed(random_seed)
             np.random.seed(random_seed)
@@ -887,6 +898,16 @@ class GPEngine:
     # ── 适应度评估 ──
 
     def _evaluate_individual(self, ind: Individual) -> float:
+        # [新增] 2026-07-04 表达式缓存: 命中直接返回 (含 metadata)
+        key = ind.expression_str or _expr_str(ind.tree)
+        if key and key in self._fitness_cache:
+            cached_fit, cached_depth, cached_nodes = self._fitness_cache[key]
+            ind.fitness = cached_fit
+            ind.depth = cached_depth
+            ind.node_count = cached_nodes
+            ind.expression_str = key
+            return cached_fit
+
         try:
             expr = _ExpressionFromAST(ind.tree)
             factor_values = expr.evaluate(self.data)
@@ -898,23 +919,110 @@ class GPEngine:
         if not np.isfinite(factor_values).all():
             return -999.0
         if np.allclose(factor_values, factor_values.flat[0], atol=1e-10):
-            return -999.0  # 常数因子无区分度
+            return -999.0
 
         fitness = self.fitness_calc.compute(factor_values)
         if fitness < -998.0:
             return -999.0
 
-        ind.expression_str = _expr_str(ind.tree)
+        ind.expression_str = key
         ind.depth = ast_depth(ind.tree)
         ind.node_count = ast_node_count(ind.tree)
         penalty = self.parsimony_penalty * ind.node_count
         ind.fitness = fitness * (1.0 - penalty)
+
+        # [新增] 存缓存 (含 metadata: depth + node_count)
+        self._fitness_cache[key] = (ind.fitness, ind.depth, ind.node_count)
         return ind.fitness
 
+    @staticmethod
+    def _expr_signature(expr_str: str) -> str:
+        """从表达式提取语义签名，用于方向追踪
+        
+        [新增] 2026-07-05
+        签名格式: "m:math_funcs|t:ts_funcs|v:vars"
+        例: "m:gauss|t:roc|v:REL_AMOUNT" — gauss 变换成交量变化率
+        
+        同签名表达式 = 同一探索方向，不同签名 = 不同方向
+        """
+        if not expr_str:
+            return "unknown"
+        # 提取函数名
+        import re
+        funcs = set(re.findall(r'([a-z_]+)\(', expr_str))
+        math_sig = '+'.join(sorted(f for f in funcs if f in MATH_FUNCTIONS)) or 'none'
+        ts_sig = '+'.join(sorted(f for f in funcs if f in TS_FUNCTIONS or f in TS_FUNCTIONS_2ARG)) or 'none'
+        # 提取变量（大写标识符）
+        vars_sig = '+'.join(sorted(set(re.findall(r'\b([A-Z][A-Z_0-9]+)\b', expr_str)))[:4]) or 'none'
+        return f"m:{math_sig}|t:{ts_sig}|v:{vars_sig}"
+
+    def direction_report(self, min_fitness: float = 0.3) -> str:
+        """方向探索报告 — 按语义签名分组，展示各方向的最佳和进展
+        
+        [新增] 2026-07-05
+        """
+        if not self.direction_log:
+            return "无方向记录"
+        lines = ["", "=" * 50, "方向探索报告 (按语义签名分组)", "=" * 50]
+        # 按签名聚合: 最佳 fitness + 首次发现代
+        sig_best = {}
+        for sig, fits in self.direction_log.items():
+            if fits and max(fits) >= min_fitness:
+                sig_best[sig] = {'best': max(fits), 'n': len(fits), 'latest': fits[-1]}
+        
+        for sig, info in sorted(sig_best.items(), key=lambda x: -x[1]['best']):
+            flag = "★" if info['best'] >= 0.8 else " " if info['best'] >= 0.5 else "·"
+            lines.append(
+                f"  {flag} best={info['best']:.3f}  n={info['n']:3d}  latest={info['latest']:.3f}  {sig}"
+            )
+        lines.append("=" * 50)
+        return '\n'.join(lines)
+
     def _evaluate_population(self):
-        for ind in self.population:
-            if ind.fitness == -999.0:
+        # [重构] 2026-07-04 多进程并行求值 + 缓存
+        unevaluated = [ind for ind in self.population if ind.fitness == -999.0]
+        if not unevaluated:
+            return
+
+        if self._parallel_workers > 1 and len(unevaluated) >= 10:
+            self._evaluate_parallel(unevaluated)
+        else:
+            for ind in unevaluated:
                 self._evaluate_individual(ind)
+
+    def _evaluate_parallel(self, individuals: List[Individual]):
+        """多线程并行求值 — ThreadPoolExecutor 避免 pickle 序列化问题
+        
+        [重构] 2026-07-04 从 multiprocessing 改为 ThreadPoolExecutor:
+        子进程需要 pickle fitness_calc，对 __main__ 定义的类不可行。
+        线程共享内存，numpy 操作释放 GIL，实测加速比接近进程方案。
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # 预计算 expression_str
+        for ind in individuals:
+            if not ind.expression_str:
+                ind.expression_str = _expr_str(ind.tree)
+
+        n_workers = min(self._parallel_workers, len(individuals))
+        futures_map = {}
+
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            for ind in individuals:
+                # 先查缓存
+                key = ind.expression_str
+                if key and key in self._fitness_cache:
+                    ind.fitness, ind.depth, ind.node_count = self._fitness_cache[key]
+                    continue
+                futures_map[executor.submit(
+                    self._evaluate_individual, ind
+                )] = ind
+
+            for future in as_completed(futures_map):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.debug(f"[GP] 并行求值异常: {e}")
 
     # ── 选择 ──
 
@@ -955,7 +1063,8 @@ class GPEngine:
 
             _replace_subtree(child_tree, n1, copy.deepcopy(n2))
             ast.fix_missing_locations(child_tree)
-            return Individual(tree=child_tree, generation=p1.generation + 1)
+            # [新增] 2026-07-04 交叉后简化 AST
+            return Individual(tree=_simplify_ast(child_tree), generation=p1.generation + 1)
 
         # 所有尝试都失败，返回父代副本
         return Individual(tree=child_tree, generation=p1.generation + 1)
@@ -1063,6 +1172,14 @@ class GPEngine:
                     'valid_count': len(valid),
                 }
                 self.history.append(gen_stats)
+
+                # [新增] 2026-07-05 方向追踪: 记录当前种群中各语义方向的最优 fitness
+                for ind in valid:
+                    if ind.fitness > -999:
+                        sig = self._expr_signature(ind.expression_str or _expr_str(ind.tree))
+                        if sig not in self.direction_log:
+                            self.direction_log[sig] = []
+                        self.direction_log[sig].append(ind.fitness)
 
                 if verbose and gen % 5 == 0:
                     logger.info(f"Gen {gen:3d} | best_f={gen_best.fitness:.3f} "
