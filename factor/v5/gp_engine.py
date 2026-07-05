@@ -146,6 +146,10 @@ class TreeGenConfig:
     var_weights: Optional[Dict[str, float]] = None
     var_allowlist: Optional[set] = None    # [新增] 变量白名单 (None=不限制)
     func_allowlist: Optional[set] = None   # [新增] 函数白名单
+    # [新增] 2026-07-05 闭环方向自适应 (P0 EMA 权重更新)
+    adaptive: bool = False                 # 启用: 根据方向报告自动提权好方向
+    adaptive_lr: float = 0.3               # EMA 学习率 (0~1, 越大越激进)
+    adaptive_every: int = 3                # 每 N 代更新一次权重
 
 DEFAULT_TREE_GEN_CONFIG = TreeGenConfig(
     group_weights={'ts_function':25, 'feature_function':13, 'math_function':12,
@@ -596,6 +600,25 @@ def _random_tree(max_depth: int = 6) -> ast.Expression:
     return _simplify_ast(tree)
 
 
+def _random_tree_explore(max_depth: int = 6) -> ast.Expression:
+    """ε-greedy 探索通道: 无视用户权重，用默认全空间生成树
+    
+    [新增] 2026-07-05 P0: 临时切换到 DEFAULT_TREE_GEN_CONFIG 生成。
+    15% 的个体来自此路径 → 侦察兵在自由空间乱窜，发现全新方向。
+    """
+    global _TREE_GEN_CONFIG
+    saved = _TREE_GEN_CONFIG
+    _TREE_GEN_CONFIG = DEFAULT_TREE_GEN_CONFIG
+    try:
+        depth = random.randint(2, max_depth)
+        body = _grow_tree(depth)
+        tree = ast.Expression(body=body)
+        ast.fix_missing_locations(tree)
+        return _simplify_ast(tree)
+    finally:
+        _TREE_GEN_CONFIG = saved
+
+
 # [新增] 2026-07-04 AST 轻量简化: 消除 neg(neg(x))/x*1/x+0 等冗余
 def _simplify_ast(tree: ast.Expression) -> ast.Expression:
     """后处理简化 AST，消除双重否定和恒等运算。
@@ -862,6 +885,18 @@ class GPEngine:
 
         # [新增] 2026-07-05 方向演化追踪 — 按语义签名分组，观察探索路径
         self.direction_log: Dict[str, List[float]] = {}  # signature → [fitness_per_gen]
+        self._direction_best_expr: Dict[str, tuple] = {}  # signature → (best_fitness, expr_str)
+        self._direction_snapshot: int = 0  # 上次更新后的 direction_log 总记录数
+
+        # [新增] 2026-07-05 P0 停滞检测 (AW-MEP 风格)
+        self._stagnation_counter: int = 0
+        self._last_best_fitness: float = -999.0
+        self._save_crossover_prob: float = self.crossover_prob
+        self._save_mutation_prob: float = self.mutation_prob
+        self._stagnation_threshold: int = 3  # 连续N代无改善触发
+
+        # [新增] 2026-07-05 P0 ε-greedy 探索通道
+        self._explore_ratio: float = config.get('explore_ratio', 0.15) if config else 0.15
 
         if random_seed is not None:
             random.seed(random_seed)
@@ -880,8 +915,9 @@ class GPEngine:
                 # 用户没设 → 用默认
                 # mode/var_allowlist/func_allowlist 的默认值是 None (不做额外处理)
                 filled[field.name] = default_val
-            elif field.name in ('mode', 'var_allowlist', 'func_allowlist'):
-                # [新增] 透传模式和白名单 (不做 fill)
+            elif field.name in ('mode', 'var_allowlist', 'func_allowlist',
+                                 'adaptive', 'adaptive_lr', 'adaptive_every'):
+                # [新增] 透传模式和自适应参数 (不做 fill)
                 filled[field.name] = user_val
             else:
                 # 权重字段 → 自动填充
@@ -957,14 +993,14 @@ class GPEngine:
         return f"m:{math_sig}|t:{ts_sig}|v:{vars_sig}"
 
     def direction_report(self, min_fitness: float = 0.3) -> str:
-        """方向探索报告 — 按语义签名分组，展示各方向的最佳和进展
+        """方向探索报告 — 按语义签名分组，展示各方向的最佳表达式
         
         [新增] 2026-07-05
+        [增强] 2026-07-05 每方向附加最佳表达式，可直接评估
         """
         if not self.direction_log:
             return "无方向记录"
-        lines = ["", "=" * 50, "方向探索报告 (按语义签名分组)", "=" * 50]
-        # 按签名聚合: 最佳 fitness + 首次发现代
+        lines = ["", "=" * 50, "方向探索报告 (★=SR≥0.8  =0.5+ ·=0.3+)", "=" * 50]
         sig_best = {}
         for sig, fits in self.direction_log.items():
             if fits and max(fits) >= min_fitness:
@@ -972,11 +1008,131 @@ class GPEngine:
         
         for sig, info in sorted(sig_best.items(), key=lambda x: -x[1]['best']):
             flag = "★" if info['best'] >= 0.8 else " " if info['best'] >= 0.5 else "·"
+            best_expr = ""
+            if sig in self._direction_best_expr:
+                _, best_expr = self._direction_best_expr[sig]
+            expr_short = best_expr[:70] if best_expr else ""
             lines.append(
-                f"  {flag} best={info['best']:.3f}  n={info['n']:3d}  latest={info['latest']:.3f}  {sig}"
+                f"  {flag} best={info['best']:.3f}  n={info['n']:3d}  {sig}"
             )
+            if expr_short:
+                lines.append(f"       └─ {expr_short}")
         lines.append("=" * 50)
         return '\n'.join(lines)
+
+    def _update_direction_weights(self):
+        """EMA 闭环方向权重更新 — 扫描 direction_log 自动提权好方向
+        
+        [新增] 2026-07-05 P0: 从方向监控数据中学习，让好方向的 var/ts/math 权重自动提升。
+        EMA 公式: new_weight = (1-lr)*old + lr*(fitness/max_fitness)
+        
+        只处理自上次 snapshot 以来的新记录，避免每代重复计算。
+        """
+        cfg = _TREE_GEN_CONFIG
+        if not cfg or not cfg.adaptive:
+            return
+        
+        # 收集自上次更新以来的新方向记录
+        new_records: Dict[str, List[float]] = {}
+        total_entries = 0
+        for sig, fits in self.direction_log.items():
+            new_fits = fits[self._direction_snapshot:]
+            if new_fits:
+                new_records[sig] = new_fits
+                total_entries += len(new_fits)
+        self._direction_snapshot = sum(len(v) for v in self.direction_log.values())
+        
+        if total_entries < 10:
+            return  # 样本太少，不够更新
+        
+        # 计算每个方向的分值 (用最佳 fitness，加权出现频率)
+        sig_scores = {}
+        for sig, fits in new_records.items():
+            if not fits:
+                continue
+            best = max(fits)
+            # 评分 = 最佳 × log(1+出现次数) — 兼顾质量和稳定性
+            sig_scores[sig] = best * np.log1p(len(fits))
+        
+        if not sig_scores:
+            return
+        
+        max_score = max(sig_scores.values())
+        if max_score <= 0.1:
+            return
+        
+        # 提取各签名中的变量/函数，按分值得分聚合权重
+        var_scores: Dict[str, float] = {}
+        ts_scores: Dict[str, float] = {}
+        math_scores: Dict[str, float] = {}
+        
+        for sig, score in sig_scores.items():
+            norm_score = score / max_score  # 归一化到 [0, 1]
+            
+            # 解析签名: "m:gauss|t:ts_roc|v:REL_AMOUNT"
+            parts = {}
+            for p in sig.split('|'):
+                if ':' in p:
+                    k, v = p.split(':', 1)
+                    parts[k] = v.split('+') if v != 'none' else []
+            
+            for v in parts.get('v', []):
+                var_scores[v] = var_scores.get(v, 0) + norm_score
+            for f in parts.get('t', []):
+                ts_scores[f] = ts_scores.get(f, 0) + norm_score
+            for f in parts.get('m', []):
+                math_scores[f] = math_scores.get(f, 0) + norm_score
+        
+        lr = cfg.adaptive_lr
+        
+        # EMA 更新 var_weights
+        var_w = cfg.var_weights
+        if var_w and var_scores:
+            for v in var_w:
+                old = var_w.get(v, 0)
+                score = var_scores.get(v, 0)
+                var_w[v] = (1 - lr) * old + lr * score * 3.0  # 放大使得 3.0 区间
+        
+        # EMA 更新 ts_weights
+        ts_w = cfg.ts_weights
+        if ts_w and ts_scores:
+            for f in ts_w:
+                old = ts_w.get(f, 0)
+                score = ts_scores.get(f, 0)
+                ts_w[f] = (1 - lr) * old + lr * score * 3.0
+        
+        # EMA 更新 math_weights
+        mw = cfg.math_weights
+        if mw and math_scores:
+            for f in mw:
+                old = mw.get(f, 0)
+                score = math_scores.get(f, 0)
+                mw[f] = (1 - lr) * old + lr * score * 3.0
+
+    def _adapt_operators(self, gen_best_fitness: float):
+        """AW-MEP 风格停滞检测 + 算子自适应
+        
+        [新增] 2026-07-05 P0: 连续 stagnation_threshold 代无改善 → 加大变异、降低交叉。
+        改善后自动恢复默认参数。
+        """
+        if gen_best_fitness > self._last_best_fitness + 1e-4:
+            # 有改善 → 重置计数 + 恢复默认
+            self._stagnation_counter = 0
+            self._last_best_fitness = gen_best_fitness
+            self.crossover_prob = self._save_crossover_prob
+            self.mutation_prob = self._save_mutation_prob
+        else:
+            self._stagnation_counter += 1
+            if self._stagnation_counter >= self._stagnation_threshold:
+                # 停滞 → 加力破局
+                self.mutation_prob = min(0.5, self.mutation_prob * 1.3)
+                self.crossover_prob = max(0.2, self.crossover_prob * 0.85)
+                if self._stagnation_counter >= 5:
+                    # 严重停滞 → 随机注入翻倍
+                    self.random_inject_count = min(
+                        int(self.population_size * 0.3),
+                        self.random_inject_count * 2
+                    )
 
     def _evaluate_population(self):
         # [重构] 2026-07-04 多进程并行求值 + 缓存
@@ -1109,9 +1265,14 @@ class GPEngine:
             mutated = _mutate_subtree(base, max_depth=3)
             self.population.append(Individual(tree=mutated, generation=0))
 
-        # 3. 随机个体
+        # 3. 随机个体 (ε-greedy: 部分用全空间探索)
+        remaining = self.population_size - len(self.population)
+        explore_n = int(remaining * self._explore_ratio)
         while len(self.population) < self.population_size:
-            tree = _random_tree(self.max_depth)
+            if len(self.population) < seed_count + explore_n:
+                tree = _random_tree_explore(self.max_depth)  # 探索通道
+            else:
+                tree = _random_tree(self.max_depth)
             self.population.append(Individual(tree=tree, generation=0))
 
     # ── 进化循环 ──
@@ -1143,9 +1304,14 @@ class GPEngine:
                 child = Individual(tree=copy.deepcopy(parent.tree), generation=gen + 1)
             new_pop.append(child)
 
-        # 随机注入
-        for _ in range(self.random_inject_count):
-            tree = _random_tree(self.max_depth)
+        # 随机注入 (ε-greedy: 部分用全空间探索)
+        inject_n = self.random_inject_count
+        explore_n = min(inject_n, int(inject_n * self._explore_ratio * 2))  # 探索占探索比率×2
+        for i in range(inject_n):
+            if i < explore_n:
+                tree = _random_tree_explore(self.max_depth)
+            else:
+                tree = _random_tree(self.max_depth)
             new_pop.append(Individual(tree=tree, generation=gen + 1))
 
         return new_pop[:self.population_size]
@@ -1180,6 +1346,18 @@ class GPEngine:
                         if sig not in self.direction_log:
                             self.direction_log[sig] = []
                         self.direction_log[sig].append(ind.fitness)
+                        # 记录该方向的最佳表达式
+                        prev = self._direction_best_expr.get(sig, (-999, ''))
+                        if ind.fitness > prev[0]:
+                            self._direction_best_expr[sig] = (ind.fitness, ind.expression_str or _expr_str(ind.tree))
+
+                # [新增] 2026-07-05 P0: 闭环方向权重 EMA 更新
+                cfg = _TREE_GEN_CONFIG
+                if cfg and cfg.adaptive and gen > 0 and gen % cfg.adaptive_every == 0:
+                    self._update_direction_weights()
+
+                # [新增] 2026-07-05 P0: 停滞检测 + 算子自适应 (AW-MEP 风格)
+                self._adapt_operators(gen_best.fitness)
 
                 if verbose and gen % 5 == 0:
                     logger.info(f"Gen {gen:3d} | best_f={gen_best.fitness:.3f} "
