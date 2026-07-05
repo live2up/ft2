@@ -883,6 +883,16 @@ class GPEngine:
         self._fitness_cache: Dict[str, tuple] = {}  # expr_str → (fitness, depth, nodes)
         self._parallel_workers: int = config.get('parallel_workers', 0) if config else 0
 
+        # [新增] 2026-07-05 SQLite 持久化缓存 — 跨 run 复用
+        self._cache_db: str = config.get('cache_db', '') if config else ''
+        self._fitness_hash: str = ''
+        if self._cache_db:
+            import hashlib, sqlite3
+            # 配置指纹: 数据形状 + 参数
+            fingerprint = f"{self._shape}_{self.parsimony_penalty:.4f}"
+            self._fitness_hash = hashlib.md5(fingerprint.encode()).hexdigest()[:12]
+            self._init_sqlite_cache()
+
         # [新增] 2026-07-05 方向演化追踪 — 按语义签名分组，观察探索路径
         self.direction_log: Dict[str, List[float]] = {}  # signature → [fitness_per_gen]
         self._direction_best_expr: Dict[str, tuple] = {}  # signature → (best_fitness, expr_str)
@@ -901,6 +911,52 @@ class GPEngine:
         if random_seed is not None:
             random.seed(random_seed)
             np.random.seed(random_seed)
+
+    # [新增] 2026-07-05 SQLite 持久化缓存 — 跨 run 复用
+    def _init_sqlite_cache(self):
+        """创建缓存表和加载已有记录到内存"""
+        import sqlite3
+        conn = sqlite3.connect(self._cache_db)
+        conn.execute('''CREATE TABLE IF NOT EXISTS expressions (
+            expr_hash TEXT PRIMARY KEY,
+            expression TEXT NOT NULL,
+            fitness REAL, depth INTEGER, nodes INTEGER,
+            fitness_hash TEXT, created TEXT DEFAULT (datetime('now'))
+        )''')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_expr_hash ON expressions(fitness_hash)')
+        conn.commit()
+        conn.close()
+
+    def _load_sqlite_cache(self):
+        """从 SQLite 加载当前配置指纹的缓存到内存"""
+        if not self._cache_db:
+            return
+        import sqlite3
+        conn = sqlite3.connect(self._cache_db)
+        rows = conn.execute(
+            'SELECT expression, fitness, depth, nodes FROM expressions WHERE fitness_hash=?',
+            (self._fitness_hash,)
+        ).fetchall()
+        conn.close()
+        for expr, fit, dep, nod in rows:
+            self._fitness_cache[expr] = (fit, dep, nod)
+        return len(rows)
+
+    def _save_sqlite_cache(self):
+        """将内存缓存增量写入 SQLite (INSERT OR REPLACE)"""
+        if not self._cache_db:
+            return
+        import sqlite3
+        conn = sqlite3.connect(self._cache_db)
+        for expr, (fit, dep, nod) in self._fitness_cache.items():
+            import hashlib
+            eh = hashlib.md5(expr.encode()).hexdigest()[:16]
+            conn.execute(
+                'INSERT OR REPLACE INTO expressions(expr_hash, expression, fitness, depth, nodes, fitness_hash) VALUES(?,?,?,?,?,?)',
+                (eh, expr, fit, dep, nod, self._fitness_hash)
+            )
+        conn.commit()
+        conn.close()
 
     # [重构] 2026-07-04 树配置构建逻辑从 __init__ 抽离
     def _build_tree_config(self, user_config: TreeGenConfig = None) -> TreeGenConfig:
@@ -1323,6 +1379,11 @@ class GPEngine:
         确保配置正确激活/恢复，避免嵌套 run() 或多实例场景下的污染。
         """
         with self._activate_config():
+            # [新增] 2026-07-05 从 SQLite 加载历史缓存
+            n_loaded = self._load_sqlite_cache()
+            if n_loaded and verbose:
+                logger.info(f"[GP] 加载 SQLite 缓存 {n_loaded} 条 (fitness_hash={self._fitness_hash})")
+
             self._initialize_population()
             for gen in range(self.generations):
                 self._evaluate_population()
@@ -1368,6 +1429,8 @@ class GPEngine:
 
                 if gen < self.generations - 1:
                     self.population = self._next_generation(gen)
+            # [新增] 2026-07-05 保存缓存到 SQLite
+            self._save_sqlite_cache()
         return self
 
     def _activate_config(self):
