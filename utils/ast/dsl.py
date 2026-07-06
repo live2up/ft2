@@ -57,8 +57,15 @@ def normalize_data_keys(data: Dict[str, Any]) -> Dict[str, np.ndarray]:
     """
     result = {}
     for k, v in data.items():
-        arr = np.asarray(v, dtype=float)
-        result[k.upper()] = arr
+        key = k.upper()
+        # [修复] 2026-07-06 大小写归一冲突时 warn (原静默覆盖, 难以排查数据丢失)
+        if key in result:
+            import warnings
+            warnings.warn(
+                f"normalize_data_keys: 键 '{k}' 与已有键冲突 "
+                f"(归一后均为 '{key}'), 后者覆盖前者"
+            )
+        result[key] = np.asarray(v, dtype=float)
     return result
 
 # ============================================================
@@ -81,7 +88,7 @@ ALLOWED_NODE_TYPES = {
     ast.USub, ast.UAdd, ast.Not, ast.Invert,
     ast.And, ast.Or,
     ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
-    ast.Is, ast.IsNot,
+    # [修复] 2026-07-06 移除 ast.Is/IsNot: 身份比较对 ndarray 无意义, 易误用为值相等
     ast.keyword,        # 关键字参数
 }
 
@@ -143,8 +150,7 @@ CMPOP_MAP = {
     ast.LtE:   lambda a, b: np.where(a <= b, 1.0, 0.0),
     ast.Gt:    lambda a, b: np.where(a > b, 1.0, 0.0),
     ast.GtE:   lambda a, b: np.where(a >= b, 1.0, 0.0),
-    ast.Is:    lambda a, b: np.where(np.abs(a - b) < 1e-10, 1.0, 0.0),
-    ast.IsNot: lambda a, b: np.where(np.abs(a - b) >= 1e-10, 1.0, 0.0),
+    # [修复] 2026-07-06 移除 ast.Is/IsNot: 身份比较对 ndarray 无意义
 }
 
 # ============================================================
@@ -500,9 +506,10 @@ def eval_colwise(tree: ast.Expression, data: Dict[str, np.ndarray],
 
 
 def cross_sectional_rank(vals: np.ndarray) -> np.ndarray:
-    """每日截面排名 → 0~1 (与 signals/v4 cs_rank 逻辑一致)
+    """每日截面排名 → (0, 1] (与 signals/v4 cs_rank 逻辑一致)
 
     [修正] 2026-06-25 改为 method='min', 对齐 WQ/DolphinDB 行业标准.
+    [修复] 2026-07-06 修正范围注释: method='min' 排名为 1-based, /N 后范围为 (0, 1] 非 [0, 1]
     [重构] 2026-06-22 从 resolver.py 移动到 dsl.py (通用工具)
     """
     from scipy.stats import rankdata

@@ -141,7 +141,8 @@ class CsResolver:
 
         # 注入预计算变量
         self._counter += 1
-        var_name = f'_CS{self._counter}_{id(node) & 0xFFFF:04x}'
+        # [修复] 2026-07-06 移除 id(node), 用纯 counter 保证稳定唯一 (id 在对象回收后可能重复)
+        var_name = f'_CS_RESOLVED_{self._counter}'
         data[var_name] = result
 
         return ast.Name(id=var_name, ctx=ast.Load())

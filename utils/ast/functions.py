@@ -5,7 +5,7 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 
 在五层架构中的位置: 第2层(原语) — 定义"能算什么"
 
-  函数定义 = 80 个 | FUNC_REGISTRY 条目 = 87 个
+  函数定义 = 85 个 | FUNC_REGISTRY 条目 = 88 个 (含 3 别名)
 
 ═══════════════════════════════════════════════════════════════
 命名规范 (对齐 WQ101 行业标准)
@@ -53,7 +53,7 @@ utils/ast/functions.py — 原语层 (公共基础设施)
   - 1D 数组输入, 1D 数组输出 (由上层逐列调用实现 2D 面板)
 
 ═══════════════════════════════════════════════════════════════
-现有函数清单 (81 个 FUNC_REGISTRY 条目, 按分类)
+现有函数清单 (88 个 FUNC_REGISTRY 条目, 按分类)
 
   ┌─ 内部工具 (3)
   │  _rolling / _expanding / _persist
@@ -157,10 +157,12 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 ═══════════════════════════════════════════════════════════════
 [重构] 2026-06-22 从 registry.py 拆分, 独立为 functions.py
 [修正] 2026-06-25 cs_rank→min排名, ts_*→nan*版, 对齐WQ标准
+[重构] 2026-07-06 ts_*/cs_* 函数用 numba @njit 加速, _rolling 作为 fallback 保留
 ═══════════════════════════════════════════════════════════════
 """
 import numpy as np
 import talib
+from numba import njit
 from typing import Dict, Callable
 
 
@@ -222,18 +224,632 @@ def _persist(x: np.ndarray, n: int) -> np.ndarray:
 
 
 # ============================================================
+# [重构] 2026-07-06 numba @njit 核心函数
+# 所有 ts_*/cs_* 的计算逻辑在此实现, 上层 ts_* 为薄包装
+# NaN 处理: 跳过窗口内 NaN, 全 NaN 返回 NaN (ts_resid 返回 0.0)
+# ============================================================
+
+@njit(cache=True)
+def _ts_mean_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动均值, 跳过 NaN"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        s = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                s += x[j]
+                cnt += 1
+        if cnt > 0:
+            r[i] = s / cnt
+    return r
+
+
+@njit(cache=True)
+def _ts_std_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动标准差 (ddof=1), 跳过 NaN, count<2 返回 NaN"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        s = 0.0
+        sq = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                s += x[j]
+                sq += x[j] * x[j]
+                cnt += 1
+        if cnt >= 2:
+            mean = s / cnt
+            var = (sq - cnt * mean * mean) / (cnt - 1)
+            if var < 0.0:
+                var = 0.0
+            r[i] = np.sqrt(var)
+    return r
+
+
+@njit(cache=True)
+def _ts_sum_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动求和, 跳过 NaN, 全 NaN 返回 NaN"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        s = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                s += x[j]
+                cnt += 1
+        if cnt > 0:
+            r[i] = s
+    return r
+
+
+@njit(cache=True)
+def _ts_max_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动最大值, 跳过 NaN"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        m = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                if cnt == 0 or x[j] > m:
+                    m = x[j]
+                cnt += 1
+        if cnt > 0:
+            r[i] = m
+    return r
+
+
+@njit(cache=True)
+def _ts_min_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动最小值, 跳过 NaN"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        m = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                if cnt == 0 or x[j] < m:
+                    m = x[j]
+                cnt += 1
+        if cnt > 0:
+            r[i] = m
+    return r
+
+
+@njit(cache=True)
+def _ts_median_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动中位数, 收集有效值后排序取中位"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                cnt += 1
+        if cnt > 0:
+            valid = np.empty(cnt)
+            k = 0
+            for j in range(i - d + 1, i + 1):
+                if not np.isnan(x[j]):
+                    valid[k] = x[j]
+                    k += 1
+            sorted_v = np.sort(valid)
+            mid = cnt // 2
+            if cnt % 2 == 1:
+                r[i] = sorted_v[mid]
+            else:
+                r[i] = (sorted_v[mid - 1] + sorted_v[mid]) / 2.0
+    return r
+
+
+@njit(cache=True)
+def _ts_rank_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动排名, searchsorted 找最后有效值位置"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                cnt += 1
+        if cnt > 0:
+            valid = np.empty(cnt)
+            k = 0
+            for j in range(i - d + 1, i + 1):
+                if not np.isnan(x[j]):
+                    valid[k] = x[j]
+                    k += 1
+            sorted_v = np.sort(valid)
+            pos = np.searchsorted(sorted_v, valid[cnt - 1])
+            r[i] = (pos + 1) / cnt
+    return r
+
+
+@njit(cache=True)
+def _ts_argmax_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动 argmax, 返回距今天数 (0=当前, d-1=最远)"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        best_val = 0.0
+        best_idx = -1
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                if cnt == 0 or x[j] > best_val:
+                    best_val = x[j]
+                    best_idx = j
+                cnt += 1
+        if cnt > 0:
+            r[i] = i - best_idx
+    return r
+
+
+@njit(cache=True)
+def _ts_argmin_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动 argmin, 返回距今天数 (0=当前, d-1=最远)"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        best_val = 0.0
+        best_idx = -1
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                if cnt == 0 or x[j] < best_val:
+                    best_val = x[j]
+                    best_idx = j
+                cnt += 1
+        if cnt > 0:
+            r[i] = i - best_idx
+    return r
+
+
+@njit(cache=True)
+def _ts_corr_core(x, y, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动相关系数, 同时跳过 x/y 的 NaN, 有效值<3 返回 NaN"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        sx = 0.0
+        sy = 0.0
+        sxy = 0.0
+        sxx = 0.0
+        syy = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not (np.isnan(x[j]) or np.isnan(y[j])):
+                sx += x[j]
+                sy += y[j]
+                sxy += x[j] * y[j]
+                sxx += x[j] * x[j]
+                syy += y[j] * y[j]
+                cnt += 1
+        if cnt >= 3:
+            mx = sx / cnt
+            my = sy / cnt
+            cov_xy = (sxy - cnt * mx * my) / (cnt - 1)
+            var_x = (sxx - cnt * mx * mx) / (cnt - 1)
+            var_y = (syy - cnt * my * my) / (cnt - 1)
+            if var_x < 0.0:
+                var_x = 0.0
+            if var_y < 0.0:
+                var_y = 0.0
+            std_x = np.sqrt(var_x)
+            std_y = np.sqrt(var_y)
+            if std_x < 1e-10 or std_y < 1e-10:
+                r[i] = 0.0
+            else:
+                r[i] = cov_xy / (std_x * std_y)
+    return r
+
+
+@njit(cache=True)
+def _ts_cov_core(x, y, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动协方差 (ddof=1), 同时跳过 x/y 的 NaN"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        sx = 0.0
+        sy = 0.0
+        sxy = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not (np.isnan(x[j]) or np.isnan(y[j])):
+                sx += x[j]
+                sy += y[j]
+                sxy += x[j] * y[j]
+                cnt += 1
+        if cnt >= 3:
+            mx = sx / cnt
+            my = sy / cnt
+            cov_xy = (sxy - cnt * mx * my) / (cnt - 1)
+            r[i] = cov_xy
+    return r
+
+
+@njit(cache=True)
+def _ts_skew_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动偏度, 有效值<3 返回 NaN, std≈0 返回 0"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        s = 0.0
+        sq = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                s += x[j]
+                sq += x[j] * x[j]
+                cnt += 1
+        if cnt >= 3:
+            mean = s / cnt
+            var = (sq - cnt * mean * mean) / (cnt - 1)
+            if var < 0.0:
+                var = 0.0
+            std = np.sqrt(var)
+            if std < 1e-10:
+                r[i] = 0.0
+            else:
+                m3 = 0.0
+                for j in range(i - d + 1, i + 1):
+                    if not np.isnan(x[j]):
+                        z = (x[j] - mean) / std
+                        m3 += z * z * z
+                r[i] = m3 / cnt
+    return r
+
+
+@njit(cache=True)
+def _ts_kurt_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动超额峰度, 有效值<4 返回 NaN, std≈0 返回 0"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        s = 0.0
+        sq = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                s += x[j]
+                sq += x[j] * x[j]
+                cnt += 1
+        if cnt >= 4:
+            mean = s / cnt
+            var = (sq - cnt * mean * mean) / (cnt - 1)
+            if var < 0.0:
+                var = 0.0
+            std = np.sqrt(var)
+            if std < 1e-10:
+                r[i] = 0.0
+            else:
+                m4 = 0.0
+                for j in range(i - d + 1, i + 1):
+                    if not np.isnan(x[j]):
+                        z = (x[j] - mean) / std
+                        m4 += z * z * z * z
+                r[i] = m4 / cnt - 3.0
+    return r
+
+
+@njit(cache=True)
+def _ts_scale_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动缩放, x[i]/sum(|x|), sum_abs<=1e-10 返回 0"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        s = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                s += abs(x[j])
+                cnt += 1
+        if cnt > 0:
+            if s > 1e-10:
+                r[i] = x[i] / s
+            else:
+                r[i] = 0.0
+    return r
+
+
+@njit(cache=True)
+def _ts_decay_linear_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 线性衰减加权均值, 权重=[1,2,...,n_valid]"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                cnt += 1
+        if cnt > 0:
+            wsum = 0.0
+            wsum_x = 0.0
+            k = 1
+            for j in range(i - d + 1, i + 1):
+                if not np.isnan(x[j]):
+                    w = float(k)
+                    wsum += w
+                    wsum_x += x[j] * w
+                    k += 1
+            r[i] = wsum_x / wsum
+    return r
+
+
+@njit(cache=True)
+def _ts_product_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动乘积, 跳过 NaN, 全 NaN 返回 NaN"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        p = 1.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                p *= x[j]
+                cnt += 1
+        if cnt > 0:
+            r[i] = p
+    return r
+
+
+@njit(cache=True)
+def _ts_quantile_core(x, d, p):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动分位数, 收集有效值后用 nanpercentile"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                cnt += 1
+        if cnt > 0:
+            r[i] = np.nanpercentile(x[i - d + 1 : i + 1], p * 100.0)
+    return r
+
+
+@njit(cache=True)
+def _ts_zscore_core(x, d):
+    """[重构] 2026-07-06 numba @njit 加速: 滚动 Z-score, std≈0 或冷启动返回 NaN"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        s = 0.0
+        sq = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                s += x[j]
+                sq += x[j] * x[j]
+                cnt += 1
+        if cnt >= 2:
+            mean = s / cnt
+            var = (sq - cnt * mean * mean) / (cnt - 1)
+            if var < 0.0:
+                var = 0.0
+            std = np.sqrt(var)
+            if std > 1e-10:
+                r[i] = (x[i] - mean) / std
+    return r
+
+
+@njit(cache=True)
+def _ts_regression_core(y, x, d, rettype):
+    """[重构] 2026-07-06 numba @njit 加速: 双变量 y~x 滚动线性回归
+    rettype: 0=slope, 1=intercept, 2=resid(y[i]-(a+b*x[i])), 3=predict(a+b*x[i]), 4=rsq"""
+    n = len(y)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        sx = 0.0
+        sy = 0.0
+        sxy = 0.0
+        sxx = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            if not (np.isnan(y[j]) or np.isnan(x[j])):
+                sx += x[j]
+                sy += y[j]
+                sxy += x[j] * y[j]
+                sxx += x[j] * x[j]
+                cnt += 1
+        if cnt >= 3:
+            mx = sx / cnt
+            my = sy / cnt
+            var_x = (sxx - cnt * mx * mx) / (cnt - 1)
+            cov_xy = (sxy - cnt * mx * my) / (cnt - 1)
+            if var_x < 0.0:
+                var_x = 0.0
+            if var_x > 1e-15:
+                slope = cov_xy / var_x
+                intercept = my - slope * mx
+                if rettype == 0:
+                    r[i] = slope
+                elif rettype == 1:
+                    r[i] = intercept
+                elif rettype == 2:
+                    r[i] = y[i] - (intercept + slope * x[i])
+                elif rettype == 3:
+                    r[i] = intercept + slope * x[i]
+                elif rettype == 4:
+                    ss_res = 0.0
+                    ss_tot = 0.0
+                    for j in range(i - d + 1, i + 1):
+                        if not (np.isnan(y[j]) or np.isnan(x[j])):
+                            pred = intercept + slope * x[j]
+                            ss_res += (y[j] - pred) ** 2
+                            ss_tot += (y[j] - my) ** 2
+                    if ss_tot > 1e-10:
+                        r[i] = 1.0 - ss_res / ss_tot
+                    else:
+                        r[i] = 0.0
+    return r
+
+
+@njit(cache=True)
+def _ts_linear_reg_core(x, window, rettype, fill_value):
+    """[重构] 2026-07-06 numba @njit 加速: 单变量 x~t 趋势线性回归
+    rettype: 0=slope, 1=intercept, 2=resid, 3=predict, 4=rsq
+    fill_value: ts_resid 用 0.0, 其他用 NaN; window<3 全 0"""
+    n = len(x)
+    if window < 3:
+        return np.zeros(n)
+    r = np.full(n, fill_value)
+    for i in range(window - 1, n):
+        cnt = 0
+        for j in range(i - window + 1, i + 1):
+            if not np.isnan(x[j]):
+                cnt += 1
+        if cnt >= 3:
+            valid = np.empty(cnt)
+            k = 0
+            for j in range(i - window + 1, i + 1):
+                if not np.isnan(x[j]):
+                    valid[k] = x[j]
+                    k += 1
+            # t = [0, 1, ..., cnt-1]
+            mean_t = (cnt - 1) / 2.0
+            mean_x = 0.0
+            for k in range(cnt):
+                mean_x += valid[k]
+            mean_x /= cnt
+            sum_t_dev_sq = 0.0
+            sum_tx_dev = 0.0
+            for k in range(cnt):
+                t_dev = k - mean_t
+                sum_t_dev_sq += t_dev * t_dev
+                sum_tx_dev += t_dev * (valid[k] - mean_x)
+            var_t = sum_t_dev_sq / (cnt - 1)
+            cov_tx = sum_tx_dev / (cnt - 1)
+            if var_t > 1e-15:
+                b = cov_tx / var_t
+                a = mean_x - b * mean_t
+                if rettype == 0:
+                    r[i] = b
+                elif rettype == 1:
+                    r[i] = a
+                elif rettype == 2:
+                    predicted = a + b * (cnt - 1)
+                    r[i] = valid[cnt - 1] - predicted
+                elif rettype == 3:
+                    r[i] = a + b * (cnt - 1)
+                elif rettype == 4:
+                    ss_res = 0.0
+                    ss_tot = 0.0
+                    for k in range(cnt):
+                        pred = a + b * k
+                        ss_res += (valid[k] - pred) ** 2
+                        ss_tot += (valid[k] - mean_x) ** 2
+                    if ss_tot > 1e-10:
+                        r[i] = 1.0 - ss_res / ss_tot
+                    else:
+                        r[i] = 0.0
+    return r
+
+
+@njit(cache=True)
+def _cs_zscore_core(x):
+    """[重构] 2026-07-06 numba @njit 加速: 2D 截面 Z-score, 逐行计算, 跳过 NaN"""
+    n_rows, n_cols = x.shape
+    r = np.full((n_rows, n_cols), np.nan)
+    for i in range(n_rows):
+        s = 0.0
+        sq = 0.0
+        cnt = 0
+        for j in range(n_cols):
+            if not np.isnan(x[i, j]):
+                s += x[i, j]
+                sq += x[i, j] * x[i, j]
+                cnt += 1
+        if cnt > 1:
+            mean = s / cnt
+            var = (sq - cnt * mean * mean) / (cnt - 1)
+            if var < 0.0:
+                var = 0.0
+            std = np.sqrt(var)
+            for j in range(n_cols):
+                if not np.isnan(x[i, j]):
+                    if std > 1e-10:
+                        r[i, j] = (x[i, j] - mean) / std
+                    else:
+                        r[i, j] = 0.0
+    return r
+
+
+@njit(cache=True)
+def _cs_scale_core(x, scale):
+    """[重构] 2026-07-06 numba @njit 加速: 2D 截面缩放, x/sum(|x|)*scale"""
+    n_rows, n_cols = x.shape
+    r = np.full((n_rows, n_cols), np.nan)
+    for i in range(n_rows):
+        s = 0.0
+        cnt = 0
+        for j in range(n_cols):
+            if not np.isnan(x[i, j]):
+                s += abs(x[i, j])
+                cnt += 1
+        if cnt > 0:
+            if s > 1e-10:
+                for j in range(n_cols):
+                    if not np.isnan(x[i, j]):
+                        r[i, j] = x[i, j] / s * scale
+            else:
+                for j in range(n_cols):
+                    if not np.isnan(x[i, j]):
+                        r[i, j] = 0.0
+    return r
+
+
+@njit(cache=True)
+def _cs_winsorize_core(x, std_n):
+    """[重构] 2026-07-06 numba @njit 加速: 2D 截面缩尾, 逐行 +/-std_n*std"""
+    n_rows, n_cols = x.shape
+    r = x.copy()
+    for i in range(n_rows):
+        s = 0.0
+        sq = 0.0
+        cnt = 0
+        for j in range(n_cols):
+            if not np.isnan(x[i, j]):
+                s += x[i, j]
+                sq += x[i, j] * x[i, j]
+                cnt += 1
+        if cnt > 1:
+            mean = s / cnt
+            var = (sq - cnt * mean * mean) / (cnt - 1)
+            if var < 0.0:
+                var = 0.0
+            std = np.sqrt(var)
+            lo = mean - std_n * std
+            hi = mean + std_n * std
+            for j in range(n_cols):
+                if not np.isnan(x[i, j]):
+                    if x[i, j] < lo:
+                        r[i, j] = lo
+                    elif x[i, j] > hi:
+                        r[i, j] = hi
+    return r
+
+
+# ============================================================
 # 时序函数 (ts_) — 窗口滚动, 只用历史数据
 # ============================================================
 
 # [修正] 2026-06-25 改用 nan* 版本, 对齐 WQ NaN=缺失数据应忽略的规范
-def ts_mean(x, d):       return _rolling(x, d, np.nanmean)
-def ts_std(x, d):        return _rolling(x, d, lambda a: np.nanstd(a, ddof=1))
+# [重构] 2026-07-06 改用 numba @njit 加速, _rolling 作为 fallback 保留
+def ts_mean(x, d):       return _ts_mean_core(np.asarray(x, float), int(d))
+def ts_std(x, d):        return _ts_std_core(np.asarray(x, float), int(d))
 def ts_sum(x, d):
     """滚动窗口求和, 忽略 NaN"""
-    return _rolling(x, d, np.nansum)
-def ts_max(x, d):        return _rolling(x, d, np.nanmax)
-def ts_min(x, d):        return _rolling(x, d, np.nanmin)
-def ts_median(x, d):     return _rolling(x, d, np.nanmedian)
+    return _ts_sum_core(np.asarray(x, float), int(d))
+def ts_max(x, d):        return _ts_max_core(np.asarray(x, float), int(d))
+def ts_min(x, d):        return _ts_min_core(np.asarray(x, float), int(d))
+def ts_median(x, d):     return _ts_median_core(np.asarray(x, float), int(d))
 
 def ts_delta(x, d):
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
@@ -244,51 +860,38 @@ def ts_delay(x, d):
     r[d:] = x[:-d]; return r
 
 def ts_rank(x, d):
-    return _rolling(x, d, lambda a: (np.searchsorted(np.sort(a), a[-1]) + 1) / len(a))
+    """[修复] 2026-07-06 过滤 NaN 后计算排名, 避免 NaN 干扰 searchsorted
+    [重构] 2026-07-06 numba @njit 加速"""
+    return _ts_rank_core(np.asarray(x, float), int(d))
 
 def ts_corr(x, y, d):
-    x, y = np.asarray(x, float), np.asarray(y, float)
-    r = np.full_like(x, np.nan)
-    for i in range(d - 1, len(x)):
-        xw = x[i - d + 1 : i + 1]; yw = y[i - d + 1 : i + 1]
-        sx, sy = np.std(xw, ddof=1), np.std(yw, ddof=1)
-        r[i] = 0.0 if sx < 1e-10 or sy < 1e-10 else np.corrcoef(xw, yw)[0, 1]
-    return r
+    """[修复] 2026-07-06 过滤 NaN 后计算, 对齐 WQ NaN=缺失数据应忽略规范
+    [重构] 2026-07-06 numba @njit 加速"""
+    return _ts_corr_core(np.asarray(x, float), np.asarray(y, float), int(d))
 
 def ts_cov(x, y, d):
-    """Rolling covariance (样本协方差, ddof=1)"""
-    x, y = np.asarray(x, float), np.asarray(y, float)
-    r = np.full_like(x, np.nan)
-    for i in range(d - 1, len(x)):
-        xw = x[i - d + 1 : i + 1]; yw = y[i - d + 1 : i + 1]
-        r[i] = np.cov(xw, yw, ddof=1)[0, 1]
-    return r
+    """Rolling covariance (样本协方差, ddof=1)
+    [修复] 2026-07-06 过滤 NaN 后计算, 对齐 WQ 规范
+    [重构] 2026-07-06 numba @njit 加速"""
+    return _ts_cov_core(np.asarray(x, float), np.asarray(y, float), int(d))
 
 def ts_skew(x, d):
-    def f(a):
-        s = np.std(a, ddof=1)
-        return 0.0 if s < 1e-10 else np.mean(((a - np.mean(a)) / s) ** 3)
-    return _rolling(x, d, f)
+    """[修复] 2026-07-06 过滤 NaN 后计算, 对齐 WQ 规范
+    [重构] 2026-07-06 numba @njit 加速"""
+    return _ts_skew_core(np.asarray(x, float), int(d))
 
 def ts_kurt(x, d):
-    def f(a):
-        s = np.std(a, ddof=1)
-        return 0.0 if s < 1e-10 else np.mean(((a - np.mean(a)) / s) ** 4) - 3.0
-    return _rolling(x, d, f)
+    """[修复] 2026-07-06 过滤 NaN 后计算, 对齐 WQ 规范
+    [重构] 2026-07-06 numba @njit 加速"""
+    return _ts_kurt_core(np.asarray(x, float), int(d))
 
 def ts_argmax(x, d):
-    def _nanargmax(a):
-        if np.all(np.isnan(a)):
-            return np.nan
-        return len(a) - 1 - np.nanargmax(a)
-    return _rolling(x, d, _nanargmax)
+    """[重构] 2026-07-06 numba @njit 加速"""
+    return _ts_argmax_core(np.asarray(x, float), int(d))
 
 def ts_argmin(x, d):
-    def _nanargmin(a):
-        if np.all(np.isnan(a)):
-            return np.nan
-        return len(a) - 1 - np.nanargmin(a)
-    return _rolling(x, d, _nanargmin)
+    """[重构] 2026-07-06 numba @njit 加速"""
+    return _ts_argmin_core(np.asarray(x, float), int(d))
 
 def ts_roc(x, d):
     """Rate of change: (x[t]-x[t-d])/x[t-d]"""
@@ -297,62 +900,39 @@ def ts_roc(x, d):
     return r
 
 def ts_zscore(x, d):
-    """滚动 Z-score (样本标准差, ddof=1)"""
-    mu = ts_mean(x, d); sg = ts_std(x, d)
-    return np.where(sg > 1e-10, (np.asarray(x, float) - mu) / sg, 0)
+    """滚动 Z-score (样本标准差, ddof=1)
+    [修复] 2026-07-06 std≈0 或冷启动期返回 NaN (原返回0违反冷启动保护, 产生虚假信号)
+    [重构] 2026-07-06 numba @njit 加速"""
+    return _ts_zscore_core(np.asarray(x, float), int(d))
 
 def ts_scale(x, d):
-    """[修正] 2026-06-25 过滤 NaN, 对齐 WQ 标准"""
-    x = np.asarray(x, float); r = np.full_like(x, np.nan)
-    for i in range(d - 1, len(x)):
-        seg = x[i - d + 1 : i + 1]
-        valid = ~np.isnan(seg)
-        if valid.sum() == 0:
-            continue
-        s = np.sum(np.abs(seg[valid]))
-        r[i] = x[i] / s if s > 1e-10 else 0
-    return r
+    """[修正] 2026-06-25 过滤 NaN, 对齐 WQ 标准
+    [重构] 2026-07-06 numba @njit 加速"""
+    return _ts_scale_core(np.asarray(x, float), int(d))
 
 def ts_quantile(x, d, p=0.5):
     """滚动分位数值: 返回窗口内 p 分位数的值 (非排名)
-    
+    [重构] 2026-07-06 numba @njit 加速
+
     p=0.5 → 中位数, p=0.8 → 80%分位数, p=0.2 → 20%分位数
     """
-    x = np.asarray(x, float)
-    r = np.full_like(x, np.nan)
-    for i in range(d - 1, len(x)):
-        seg = x[i - d + 1 : i + 1]
-        if np.all(np.isnan(seg)):
-            continue
-        r[i] = np.nanpercentile(seg, p * 100)
-    return r
+    return _ts_quantile_core(np.asarray(x, float), int(d), float(p))
 
 def ts_av_diff(x, d):
-    """Current minus rolling mean (deviation)"""
-    return np.asarray(x, float) - ts_mean(x, d)
+    """Current minus rolling mean (deviation)
+    [重构] 2026-07-06 numba @njit 加速"""
+    x = np.asarray(x, float)
+    return x - _ts_mean_core(x, int(d))
 
 def ts_decay_linear(x, d):
-    """[修正] 2026-06-25 过滤 NaN 后加权, 对齐 WQ 标准"""
-    x = np.asarray(x, float)
-    r = np.full_like(x, np.nan)
-    for i in range(d - 1, len(x)):
-        seg = x[i - d + 1 : i + 1]
-        valid = ~np.isnan(seg)
-        if valid.sum() == 0:
-            continue
-        n_valid = valid.sum()
-        weights = np.arange(1, n_valid + 1, dtype=float)
-        r[i] = np.sum(seg[valid] * weights) / weights.sum()
-    return r
+    """[修正] 2026-06-25 过滤 NaN 后加权, 对齐 WQ 标准
+    [重构] 2026-07-06 numba @njit 加速"""
+    return _ts_decay_linear_core(np.asarray(x, float), int(d))
 
 def ts_product(x, d):
-    """Rolling product over d periods"""
-    x = np.asarray(x, float)
-    r = np.full_like(x, np.nan)
-    for i in range(d - 1, len(x)):
-        seg = x[i - d + 1 : i + 1]
-        r[i] = np.prod(seg[~np.isnan(seg)]) if np.any(~np.isnan(seg)) else np.nan
-    return r
+    """Rolling product over d periods
+    [重构] 2026-07-06 numba @njit 加速"""
+    return _ts_product_core(np.asarray(x, float), int(d))
 
 def ts_regression(y, x, d, rettype=2):
     """Rolling linear regression: y = alpha + beta*x + eps
@@ -362,134 +942,40 @@ def ts_regression(y, x, d, rettype=2):
         x: 自变量
         d: 窗口
         rettype: 0=斜率, 1=截距, 2=残差, 3=预测值, 4=R²
-    """
-    y, x = np.asarray(y, float), np.asarray(x, float)
-    r = np.full_like(y, np.nan)
-    for i in range(d - 1, len(y)):
-        yw, xw = y[i - d + 1 : i + 1], x[i - d + 1 : i + 1]
-        # 过滤 NaN
-        valid = ~np.isnan(yw) & ~np.isnan(xw)
-        if valid.sum() < 3:
-            continue
-        yv, xv = yw[valid], xw[valid]
-        # 线性回归
-        slope, intercept = np.polyfit(xv, yv, 1)
-        y_pred = intercept + slope * xv
-        ss_res = np.sum((yv - y_pred) ** 2)
-        ss_tot = np.sum((yv - np.mean(yv)) ** 2)
 
-        if rettype == 0: r[i] = slope
-        elif rettype == 1: r[i] = intercept
-        elif rettype == 2: r[i] = y[i] - (intercept + slope * x[i])  # 残差
-        elif rettype == 3: r[i] = intercept + slope * x[i]            # 预测
-        elif rettype == 4: r[i] = 1 - ss_res / ss_tot if ss_tot > 1e-10 else 0.0
-    return r
+    [重构] 2026-07-06 numba @njit 加速
+    """
+    return _ts_regression_core(np.asarray(y, float), np.asarray(x, float), int(d), int(rettype))
 
 
 def ts_resid(x, window):
-    """时序回归残差: 对时间做线性回归 x=a+b*t，返回当前值-预测值"""
-    x = np.asarray(x, float); window = int(window)
-    if window < 3:
-        return np.zeros_like(x)
-    r = np.full_like(x, 0.0)
-    for i in range(window - 1, len(x)):
-        seg = x[i - window + 1: i + 1]
-        valid = seg[~np.isnan(seg)]
-        if len(valid) < 3:
-            continue
-        t = np.arange(len(valid), dtype=float)
-        cov = np.cov(t, valid)
-        if cov[0, 0] < 1e-15:
-            continue
-        b = cov[0, 1] / cov[0, 0]
-        a = np.mean(valid) - b * np.mean(t)
-        predicted = a + b * (len(valid) - 1)
-        r[i] = valid[-1] - predicted
-    return r
+    """时序回归残差: 对时间做线性回归 x=a+b*t，返回当前值-预测值
+    [重构] 2026-07-06 numba @njit 加速, 默认填充值 0.0"""
+    return _ts_linear_reg_core(np.asarray(x, float), int(window), 2, 0.0)
 
 
 def ts_slope(x, window):
-    """时序线性回归斜率: 对时间做线性回归 x=a+b*t，返回斜率 b"""
-    x = np.asarray(x, float); window = int(window)
-    if window < 3:
-        return np.zeros_like(x)
-    r = np.full_like(x, np.nan)
-    for i in range(window - 1, len(x)):
-        seg = x[i - window + 1: i + 1]
-        valid = seg[~np.isnan(seg)]
-        if len(valid) < 3:
-            continue
-        t = np.arange(len(valid), dtype=float)
-        cov = np.cov(t, valid)
-        if cov[0, 0] < 1e-15:
-            continue
-        r[i] = cov[0, 1] / cov[0, 0]
-    return r
+    """时序线性回归斜率: 对时间做线性回归 x=a+b*t，返回斜率 b
+    [重构] 2026-07-06 numba @njit 加速, 默认填充值 NaN"""
+    return _ts_linear_reg_core(np.asarray(x, float), int(window), 0, np.nan)
 
 
 def ts_rsq(x, window):
-    """时序线性回归 R²: 对时间做线性回归 x=a+b*t，返回 R²"""
-    x = np.asarray(x, float); window = int(window)
-    if window < 3:
-        return np.zeros_like(x)
-    r = np.full_like(x, np.nan)
-    for i in range(window - 1, len(x)):
-        seg = x[i - window + 1: i + 1]
-        valid = seg[~np.isnan(seg)]
-        if len(valid) < 3:
-            continue
-        t = np.arange(len(valid), dtype=float)
-        cov = np.cov(t, valid)
-        if cov[0, 0] < 1e-15:
-            continue
-        b = cov[0, 1] / cov[0, 0]
-        a = np.mean(valid) - b * np.mean(t)
-        y_pred = a + b * t
-        ss_res = np.sum((valid - y_pred) ** 2)
-        ss_tot = np.sum((valid - np.mean(valid)) ** 2)
-        r[i] = 1 - ss_res / ss_tot if ss_tot > 1e-10 else 0.0
-    return r
+    """时序线性回归 R²: 对时间做线性回归 x=a+b*t，返回 R²
+    [重构] 2026-07-06 numba @njit 加速, 默认填充值 NaN"""
+    return _ts_linear_reg_core(np.asarray(x, float), int(window), 4, np.nan)
 
 
 def ts_intercept(x, window):
-    """时序线性回归截距: 对时间做线性回归 x=a+b*t，返回截距 a"""
-    x = np.asarray(x, float); window = int(window)
-    if window < 3:
-        return np.zeros_like(x)
-    r = np.full_like(x, np.nan)
-    for i in range(window - 1, len(x)):
-        seg = x[i - window + 1: i + 1]
-        valid = seg[~np.isnan(seg)]
-        if len(valid) < 3:
-            continue
-        t = np.arange(len(valid), dtype=float)
-        cov = np.cov(t, valid)
-        if cov[0, 0] < 1e-15:
-            continue
-        b = cov[0, 1] / cov[0, 0]
-        r[i] = np.mean(valid) - b * np.mean(t)
-    return r
+    """时序线性回归截距: 对时间做线性回归 x=a+b*t，返回截距 a
+    [重构] 2026-07-06 numba @njit 加速, 默认填充值 NaN"""
+    return _ts_linear_reg_core(np.asarray(x, float), int(window), 1, np.nan)
 
 
 def ts_predict(x, window):
-    """时序线性回归预测值: 对时间做线性回归 x=a+b*t，返回当前时刻预测值 a+b*(w-1)"""
-    x = np.asarray(x, float); window = int(window)
-    if window < 3:
-        return np.zeros_like(x)
-    r = np.full_like(x, np.nan)
-    for i in range(window - 1, len(x)):
-        seg = x[i - window + 1: i + 1]
-        valid = seg[~np.isnan(seg)]
-        if len(valid) < 3:
-            continue
-        t = np.arange(len(valid), dtype=float)
-        cov = np.cov(t, valid)
-        if cov[0, 0] < 1e-15:
-            continue
-        b = cov[0, 1] / cov[0, 0]
-        a = np.mean(valid) - b * np.mean(t)
-        r[i] = a + b * (len(valid) - 1)
-    return r
+    """时序线性回归预测值: 对时间做线性回归 x=a+b*t，返回当前时刻预测值 a+b*(w-1)
+    [重构] 2026-07-06 numba @njit 加速, 默认填充值 NaN"""
+    return _ts_linear_reg_core(np.asarray(x, float), int(window), 3, np.nan)
 
 
 # ============================================================
@@ -523,41 +1009,26 @@ def cs_rank(x):
     return r
 
 def cs_zscore(x):
+    """[重构] 2026-07-06 numba @njit 加速 (2D); 1D 保持原逻辑返回 zeros"""
     x = np.asarray(x, float)
     if x.ndim == 1: return np.zeros_like(x)
-    r = np.full_like(x, np.nan)
-    for i in range(x.shape[0]):
-        v = ~np.isnan(x[i])
-        if v.sum() > 1:
-            m, s = np.mean(x[i][v]), np.std(x[i][v], ddof=1)
-            r[i][v] = (x[i][v] - m) / s if s > 1e-10 else 0.0
-    return r
+    return _cs_zscore_core(x)
 
 def cs_scale(x, scale=1.0):
-    """Cross-sectional scale: sum(abs(x)) = scale"""
+    """Cross-sectional scale: sum(abs(x)) = scale
+    [重构] 2026-07-06 numba @njit 加速 (2D); 1D 保持原逻辑"""
     x = np.asarray(x, float)
     if x.ndim == 1: return x / (np.sum(np.abs(x)) + 1e-10) * scale
-    r = np.full_like(x, np.nan)
-    for i in range(x.shape[0]):
-        v = ~np.isnan(x[i])
-        if v.sum() > 0:
-            s = np.sum(np.abs(x[i][v]))
-            r[i][v] = x[i][v] / s * scale if s > 1e-10 else 0.0
-    return r
+    return _cs_scale_core(x, float(scale))
 
 def cs_winsorize(x, std=4.0):
-    """Cross-sectional winsorize at +/-std (样本标准差, ddof=1)"""
+    """Cross-sectional winsorize at +/-std (样本标准差, ddof=1)
+    [重构] 2026-07-06 numba @njit 加速 (2D); 1D 保持原逻辑整体截尾"""
     x = np.asarray(x, float)
     if x.ndim == 1:
         m, s = np.mean(x), np.std(x, ddof=1)
         return np.clip(x, m - std * s, m + std * s)
-    r = x.copy()
-    for i in range(x.shape[0]):
-        v = ~np.isnan(x[i])
-        if v.sum() > 1:
-            m, s = np.mean(x[i][v]), np.std(x[i][v], ddof=1)
-            r[i][v] = np.clip(x[i][v], m - std * s, m + std * s)
-    return r
+    return _cs_winsorize_core(x, float(std))
 
 def cs_normalize(x, use_std=False, limit=0.0):
     """Cross-sectional normalize"""
@@ -575,7 +1046,14 @@ def cs_quantile(x, driver='gaussian', sigma=1.0):
 # ============================================================
 
 def safe_abs(x):          return np.abs(x)
-def safe_log(x):          return np.log(np.maximum(np.abs(x), 1e-10))
+def safe_log(x):
+    """[修复] 2026-07-06 非正数返回 NaN (原 abs(x) 导致 log(-1)==log(1) 掩盖负数错误)
+    若需处理负数输入的量级, 请用 sign(x)*log(abs(x)+1) 显式表达"""
+    x = np.asarray(x, float)
+    result = np.full_like(x, np.nan)
+    mask = x > 1e-10
+    result[mask] = np.log(x[mask])
+    return result
 def safe_sqrt(x):         return np.sqrt(np.maximum(x, 0.0))
 def safe_sign(x):         return np.sign(x)
 def safe_exp(x):          return np.exp(np.clip(x, -50, 50))
@@ -589,6 +1067,7 @@ def safe_relu(x):         return np.maximum(x, 0.0)
 #   p4(x)       — exp(-x⁴), 平顶陡降, 对微小变化不敏感, 适合极窄范围
 #   exp_neg(x)  — exp(-|x|), 尖峰中尾, 介于cos和gauss之间
 def safe_neg(x):
+    """负号: -x (命名沿用历史, 无 NaN 特殊处理)"""
     return -np.asarray(x, float)
 
 def safe_gauss(x):        return np.exp(-np.asarray(x, float)**2)
@@ -661,10 +1140,10 @@ def persist(x, n=3):
 # ============================================================
 
 def _feature_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
-    """RSI centered: (RSI-50)/50, range [-1,1]. talib-aligned."""
+    """RSI centered: (RSI-50)/50, range [-1,1]. talib-aligned.
+    [修复] 2026-07-06 保留冷启动期 NaN (原 nan_to_num 填充 50.0 掩盖缺失数据, 与冷启动保护原则冲突)"""
     c = np.asarray(close, float)
     result = talib.RSI(c, timeperiod=period)
-    result = np.nan_to_num(result, nan=50.0)
     return (result - 50) / 50
 
 
@@ -675,11 +1154,15 @@ def _feature_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: i
 
 
 def _feature_atr_sma(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    """ATR-SMA: simple rolling mean of TR (original V4, kept for compat)"""
+    """ATR-SMA: simple rolling mean of TR (original V4, kept for compat)
+    [修复] 2026-07-06 用 shift 替代 roll, 避免首位引入末尾数据 (NaN 安全)"""
     h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
-    tr = np.maximum(h - l, np.maximum(np.abs(h - np.roll(c, 1)), np.abs(l - np.roll(c, 1))))
-    tr[0] = h[0] - l[0]
-    return _rolling(tr, period, np.mean)
+    prev_c = np.empty_like(c)
+    prev_c[0] = c[0]
+    prev_c[1:] = c[:-1]
+    tr = np.maximum(h - l, np.maximum(np.abs(h - prev_c), np.abs(l - prev_c)))
+    # [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)
+    return ts_mean(tr, period)
 
 
 def _wilder_smooth(x: np.ndarray, period: int) -> np.ndarray:
@@ -804,18 +1287,22 @@ def _feature_linearreg(close: np.ndarray, period: int = 20) -> np.ndarray:
 
 
 def _feature_vol_ratio(close: np.ndarray, volume: np.ndarray, short: int = 5, long: int = 20) -> np.ndarray:
-    """Volume ratio = SMA(vol,short) / SMA(vol,long). No talib equivalent."""
+    """Volume ratio = SMA(vol,short) / SMA(vol,long). No talib equivalent.
+    [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)"""
     v = np.asarray(volume, float)
-    vs = _rolling(v, short, np.mean)
-    vl = _rolling(v, long, np.mean)
+    # [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)
+    vs = ts_mean(v, short)
+    vl = ts_mean(v, long)
     return np.where(vl > 0, vs / vl, 0)
 
 
 def _feature_amt_ratio(amount: np.ndarray, short: int = 5, long: int = 20) -> np.ndarray:
-    """Amount ratio = short_mean / long_mean"""
+    """Amount ratio = short_mean / long_mean
+    [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)"""
     a = np.asarray(amount, float)
-    return np.where(_rolling(a, long, np.mean) > 0,
-                    _rolling(a, short, np.mean) / _rolling(a, long, np.mean), 0)
+    # [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)
+    return np.where(ts_mean(a, long) > 0,
+                    ts_mean(a, short) / ts_mean(a, long), 0)
 
 
 # ============================================================

@@ -11,7 +11,7 @@
 | 层 | 文件 | 职责 |
 |---|---|---|
 | 语法层 | `dsl.py` | parse/evaluate/validate/安全校验 |
-| 原语层 | `functions.py` | 72 函数注册表 |
+| 原语层 | `functions.py` | 88 函数注册表 |
 | 变量层 | `variables.py` | 70+ 变量前缀白名单 |
 | 编排层 | `resolver.py` | CsResolver 截面函数嵌套解算 |
 | 规格层 | `spec.py` | AST构建器/规范化/LLM语法规格 |
