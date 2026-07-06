@@ -109,12 +109,14 @@ class GPEngine:
         self._parallel_workers = config.get('parallel_workers', 0) if config else 0
         self._canonicalize_memo: Dict[str, str] = {}
         self._canonicalize_lock = threading.Lock()
+        # [改] 2026-07-06 默认缓存到 output/.gp_cache.db
         cache_db = config.get('cache_db', '') if config else ''
+        if not cache_db:
+            cache_db = 'output/.gp_cache.db'
         fitness_hash = ''
-        if cache_db:
-            import hashlib
-            fingerprint = f"{self._shape}_{self.parsimony_penalty:.4f}"
-            fitness_hash = hashlib.md5(fingerprint.encode()).hexdigest()[:12]
+        import hashlib
+        fingerprint = f"{self._shape}_{self.parsimony_penalty:.4f}"
+        fitness_hash = hashlib.md5(fingerprint.encode()).hexdigest()[:12]
         self.fitness_cache = FitnessCache(cache_db, fitness_hash)
 
         # 方向演化追踪
