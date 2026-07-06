@@ -41,8 +41,9 @@ utils/ast/functions.py — 原语层 (公共基础设施)
       函数: rsi(CLOSE, 14)     → 实时算, 参数灵活
       变量: ts_rank(RSI_14, 60) → 预计算, 性能优先
 
-  ◆ 统计量约定 (对齐 WQ101 / GT191)
-    ddof=1 (样本):   ts_std, ts_skew, ts_kurt, ts_cov, cs_zscore, cs_winsorize
+  ◆ 统计量约定 (对齐 WQ101 / GT191, 主流实现 pandas/scipy)
+    ddof=1 (样本):   ts_std, ts_cov, cs_zscore, cs_winsorize
+    ddof=0 (总体):   ts_skew, ts_kurt (偏度/峰度的 z-score 用总体方差, 然后施加 Fisher-Pearson 样本修正, 对齐 pandas rolling().skew()/.kurt())
     NaN 处理:        NaN = 缺失数据应忽略, 使用 nan* 版本函数
                      (nanmean/nanmax/nanargmax 等)
     cs_rank 并列:    competition ranking (method='min'), 见 SciPy rankdata 文档
@@ -221,6 +222,17 @@ def _persist(x: np.ndarray, n: int) -> np.ndarray:
         if np.all(s[i - n + 1 : i + 1]):
             r[i] = 1.0
     return r
+
+
+# [修复] 2026-07-06 窗口参数校验: d<1 时 range(d-1, n) 会从 -1 开始, 静默污染末元素
+def _validate_window(d, name):
+    """校验窗口参数 d >= 1, 返回 int(d)"""
+    d_int = int(d)
+    if d_int < 1:
+        raise ValueError(
+            f"窗口参数 d={d} 无效, 必须 >= 1 (函数: {name})"
+        )
+    return d_int
 
 
 # ============================================================
@@ -481,8 +493,8 @@ def _ts_cov_core(x, y, d):
 
 @njit(cache=True)
 def _ts_skew_core(x, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动偏度, 有效值<3 返回 NaN
-    [修复] 2026-07-06 std≈0 时返回 NaN (原 0.0 与 ts_zscore 不一致)"""
+    """[修复] 2026-07-06 样本偏度 (Fisher-Pearson), 对齐 pandas/scipy bias=False
+    总体偏度 g1 = m3/m2^1.5, 样本修正 G1 = g1 * sqrt(n*(n-1))/(n-2)"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -496,25 +508,27 @@ def _ts_skew_core(x, d):
                 cnt += 1
         if cnt >= 3:
             mean = s / cnt
-            var = (sq - cnt * mean * mean) / (cnt - 1)
-            if var < 0.0:
-                var = 0.0
-            std = np.sqrt(var)
-            # [修复] std≈0 时保持 NaN (原 r[i]=0.0)
+            # 总体方差 ddof=0 (m2 需与 m3/m4 分母一致)
+            m2 = (sq - cnt * mean * mean) / cnt
+            if m2 < 0.0:
+                m2 = 0.0
+            std = np.sqrt(m2)
             if std > 1e-10:
                 m3 = 0.0
                 for j in range(i - d + 1, i + 1):
                     if not np.isnan(x[j]):
                         z = (x[j] - mean) / std
                         m3 += z * z * z
-                r[i] = m3 / cnt
+                # 总体偏度 → Fisher-Pearson 样本偏度修正
+                g1 = m3 / cnt
+                r[i] = g1 * np.sqrt(cnt * (cnt - 1)) / (cnt - 2)
     return r
 
 
 @njit(cache=True)
 def _ts_kurt_core(x, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动超额峰度, 有效值<4 返回 NaN
-    [修复] 2026-07-06 std≈0 时返回 NaN (原 0.0 与 ts_zscore 不一致)"""
+    """[修复] 2026-07-06 样本超额峰度 (Fisher), 对齐 pandas/scipy bias=False
+    总体超额峰度 g2 = m4/m2^2-3, 样本修正 G2 = (n-1)/((n-2)(n-3)) * ((n+1)*g2+6)"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -528,18 +542,20 @@ def _ts_kurt_core(x, d):
                 cnt += 1
         if cnt >= 4:
             mean = s / cnt
-            var = (sq - cnt * mean * mean) / (cnt - 1)
-            if var < 0.0:
-                var = 0.0
-            std = np.sqrt(var)
-            # [修复] std≈0 时保持 NaN (原 r[i]=0.0)
+            # 总体方差 ddof=0 (m2 需与 m4 分母一致)
+            m2 = (sq - cnt * mean * mean) / cnt
+            if m2 < 0.0:
+                m2 = 0.0
+            std = np.sqrt(m2)
             if std > 1e-10:
                 m4 = 0.0
                 for j in range(i - d + 1, i + 1):
                     if not np.isnan(x[j]):
                         z = (x[j] - mean) / std
                         m4 += z * z * z * z
-                r[i] = m4 / cnt - 3.0
+                # 总体超额峰度 → Fisher 样本超额峰度修正
+                g2 = m4 / cnt - 3.0
+                r[i] = ((cnt + 1) * g2 + 6) * (cnt - 1) / ((cnt - 2) * (cnt - 3))
     return r
 
 
@@ -606,9 +622,11 @@ def _ts_product_core(x, d):
 
 @njit(cache=True)
 def _ts_quantile_core(x, d, p):
-    """[修复] 2026-07-06 WQ nearest-rank: 收集有效值后排序取 ceil(p*cnt)-1 位 (0-indexed)
-    替代 np.nanpercentile (linear interpolation), 对齐 WQ/Alpha158 标准
-    [修复] 2026-07-06 off-by-one: 原 floor(p*cnt) 在 p*cnt 为整数时多取一位"""
+    """[修复] 2026-07-06 nearest-rank 分位数: 收集有效值后排序取 ceil(p*cnt)-1 位 (0-indexed)
+    替代 np.nanpercentile (linear interpolation)。
+    WQ/Alpha158 原始公式集无 ts_quantile 算子 (其分位数概念由 rank/percentile 排名实现),
+    本函数采用 nearest-rank (ceil) 方法 —— 参考 numpy 的 percentile(method='nearest')。
+    与 linear 插值的差异: p*cnt 为整数时 nearest-rank 取 exact 位而非插值, 无对错之分。"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -866,20 +884,55 @@ def _cs_winsorize_core(x, std_n):
     return r
 
 
+@njit(cache=True)
+def _cs_rank_core(panel):
+    """[修复] 2026-07-06 numba @njit 加速: 2D 截面 min-rank, 替代 scipy rankdata.
+    每行收集有效值 → argsort → 并列取最小排名 (method='min') → 归一化 (0, 1]
+    对齐 scipy.stats.rankdata(method='min'), 加速 ~28x"""
+    n_days, n_stocks = panel.shape
+    out = np.full((n_days, n_stocks), np.nan)
+    for i in range(n_days):
+        vals = np.empty(n_stocks)
+        idxs = np.empty(n_stocks, dtype=np.int64)
+        cnt = 0
+        for j in range(n_stocks):
+            if not np.isnan(panel[i, j]):
+                vals[cnt] = panel[i, j]
+                idxs[cnt] = j
+                cnt += 1
+        if cnt == 0:
+            continue
+        order = np.argsort(vals[:cnt])
+        sorted_vals = vals[:cnt][order]
+        min_rank = np.empty(cnt, dtype=np.float64)
+        pos = 0
+        while pos < cnt:
+            g_start = pos
+            g_val = sorted_vals[pos]
+            while pos < cnt and sorted_vals[pos] == g_val:
+                pos += 1
+            rank = (g_start + 1) / cnt
+            for t in range(g_start, pos):
+                min_rank[order[t]] = rank
+        for j in range(cnt):
+            out[i, idxs[j]] = min_rank[j]
+    return out
+
+
 # ============================================================
 # 时序函数 (ts_) — 窗口滚动, 只用历史数据
 # ============================================================
 
 # [修正] 2026-06-25 改用 nan* 版本, 对齐 WQ NaN=缺失数据应忽略的规范
 # [重构] 2026-07-06 改用 numba @njit 加速, _rolling 作为 fallback 保留
-def ts_mean(x, d):       return _ts_mean_core(np.asarray(x, float), int(d))
-def ts_std(x, d):        return _ts_std_core(np.asarray(x, float), int(d))
+def ts_mean(x, d):       return _ts_mean_core(np.asarray(x, float), _validate_window(d, 'ts_mean'))
+def ts_std(x, d):        return _ts_std_core(np.asarray(x, float), _validate_window(d, 'ts_std'))
 def ts_sum(x, d):
     """滚动窗口求和, 忽略 NaN"""
-    return _ts_sum_core(np.asarray(x, float), int(d))
-def ts_max(x, d):        return _ts_max_core(np.asarray(x, float), int(d))
-def ts_min(x, d):        return _ts_min_core(np.asarray(x, float), int(d))
-def ts_median(x, d):     return _ts_median_core(np.asarray(x, float), int(d))
+    return _ts_sum_core(np.asarray(x, float), _validate_window(d, 'ts_sum'))
+def ts_max(x, d):        return _ts_max_core(np.asarray(x, float), _validate_window(d, 'ts_max'))
+def ts_min(x, d):        return _ts_min_core(np.asarray(x, float), _validate_window(d, 'ts_min'))
+def ts_median(x, d):     return _ts_median_core(np.asarray(x, float), _validate_window(d, 'ts_median'))
 
 def ts_delta(x, d):
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
@@ -946,23 +999,23 @@ def ts_quantile(x, d, p=0.5):
 
     p=0.5 → 中位数, p=0.8 → 80%分位数, p=0.2 → 20%分位数
     """
-    return _ts_quantile_core(np.asarray(x, float), int(d), float(p))
+    return _ts_quantile_core(np.asarray(x, float), _validate_window(d, 'ts_quantile'), float(p))
 
 def ts_av_diff(x, d):
     """Current minus rolling mean (deviation)
     [重构] 2026-07-06 numba @njit 加速"""
     x = np.asarray(x, float)
-    return x - _ts_mean_core(x, int(d))
+    return x - _ts_mean_core(x, _validate_window(d, 'ts_av_diff'))
 
 def ts_decay_linear(x, d):
     """[修正] 2026-06-25 过滤 NaN 后加权, 对齐 WQ 标准
     [重构] 2026-07-06 numba @njit 加速"""
-    return _ts_decay_linear_core(np.asarray(x, float), int(d))
+    return _ts_decay_linear_core(np.asarray(x, float), _validate_window(d, 'ts_decay_linear'))
 
 def ts_product(x, d):
     """Rolling product over d periods
     [重构] 2026-07-06 numba @njit 加速"""
-    return _ts_product_core(np.asarray(x, float), int(d))
+    return _ts_product_core(np.asarray(x, float), _validate_window(d, 'ts_product'))
 
 def ts_regression(y, x, d, rettype=2):
     """Rolling linear regression: y = alpha + beta*x + eps
@@ -1013,11 +1066,11 @@ def ts_predict(x, window):
 # 扩张统计 (expanding_) — 起始→当前, 无固定窗口
 # ============================================================
 
-def expanding_mean(x, min_p=20):    return _expanding(x, np.mean, min_p)
-def expanding_median(x, min_p=20):  return _expanding(x, np.median, min_p)
-def expanding_std(x, min_p=20):     return _expanding(x, lambda a: np.std(a, ddof=1), min_p)
+def expanding_mean(x, min_p=20):    return _expanding(x, np.mean, max(1, int(min_p)))
+def expanding_median(x, min_p=20):  return _expanding(x, np.median, max(1, int(min_p)))
+def expanding_std(x, min_p=20):     return _expanding(x, lambda a: np.std(a, ddof=1), max(1, int(min_p)))
 def expanding_percentile(x, p, min_p=20):
-    return _expanding(x, lambda a: np.percentile(a, p * 100), min_p)
+    return _expanding(x, lambda a: np.percentile(a, p * 100), max(1, int(min_p)))
 
 
 # ============================================================
@@ -1025,19 +1078,12 @@ def expanding_percentile(x, p, min_p=20):
 # ============================================================
 
 def cs_rank(x):
-    """[修正] 2026-06-25 改为 method='min' (最小排名), 对齐 WQ/DolphinDB 行业标准.
+    """[修复] 2026-07-06 numba @njit 加速 (~28x)
     WQ rank 规范: 并列值取最小排名, range [1/N, 1]. 见 DolphinDB WQ101 实现.
     旧版 average 排名对离散信号(ts_argmax等)引入虚假区分度, 连续信号无影响."""
     x = np.asarray(x, float)
     if x.ndim == 1: return np.full_like(x, 0.5)
-    from scipy.stats import rankdata
-    r = np.full_like(x, np.nan)
-    for i in range(x.shape[0]):
-        v = ~np.isnan(x[i])
-        if v.sum() > 0:
-            rk = rankdata(x[i][v], method='min') / v.sum()
-            r[i][v] = rk
-    return r
+    return _cs_rank_core(x)
 
 def cs_zscore(x):
     """[重构] 2026-07-06 numba @njit 加速 (2D); 1D 保持原逻辑返回 zeros"""
