@@ -144,7 +144,7 @@ ts_regression_residual(x, w)    # 对时间做线性回归的残差
 
 # 截面算子 (6个)
 cs_rank(x)         cs_zscore(x)        cs_scale(x)
-cs_winsorize(x)    cs_normalize(x)     cs_quantile(x)
+cs_winsorize(x)    cs_quantile(x)
 
 # 扩张统计 (4个, 无前向偏差)
 expanding_mean(x)        expanding_median(x)

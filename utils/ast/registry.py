@@ -28,7 +28,7 @@ from .functions import (
     ts_regression, ts_resid,
     ts_slope, ts_rsq, ts_intercept, ts_predict,
     expanding_mean, expanding_median, expanding_std, expanding_percentile,
-    cs_rank, cs_zscore, cs_scale, cs_winsorize, cs_normalize, cs_quantile,
+    cs_rank, cs_zscore, cs_scale, cs_winsorize, cs_quantile,
     safe_abs, safe_log, safe_sqrt, safe_sign, safe_exp, safe_tanh,
     safe_sigmoid, safe_relu, signed_power, safe_max, safe_min,
     persist,

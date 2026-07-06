@@ -57,7 +57,7 @@ PRIMITIVES = {
     ],
     # 截面函数
     'cs': ['cs_rank', 'cs_zscore', 'cs_scale', 'cs_winsorize',
-           'cs_normalize', 'cs_quantile'],
+           'cs_quantile'],
     # 算术运算
     'arith': ['+', '-', '*'],
 }

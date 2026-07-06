@@ -350,10 +350,14 @@ def _ts_median_core(x, d):
 
 @njit(cache=True)
 def _ts_rank_core(x, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动排名, searchsorted 找最后有效值位置"""
+    """[重构] 2026-07-06 numba @njit 加速: 滚动排名
+    [修复] 2026-07-06 当前值 x[i] 为 NaN 时返回 NaN (原用 valid[cnt-1] 返回过期排名, 污染截面)"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
+        # [修复] 当前值为 NaN 时无法计算排名, 保持 NaN
+        if np.isnan(x[i]):
+            continue
         cnt = 0
         for j in range(i - d + 1, i + 1):
             if not np.isnan(x[j]):
@@ -366,7 +370,8 @@ def _ts_rank_core(x, d):
                     valid[k] = x[j]
                     k += 1
             sorted_v = np.sort(valid)
-            pos = np.searchsorted(sorted_v, valid[cnt - 1])
+            # [修复] 用 x[i] (当前值) 而非 valid[cnt-1] (最后有效值)
+            pos = np.searchsorted(sorted_v, x[i])
             r[i] = (pos + 1) / cnt
     return r
 
@@ -413,7 +418,8 @@ def _ts_argmin_core(x, d):
 
 @njit(cache=True)
 def _ts_corr_core(x, y, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动相关系数, 同时跳过 x/y 的 NaN, 有效值<3 返回 NaN"""
+    """[重构] 2026-07-06 numba @njit 加速: 滚动相关系数, 同时跳过 x/y 的 NaN, 有效值<3 返回 NaN
+    [修复] 2026-07-06 std≈0 时返回 NaN (原 0.0 与 ts_zscore 不一致, 掩盖无法计算的事实)"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -443,9 +449,8 @@ def _ts_corr_core(x, y, d):
                 var_y = 0.0
             std_x = np.sqrt(var_x)
             std_y = np.sqrt(var_y)
-            if std_x < 1e-10 or std_y < 1e-10:
-                r[i] = 0.0
-            else:
+            # [修复] std≈0 时保持 NaN (原 r[i]=0.0 与 ts_zscore 不一致)
+            if std_x > 1e-10 and std_y > 1e-10:
                 r[i] = cov_xy / (std_x * std_y)
     return r
 
@@ -476,7 +481,8 @@ def _ts_cov_core(x, y, d):
 
 @njit(cache=True)
 def _ts_skew_core(x, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动偏度, 有效值<3 返回 NaN, std≈0 返回 0"""
+    """[重构] 2026-07-06 numba @njit 加速: 滚动偏度, 有效值<3 返回 NaN
+    [修复] 2026-07-06 std≈0 时返回 NaN (原 0.0 与 ts_zscore 不一致)"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -494,9 +500,8 @@ def _ts_skew_core(x, d):
             if var < 0.0:
                 var = 0.0
             std = np.sqrt(var)
-            if std < 1e-10:
-                r[i] = 0.0
-            else:
+            # [修复] std≈0 时保持 NaN (原 r[i]=0.0)
+            if std > 1e-10:
                 m3 = 0.0
                 for j in range(i - d + 1, i + 1):
                     if not np.isnan(x[j]):
@@ -508,7 +513,8 @@ def _ts_skew_core(x, d):
 
 @njit(cache=True)
 def _ts_kurt_core(x, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动超额峰度, 有效值<4 返回 NaN, std≈0 返回 0"""
+    """[重构] 2026-07-06 numba @njit 加速: 滚动超额峰度, 有效值<4 返回 NaN
+    [修复] 2026-07-06 std≈0 时返回 NaN (原 0.0 与 ts_zscore 不一致)"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -526,9 +532,8 @@ def _ts_kurt_core(x, d):
             if var < 0.0:
                 var = 0.0
             std = np.sqrt(var)
-            if std < 1e-10:
-                r[i] = 0.0
-            else:
+            # [修复] std≈0 时保持 NaN (原 r[i]=0.0)
+            if std > 1e-10:
                 m4 = 0.0
                 for j in range(i - d + 1, i + 1):
                     if not np.isnan(x[j]):
@@ -601,7 +606,9 @@ def _ts_product_core(x, d):
 
 @njit(cache=True)
 def _ts_quantile_core(x, d, p):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动分位数, 收集有效值后用 nanpercentile"""
+    """[修复] 2026-07-06 WQ nearest-rank: 收集有效值后排序取 ceil(p*cnt)-1 位 (0-indexed)
+    替代 np.nanpercentile (linear interpolation), 对齐 WQ/Alpha158 标准
+    [修复] 2026-07-06 off-by-one: 原 floor(p*cnt) 在 p*cnt 为整数时多取一位"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -610,7 +617,22 @@ def _ts_quantile_core(x, d, p):
             if not np.isnan(x[j]):
                 cnt += 1
         if cnt > 0:
-            r[i] = np.nanpercentile(x[i - d + 1 : i + 1], p * 100.0)
+            # 收集有效值
+            valid = np.empty(cnt)
+            k = 0
+            for j in range(i - d + 1, i + 1):
+                if not np.isnan(x[j]):
+                    valid[k] = x[j]
+                    k += 1
+            # 排序取 nearest-rank (1-indexed: ceil(p*cnt), 转 0-indexed: -1)
+            sorted_v = np.sort(valid)
+            # [修复] ceil(p*cnt)-1 替代 floor(p*cnt), 并限制范围
+            idx = int(np.ceil(p * cnt)) - 1
+            if idx < 0:
+                idx = 0
+            elif idx > cnt - 1:
+                idx = cnt - 1
+            r[i] = sorted_v[idx]
     return r
 
 
@@ -695,12 +717,18 @@ def _ts_regression_core(y, x, d, rettype):
 def _ts_linear_reg_core(x, window, rettype, fill_value):
     """[重构] 2026-07-06 numba @njit 加速: 单变量 x~t 趋势线性回归
     rettype: 0=slope, 1=intercept, 2=resid, 3=predict, 4=rsq
-    fill_value: ts_resid 用 0.0, 其他用 NaN; window<3 全 0"""
+    fill_value: 冷启动/数据不足时的填充值 (ts_resid 传 0.0, 其他传 NaN)
+    [修复] 2026-07-06 window<3 时尊重 fill_value (原硬编码 0.0 导致 ts_slope 等返回虚假 0)
+    [修复] 2026-07-06 rettype=2/3 用 x[i] 和 window-1 (原用 valid[cnt-1] 和 cnt-1 返回过期值)"""
     n = len(x)
     if window < 3:
-        return np.zeros(n)
+        # [修复] 尊重 fill_value, 不硬编码 0.0
+        return np.full(n, fill_value)
     r = np.full(n, fill_value)
     for i in range(window - 1, n):
+        # [修复] 当前值 x[i] 为 NaN 时无法计算残差/预测, 保持 fill_value
+        if np.isnan(x[i]):
+            continue
         cnt = 0
         for j in range(i - window + 1, i + 1):
             if not np.isnan(x[j]):
@@ -734,10 +762,12 @@ def _ts_linear_reg_core(x, window, rettype, fill_value):
                 elif rettype == 1:
                     r[i] = a
                 elif rettype == 2:
-                    predicted = a + b * (cnt - 1)
-                    r[i] = valid[cnt - 1] - predicted
+                    # [修复] 用 x[i] 和当前时刻 window-1 (原用 valid[cnt-1] 和 cnt-1)
+                    predicted = a + b * (window - 1)
+                    r[i] = x[i] - predicted
                 elif rettype == 3:
-                    r[i] = a + b * (cnt - 1)
+                    # [修复] 预测当前时刻 window-1 (原用 cnt-1)
+                    r[i] = a + b * (window - 1)
                 elif rettype == 4:
                     ss_res = 0.0
                     ss_tot = 0.0
@@ -950,8 +980,9 @@ def ts_regression(y, x, d, rettype=2):
 
 def ts_resid(x, window):
     """时序回归残差: 对时间做线性回归 x=a+b*t，返回当前值-预测值
-    [重构] 2026-07-06 numba @njit 加速, 默认填充值 0.0"""
-    return _ts_linear_reg_core(np.asarray(x, float), int(window), 2, 0.0)
+    [重构] 2026-07-06 numba @njit 加速
+    [修复] 2026-07-06 冷启动期返回 NaN (原 0.0 违反冷启动保护, 掩盖数据不足)"""
+    return _ts_linear_reg_core(np.asarray(x, float), int(window), 2, np.nan)
 
 
 def ts_slope(x, window):
@@ -1347,7 +1378,7 @@ FUNC_REGISTRY: Dict[str, Callable] = {
     # ── 截面 (cs_) ──
     'cs_rank':   cs_rank,   'cs_zscore':   cs_zscore,
     'cs_scale':  cs_scale,  'cs_winsorize': cs_winsorize,
-    'cs_normalize': cs_normalize, 'cs_quantile': cs_quantile,
+    'cs_quantile': cs_quantile,
 
     # ── 数学 ──
     'abs': safe_abs, 'log': safe_log, 'sqrt': safe_sqrt,
@@ -1408,7 +1439,7 @@ FUNC_CATEGORIES = {
                 'ts_reg_resid', 'ts_reg_predict', 'ts_reg_rsq',
                 'ts_intercept', 'ts_predict', 'ts_resid', 'ts_rsq'],
     '扩张统计': ['expanding_mean', 'expanding_median', 'expanding_std', 'expanding_percentile'],
-    '截面算子': ['cs_rank', 'cs_zscore', 'cs_scale', 'cs_winsorize', 'cs_normalize', 'cs_quantile'],
+    '截面算子': ['cs_rank', 'cs_zscore', 'cs_scale', 'cs_winsorize', 'cs_quantile'],
     '特征计算': ['rsi', 'atr', 'atr_sma', 'macd', 'adx', 'cci', 'bb_width', 'stddev',
                 'ema', 'tsf', 'kama', 'trima', 'wma', 'dema', 'hv', 'natr',
                 'var', 'linearreg', 'vol_ratio', 'amt_ratio', 'wilder_smooth'],

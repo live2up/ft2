@@ -317,7 +317,7 @@ AST_GRAMMAR_SPEC = """
    expanding_std, expanding_percentile
 
 3. **截面算子** (cs_*): cs_rank, cs_zscore, cs_scale, cs_winsorize,
-   cs_normalize, cs_quantile
+   cs_quantile
    注意: 截面函数需要完整 2D 面板数据, 不能在单品种择时中使用
 
 4. **特征计算**: rsi, atr, atr_sma, macd, adx, cci, bb_width,
