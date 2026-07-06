@@ -5,8 +5,9 @@ utils/gp/v5/config.py — GP 配置、权重管理、个体定义
 """
 
 import ast
+import random
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 from utils.ast.dsl import parse_expression, ast_depth, ast_node_count
@@ -54,10 +55,14 @@ class TreeGenConfig:
     控制 GP 随机生树时变量/函数的选择偏置，引导搜索往特定方向聚焦。
     默认 None = 等概率 (完全兼容现有行为)。
 
+    [重构] 2026-07-05 新增 rng 字段: 每个实例持有独立随机数生成器,
+    消除模块级全局 random 状态, 支持多实例多线程并行 + 可复现性。
+
     用法:
         cfg = TreeGenConfig(var_weights={'AMOUNT': 3, 'VOLUME': 2})
         cfg = TreeGenConfig(var_allowlist={'AMOUNT', 'VOLUME'})
         cfg = TreeGenConfig(mode='continuous')
+        cfg = TreeGenConfig(rng=random.Random(42))  # 可复现
     """
     mode: Optional[str] = None
     group_weights: Optional[Dict[str, float]] = None
@@ -70,6 +75,7 @@ class TreeGenConfig:
     adaptive: bool = False
     adaptive_lr: float = 0.3
     adaptive_every: int = 3
+    rng: random.Random = field(default_factory=random.Random)
 
 DEFAULT_TREE_GEN_CONFIG = TreeGenConfig(
     group_weights={'ts_function':25, 'feature_function':13, 'math_function':12,

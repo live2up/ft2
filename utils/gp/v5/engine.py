@@ -3,12 +3,15 @@ utils/gp/v5/engine.py — 遗传编程引擎核心 (AST 原生)
 =============================================================================
 
 [抽取] 2026-07-05 从 factor/v5/gp_engine.py 抽取，供 factor 和 signals 共享。
+[重构] 2026-07-05 消除模块级全局变量 _TREE_GEN_CONFIG 和 _CANONICALIZE_MEMO,
+       所有随机函数接收 cfg 参数, 支持多实例多线程并行。
 
 """
 import ast
 import copy
 import random
 import logging
+import threading
 import numpy as np
 from typing import Dict, List, Optional, Callable
 from dataclasses import fields as dataclass_fields
@@ -27,8 +30,8 @@ from .config import (
 
 logger = logging.getLogger(__name__)
 
-# [模块级全局] TreeGenConfig — 在 run() 上下文管理器中激活
-_TREE_GEN_CONFIG: TreeGenConfig = DEFAULT_TREE_GEN_CONFIG
+# [重构] 2026-07-05 删除模块级全局 _TREE_GEN_CONFIG, 所有随机函数改为接收 cfg 参数
+# [重构] 2026-07-05 删除 _CANONICALIZE_MEMO, 改用 expr_str 做 key (见 _canonicalize_key)
 
 
 # ============================================================
@@ -142,40 +145,43 @@ def _replace_subtree(tree: ast.Expression, old_node: ast.AST, new_node: ast.AST)
 
 # ============================================================
 # 随机树生成
+# [重构] 2026-07-05 所有函数接收 cfg: TreeGenConfig, 用 cfg.rng 替代 random
 # ============================================================
 
-def _random_variable() -> ast.Name:
+def _random_variable(cfg: TreeGenConfig) -> ast.Name:
     # [重构] 2026-07-04 支持 var_allowlist (白名单) 和 var_weights (权重偏置)
-    cfg = _TREE_GEN_CONFIG
+    # [重构] 2026-07-05 接收 cfg 参数, 用 cfg.rng
+    rng = cfg.rng
     # allowlist 优先: 只在白名单中等概率抽
     if cfg.var_allowlist:
         choices = list(cfg.var_allowlist & set(GP_VARIABLES))
         if choices:
-            return ast.Name(id=random.choice(choices), ctx=ast.Load())
+            return ast.Name(id=rng.choice(choices), ctx=ast.Load())
         # allowlist 与 GP_VARIABLES 无交集 → 退化到全变量
     # 否则按权重抽
     vw = cfg.var_weights
     if vw:
         var_names = list(vw.keys())
         var_weights = [vw[v] for v in var_names]
-        return ast.Name(id=random.choices(var_names, weights=var_weights, k=1)[0], ctx=ast.Load())
-    return ast.Name(id=random.choice(GP_VARIABLES), ctx=ast.Load())
+        return ast.Name(id=rng.choices(var_names, weights=var_weights, k=1)[0], ctx=ast.Load())
+    return ast.Name(id=rng.choice(GP_VARIABLES), ctx=ast.Load())
 
 
-def _random_constant() -> ast.Constant:
-    return ast.Constant(value=random.choice(GP_CONSTANTS))
+def _random_constant(cfg: TreeGenConfig) -> ast.Constant:
+    return ast.Constant(value=cfg.rng.choice(GP_CONSTANTS))
 
 
-def _random_terminal() -> ast.AST:
-    if random.random() < 0.85:
-        return _random_variable()
-    return _random_constant()
+def _random_terminal(cfg: TreeGenConfig) -> ast.AST:
+    if cfg.rng.random() < 0.85:
+        return _random_variable(cfg)
+    return _random_constant(cfg)
 
 
-def _random_ts_call(depth: int) -> ast.Call:
+def _random_ts_call(cfg: TreeGenConfig, depth: int) -> ast.Call:
     # [重构] 2026-07-04 支持 func_allowlist (白名单) 和 ts_weights (权重偏置)
     # [优化] 2026-07-04 func_allowlist 作为过滤器而非替代品: 先按权重选, 再卡白名单
-    cfg = _TREE_GEN_CONFIG
+    # [重构] 2026-07-05 接收 cfg 参数, 用 cfg.rng
+    rng = cfg.rng
     tw = cfg.ts_weights
     if tw:
         # 权重组 → 选函数
@@ -187,15 +193,15 @@ def _random_ts_call(depth: int) -> ast.Call:
             if filtered:
                 func_names, func_weights = zip(*filtered)
             # 交集为空 → 保留原权重组 (不降级)
-        func_name = random.choices(func_names, weights=func_weights, k=1)[0]
+        func_name = rng.choices(func_names, weights=func_weights, k=1)[0]
     elif cfg.func_allowlist:
         available = [f for f in cfg.func_allowlist if f in TS_FUNCTIONS]
-        func_name = random.choice(available) if available else random.choice(list(TS_FUNCTIONS.keys()))
+        func_name = rng.choice(available) if available else rng.choice(list(TS_FUNCTIONS.keys()))
     else:
-        func_name = random.choice(list(TS_FUNCTIONS.keys()))
+        func_name = rng.choice(list(TS_FUNCTIONS.keys()))
     windows = TS_FUNCTIONS.get(func_name, [10, 20])
-    arg = _grow_tree(depth - 1, prefer_variable=True)
-    window = ast.Constant(value=random.choice(windows))
+    arg = _grow_tree(cfg, depth - 1, prefer_variable=True)
+    window = ast.Constant(value=rng.choice(windows))
     return ast.Call(
         func=ast.Name(id=func_name, ctx=ast.Load()),
         args=[arg, window], keywords=[],
@@ -203,10 +209,11 @@ def _random_ts_call(depth: int) -> ast.Call:
 
 
 # [新增] 2026-06-23 数学原语树节点 (单参数, 无窗口)
-def _random_math_call(depth: int) -> ast.Call:
+def _random_math_call(cfg: TreeGenConfig, depth: int) -> ast.Call:
     # [重构] 2026-07-04 支持 func_allowlist
     # [优化] 2026-07-04 func_allowlist 作为过滤器而非替代品
-    cfg = _TREE_GEN_CONFIG
+    # [重构] 2026-07-05 接收 cfg 参数, 用 cfg.rng
+    rng = cfg.rng
     mw = cfg.math_weights
     if mw:
         func_names = list(mw.keys())
@@ -215,28 +222,30 @@ def _random_math_call(depth: int) -> ast.Call:
             filtered = [(n, w) for n, w in zip(func_names, func_weights) if n in cfg.func_allowlist]
             if filtered:
                 func_names, func_weights = zip(*filtered)
-        func_name = random.choices(func_names, weights=func_weights, k=1)[0]
+        func_name = rng.choices(func_names, weights=func_weights, k=1)[0]
     elif cfg.func_allowlist:
         available = [f for f in cfg.func_allowlist if f in MATH_FUNCTIONS]
-        func_name = random.choice(available) if available else random.choice(MATH_FUNCTIONS)
+        func_name = rng.choice(available) if available else rng.choice(MATH_FUNCTIONS)
     else:
-        func_name = random.choice(MATH_FUNCTIONS)
-    arg = _grow_tree(depth - 1, prefer_variable=True)
+        func_name = rng.choice(MATH_FUNCTIONS)
+    arg = _grow_tree(cfg, depth - 1, prefer_variable=True)
     return ast.Call(
         func=ast.Name(id=func_name, ctx=ast.Load()),
         args=[arg], keywords=[],
     )
 
 
-def _random_feature_call(depth: int) -> ast.Call:
+def _random_feature_call(cfg: TreeGenConfig, depth: int) -> ast.Call:
     # 特征子组选择 (feature_1arg / feature_3arg / ratio)
-    fw = _TREE_GEN_CONFIG.feature_weights
+    # [重构] 2026-07-05 接收 cfg 参数, 用 cfg.rng
+    rng = cfg.rng
+    fw = cfg.feature_weights
     if fw:
         groups = list(fw.keys())
         weights = [fw[g] for g in groups]
-        chosen = random.choices(groups, weights=weights, k=1)[0]
+        chosen = rng.choices(groups, weights=weights, k=1)[0]
     else:
-        r = random.random()
+        r = rng.random()
         if r < 0.5:
             chosen = 'feature_1arg'
         elif r < 0.8:
@@ -245,27 +254,27 @@ def _random_feature_call(depth: int) -> ast.Call:
             chosen = 'ratio'
 
     if chosen == 'feature_1arg' and FEATURE_FUNCTIONS_1ARG:
-        func_name = random.choice(list(FEATURE_FUNCTIONS_1ARG.keys()))
+        func_name = rng.choice(list(FEATURE_FUNCTIONS_1ARG.keys()))
         windows = FEATURE_FUNCTIONS_1ARG[func_name]
-        arg = _grow_tree(depth - 1, prefer_variable=True)
+        arg = _grow_tree(cfg, depth - 1, prefer_variable=True)
         return ast.Call(
             func=ast.Name(id=func_name, ctx=ast.Load()),
-            args=[arg, ast.Constant(value=random.choice(windows))], keywords=[],
+            args=[arg, ast.Constant(value=rng.choice(windows))], keywords=[],
         )
     elif chosen == 'feature_3arg' and FEATURE_FUNCTIONS_3ARG:
-        func_name = random.choice(list(FEATURE_FUNCTIONS_3ARG.keys()))
+        func_name = rng.choice(list(FEATURE_FUNCTIONS_3ARG.keys()))
         windows = FEATURE_FUNCTIONS_3ARG[func_name]
         return ast.Call(
             func=ast.Name(id=func_name, ctx=ast.Load()),
             args=[ast.Name(id='HIGH', ctx=ast.Load()),
                   ast.Name(id='LOW', ctx=ast.Load()),
                   ast.Name(id='CLOSE', ctx=ast.Load()),
-                  ast.Constant(value=random.choice(windows))], keywords=[],
+                  ast.Constant(value=rng.choice(windows))], keywords=[],
         )
     else:
-        func_name = random.choice(list(RATIO_FUNCTIONS.keys()))
+        func_name = rng.choice(list(RATIO_FUNCTIONS.keys()))
         param_pairs = RATIO_FUNCTIONS[func_name]
-        short, long = random.choice(param_pairs)
+        short, long = rng.choice(param_pairs)
         var = 'AMOUNT' if 'amt' in func_name else 'VOLUME'
         return ast.Call(
             func=ast.Name(id=func_name, ctx=ast.Load()),
@@ -275,15 +284,16 @@ def _random_feature_call(depth: int) -> ast.Call:
         )
 
 
-def _random_compare(left: ast.AST) -> ast.Compare:
-    threshold = random.choice([0, 0, 0, 1.0, 1.5, 2.0, -1.0])
-    op = random.choice([ast.Gt(), ast.Lt(), ast.GtE(), ast.LtE()])
+def _random_compare(cfg: TreeGenConfig, left: ast.AST) -> ast.Compare:
+    rng = cfg.rng
+    threshold = rng.choice([0, 0, 0, 1.0, 1.5, 2.0, -1.0])
+    op = rng.choice([ast.Gt(), ast.Lt(), ast.GtE(), ast.LtE()])
     return ast.Compare(left=left, ops=[op], comparators=[ast.Constant(value=threshold)])
 
 
 def _mode_filtered_groups(gw: dict, mode: str) -> dict:
     """按 mode 过滤函数大类
-    
+
     [新增] 2026-07-04
     continuous: 禁用 comparison/logic/ternary/unary_op(Not) — 只生成连续值表达式
     predicate:  禁用 ts_function/feature_function/math_function — 只生成布尔表达式
@@ -302,7 +312,7 @@ def _mode_filtered_groups(gw: dict, mode: str) -> dict:
     return {k: v for k, v in gw.items() if k not in invalid}
 
 
-def _grow_tree(depth: int, prefer_variable: bool = False) -> ast.AST:
+def _grow_tree(cfg: TreeGenConfig, depth: int, prefer_variable: bool = False) -> ast.AST:
     """生长随机表达式树
 
     与 v3 的关键区别：直接生成 Python AST 节点
@@ -313,46 +323,47 @@ def _grow_tree(depth: int, prefer_variable: bool = False) -> ast.AST:
     - 支持 not
 
     [重构] 2026-07-04 大类权重支持 mode 过滤
+    [重构] 2026-07-05 接收 cfg 参数, 用 cfg.rng
     """
-    if depth <= 1 or (prefer_variable and random.random() < 0.7):
-        return _random_terminal()
+    rng = cfg.rng
+    if depth <= 1 or (prefer_variable and rng.random() < 0.7):
+        return _random_terminal(cfg)
 
-    # 从 TreeGenConfig 读函数大类权重，按 mode 过滤
-    cfg = _TREE_GEN_CONFIG
+    # 从 cfg 读函数大类权重，按 mode 过滤
     gw = _mode_filtered_groups(cfg.group_weights, cfg.mode)
     groups = list(gw.keys())
     gweights = [gw[g] for g in groups]
-    chosen = random.choices(groups, weights=gweights, k=1)[0]
+    chosen = rng.choices(groups, weights=gweights, k=1)[0]
 
     if chosen == 'ts_function':
         # 时序函数
-        return _random_ts_call(depth)
+        return _random_ts_call(cfg, depth)
     elif chosen == 'feature_function':
         # 特征函数
-        return _random_feature_call(depth)
+        return _random_feature_call(cfg, depth)
     elif chosen == 'math_function':
         # [新增] 2026-06-23 数学原语: sin, cos, exp, log, sqrt, abs, tanh
-        return _random_math_call(depth)
+        return _random_math_call(cfg, depth)
     elif chosen == 'comparison':
         # 比较: expr > 0
-        return _random_compare(_grow_tree(depth - 1, prefer_variable=True))
+        return _random_compare(cfg, _grow_tree(cfg, depth - 1, prefer_variable=True))
     elif chosen == 'logic':
         # 逻辑: ... and/or ...
-        left = _grow_tree(depth - 1)
-        right = _grow_tree(depth - 1)
-        op = ast.And() if random.random() < 0.6 else ast.Or()
+        left = _grow_tree(cfg, depth - 1)
+        right = _grow_tree(cfg, depth - 1)
+        op = ast.And() if rng.random() < 0.6 else ast.Or()
         return ast.BoolOp(op=op, values=[left, right])
     elif chosen == 'binary_op':
         # 二元: a + b, a * b
-        left = _grow_tree(depth - 1, prefer_variable=True)
-        right = _grow_tree(depth - 1, prefer_variable=True)
-        op = random.choice([ast.Add(), ast.Sub(), ast.Mult(), ast.Div()])
+        left = _grow_tree(cfg, depth - 1, prefer_variable=True)
+        right = _grow_tree(cfg, depth - 1, prefer_variable=True)
+        op = rng.choice([ast.Add(), ast.Sub(), ast.Mult(), ast.Div()])
         return ast.BinOp(left=left, op=op, right=right)
     elif chosen == 'unary_op':
         # 一元: -x (continuous 模式), not x (predicate 模式)
         # [重构] 2026-07-04 continuous 模式下禁用 Not (无意义: not(连续值))
         # [修复] 2026-07-04 消除 neg(neg(x)) → x (双重否定=恒等，省2节点)
-        operand = _grow_tree(depth - 1)
+        operand = _grow_tree(cfg, depth - 1)
         if cfg.mode == 'continuous':
             if isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.USub):
                 return operand.operand  # neg(neg(x)) → x
@@ -363,7 +374,7 @@ def _grow_tree(depth: int, prefer_variable: bool = False) -> ast.AST:
             return ast.UnaryOp(op=ast.Not(), operand=operand)
         else:
             # hybrid: 各 50%
-            if random.random() < 0.5:
+            if rng.random() < 0.5:
                 if isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.USub):
                     return operand.operand
                 return ast.UnaryOp(op=ast.USub(), operand=operand)
@@ -372,54 +383,52 @@ def _grow_tree(depth: int, prefer_variable: bool = False) -> ast.AST:
             return ast.UnaryOp(op=ast.Not(), operand=operand)
     else:
         # 三元: a if cond else b
-        cond = _grow_tree(depth - 1)
-        a_val = _grow_tree(depth - 1, prefer_variable=True)
-        b_val = _grow_tree(depth - 1, prefer_variable=True)
+        cond = _grow_tree(cfg, depth - 1)
+        a_val = _grow_tree(cfg, depth - 1, prefer_variable=True)
+        b_val = _grow_tree(cfg, depth - 1, prefer_variable=True)
         return ast.IfExp(test=cond, body=a_val, orelse=b_val)
 
 
-def _random_tree(max_depth: int = 6) -> ast.Expression:
-    depth = random.randint(2, max_depth)
-    body = _grow_tree(depth)
+def _random_tree(cfg: TreeGenConfig, max_depth: int = 6) -> ast.Expression:
+    rng = cfg.rng
+    # [修复] 2026-07-06 P1-6: max_depth<2 时 randint(2, max_depth) 崩溃, 加下限保护
+    depth = rng.randint(2, max(2, max_depth))
+    body = _grow_tree(cfg, depth)
     tree = ast.Expression(body=body)
     ast.fix_missing_locations(tree)
     # [新增] 2026-07-04 随机生成后简化 AST
     return _simplify_ast(tree)
 
 
-def _random_tree_explore(max_depth: int = 6) -> ast.Expression:
+def _random_tree_explore(user_cfg: TreeGenConfig, max_depth: int = 6) -> ast.Expression:
     """ε-greedy 探索通道: 无视用户权重，用默认全空间生成树
-    
+
     [新增] 2026-07-05 P0: 用等概率权重但继承用户的 mode。
-    保持权重全部开放，但保留类型安全（continuous不含if）。"""
-    global _TREE_GEN_CONFIG
-    saved = _TREE_GEN_CONFIG
-    user_mode = saved.mode if saved else None
-    if user_mode:
-        # 继承用户 mode + DEFAULT 的权重配置
-        _TREE_GEN_CONFIG = TreeGenConfig(
-            mode=user_mode,
-            group_weights=DEFAULT_TREE_GEN_CONFIG.group_weights,
-            ts_weights=DEFAULT_TREE_GEN_CONFIG.ts_weights,
-            math_weights=DEFAULT_TREE_GEN_CONFIG.math_weights,
-            feature_weights=DEFAULT_TREE_GEN_CONFIG.feature_weights,
-        )
-    else:
-        _TREE_GEN_CONFIG = DEFAULT_TREE_GEN_CONFIG
-    try:
-        depth = random.randint(2, max_depth)
-        body = _grow_tree(depth)
-        tree = ast.Expression(body=body)
-        ast.fix_missing_locations(tree)
-        return _simplify_ast(tree)
-    finally:
-        _TREE_GEN_CONFIG = saved
+    保持权重全部开放，但保留类型安全（continuous不含if）。
+    [重构] 2026-07-05 不再切换全局变量, 改为构建临时 explore_cfg, 共享 user_cfg.rng
+    """
+    user_mode = user_cfg.mode if user_cfg else None
+    explore_cfg = TreeGenConfig(
+        mode=user_mode,
+        group_weights=DEFAULT_TREE_GEN_CONFIG.group_weights,
+        ts_weights=DEFAULT_TREE_GEN_CONFIG.ts_weights,
+        math_weights=DEFAULT_TREE_GEN_CONFIG.math_weights,
+        feature_weights=DEFAULT_TREE_GEN_CONFIG.feature_weights,
+        rng=user_cfg.rng,  # 共享 rng 保持可复现性
+    )
+    rng = explore_cfg.rng
+    # [修复] 2026-07-06 P1-6: max_depth<2 时 randint(2, max_depth) 崩溃, 加下限保护
+    depth = rng.randint(2, max(2, max_depth))
+    body = _grow_tree(explore_cfg, depth)
+    tree = ast.Expression(body=body)
+    ast.fix_missing_locations(tree)
+    return _simplify_ast(tree)
 
 
 # [新增] 2026-07-04 AST 轻量简化: 消除 neg(neg(x))/x*1/x+0 等冗余
 def _simplify_ast(tree: ast.Expression) -> ast.Expression:
     """后处理简化 AST，消除双重否定和恒等运算。
-    
+
     在随机生成/变异/交叉后调用，节省节点数并提升可读性。
     不改变语义，只做结构简化。
     """
@@ -437,7 +446,7 @@ def _simplify_ast(tree: ast.Expression) -> ast.Expression:
                             field_value[i] = _walk_child
                 elif field_value is child and _walk_child is not None:  # noqa: E711
                     setattr(node, field_name, _walk_child)
-        
+
         # neg(neg(x)) → x
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
             if isinstance(node.operand, ast.UnaryOp) and isinstance(node.operand.op, ast.USub):
@@ -485,7 +494,7 @@ def _simplify_ast(tree: ast.Expression) -> ast.Expression:
             except Exception:
                 pass
         return node
-    
+
     tree = copy.deepcopy(tree)
     tree.body = _walk(tree.body)
     ast.fix_missing_locations(tree)
@@ -495,21 +504,35 @@ def _simplify_ast(tree: ast.Expression) -> ast.Expression:
 # [新增] 2026-07-05 AST 规范化：用于缓存 key 语义去重
 # 仅做不改变数值语义的安全变换：交换律排序、纯常数折叠
 # 注意：规范化后的表达式仅用于缓存匹配，报告展示仍用原始 expression_str
-_CANONICALIZE_MEMO: Dict[int, ast.Expression] = {}
+# [重构] 2026-07-05 去掉 _CANONICALIZE_MEMO (id-based 不安全), 改用 expr_str 做 memo
+# [重构] 2026-07-06 P1-1: memo 从模块级移到实例级 (GPEngine._canonicalize_memo),
+#       并加 threading.Lock 保护多线程并发写, 避免跨实例污染和 check-then-set 竞态
 
-def _canonicalize_ast(tree: ast.Expression) -> ast.Expression:
-    """AST 规范化，用于同义不同形表达式的缓存去重。
+def _canonicalize_key(tree: ast.Expression,
+                      expr_str: str = None,
+                      memo: Dict[str, str] = None,
+                      lock=None) -> str:
+    """生成规范化的缓存 key 字符串。
 
-    安全规则：
+    [重构] 2026-07-05 直接返回字符串 key, 不再返回 AST 副本 (避免 deepcopy 开销)
+    [重构] 2026-07-06 P1-1: memo + lock 由调用方传入, 实例级隔离
+    安全规则:
       - Add/Mult 交换律排序（按子树字符串字典序）
       - 纯常数折叠（1+2→3 等）
       - 不处理非交换函数参数（如 ts_corr(a,b) ≠ ts_corr(b,a)）
-
-    返回的表达式不一定最可读，只作为缓存 key。
     """
-    tree_id = id(tree.body)
-    if tree_id in _CANONICALIZE_MEMO:
-        return _CANONICALIZE_MEMO[tree_id]
+    if expr_str is None:
+        expr_str = _expr_str(tree)
+
+    # 加锁的 check-then-set, 避免多线程并发规范化
+    if memo is not None:
+        if lock is not None:
+            with lock:
+                if expr_str in memo:
+                    return memo[expr_str]
+        else:
+            if expr_str in memo:
+                return memo[expr_str]
 
     def _canonicalize(node):
         # 自底向上递归处理子节点
@@ -553,78 +576,90 @@ def _canonicalize_ast(tree: ast.Expression) -> ast.Expression:
     new_tree = copy.deepcopy(tree)
     new_tree.body = _canonicalize(new_tree.body)
     ast.fix_missing_locations(new_tree)
-    _CANONICALIZE_MEMO[tree_id] = new_tree
-    return new_tree
+    key = _expr_str(new_tree)
+
+    if memo is not None:
+        if lock is not None:
+            with lock:
+                memo[expr_str] = key
+        else:
+            memo[expr_str] = key
+    return key
 
 
 # ============================================================
 # 变异算子
+# [重构] 2026-07-05 所有函数接收 cfg: TreeGenConfig, 用 cfg.rng
 # ============================================================
 
-def _mutate_subtree(tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
+def _mutate_subtree(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
     """子树替换变异"""
+    rng = cfg.rng
     new_tree = copy.deepcopy(tree)
     candidates = _collect_replaceable(new_tree)
     if not candidates:
         return new_tree
-    target = random.choice(candidates)
-    replacement = _grow_tree(random.randint(1, max_depth))
+    target = rng.choice(candidates)
+    replacement = _grow_tree(cfg, rng.randint(1, max_depth))
     _replace_subtree(new_tree, target, replacement)
     ast.fix_missing_locations(new_tree)
     # [新增] 2026-07-04 变异后简化 AST
     return _simplify_ast(new_tree)
 
 
-def _mutate_constant(tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
+def _mutate_constant(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
     """常数微调变异 — 小常量(<0.1)仅做离散跳变，防过拟合精度"""
+    rng = cfg.rng
     new_tree = copy.deepcopy(tree)
     constants = [n for n in ast.walk(new_tree.body)
                  if isinstance(n, ast.Constant) and isinstance(n.value, (int, float))]
     if not constants:
         return new_tree
-    target = random.choice(constants)
+    target = rng.choice(constants)
     v = target.value
     if isinstance(v, int):
-        delta = random.choice([-5, -2, -1, 1, 2, 5])
+        delta = rng.choice([-5, -2, -1, 1, 2, 5])
         target.value = max(1, v + delta)
     elif abs(v) < 0.1:
         # ε常量/除法稳定项 → 离散跳变到标准值，不加噪声
-        target.value = random.choice([0.001, 0.01, 0.02, 0.05])
+        target.value = rng.choice([0.001, 0.01, 0.02, 0.05])
     else:
-        noise = random.gauss(0, abs(v) * 0.1 + 0.01)
-        target.value = round(v + noise, 2)  # 四舍五入到2位
+        noise = rng.gauss(0, abs(v) * 0.1 + 0.01)
+        target.value = round(v + noise, 4)  # [修复] 2026-07-05 保留4位精度
     return new_tree
 
 
-def _mutate_window(tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
+def _mutate_window(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
     """窗口参数变异"""
+    rng = cfg.rng
     new_tree = copy.deepcopy(tree)
     calls = [n for n in ast.walk(new_tree.body)
              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
     if not calls:
         return new_tree
-    target = random.choice(calls)
+    target = rng.choice(calls)
     for i, arg in enumerate(target.args):
         if isinstance(arg, ast.Constant) and isinstance(arg.value, int):
-            delta = random.choice([-5, -2, -1, 1, 2, 5])
+            delta = rng.choice([-5, -2, -1, 1, 2, 5])
             arg.value = max(2, arg.value + delta)
             return new_tree
     return new_tree
 
 
-def _mutate_logic(tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
+def _mutate_logic(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
     """逻辑变异: and↔or, 添加/移除 not"""
+    rng = cfg.rng
     new_tree = copy.deepcopy(tree)
     bool_ops = [n for n in ast.walk(new_tree.body) if isinstance(n, ast.BoolOp)]
     not_ops = [n for n in ast.walk(new_tree.body)
                if isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.Not)]
 
-    if bool_ops and random.random() < 0.5:
-        target = random.choice(bool_ops)
+    if bool_ops and rng.random() < 0.5:
+        target = rng.choice(bool_ops)
         target.op = ast.Or() if isinstance(target.op, ast.And) else ast.And()
-    elif not_ops and random.random() < 0.6:
+    elif not_ops and rng.random() < 0.6:
         # 移除 not: not(X) → X
-        target = random.choice(not_ops)
+        target = rng.choice(not_ops)
         _replace_subtree(new_tree, target, target.operand)
         ast.fix_missing_locations(new_tree)
     else:
@@ -632,7 +667,7 @@ def _mutate_logic(tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
         candidates = [n for n in _collect_replaceable(new_tree)
                       if isinstance(n, (ast.Compare, ast.BoolOp))]
         if candidates:
-            target = random.choice(candidates)
+            target = rng.choice(candidates)
             not_node = ast.UnaryOp(op=ast.Not(), operand=copy.deepcopy(target))
             _replace_subtree(new_tree, target, not_node)
             ast.fix_missing_locations(new_tree)
@@ -640,18 +675,19 @@ def _mutate_logic(tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
     return new_tree
 
 
-def _mutate_insert_condition(tree: ast.Expression, max_depth: int = 3) -> ast.Expression:
+def _mutate_insert_condition(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 3) -> ast.Expression:
     """条件插入变异: 用 if-else 或 and/or 包装子树"""
+    rng = cfg.rng
     new_tree = copy.deepcopy(tree)
 
-    if random.random() < 0.5:
+    if rng.random() < 0.5:
         # expr → expr if condition else 0
         # 只选择产生数值的子树（排除函数名、布尔表达式）
         candidates = [n for n in _collect_replaceable(new_tree, mode='value')
                       if isinstance(n, (ast.BinOp, ast.Call))]
         if candidates:
-            target = random.choice(candidates)
-            condition = _grow_tree(max_depth)
+            target = rng.choice(candidates)
+            condition = _grow_tree(cfg, max_depth)
             if not isinstance(condition, (ast.Compare, ast.BoolOp)):
                 condition = ast.Compare(
                     left=condition, ops=[ast.Gt()],
@@ -666,13 +702,13 @@ def _mutate_insert_condition(tree: ast.Expression, max_depth: int = 3) -> ast.Ex
         candidates = [n for n in _collect_replaceable(new_tree, mode='bool')
                       if isinstance(n, (ast.Compare, ast.BoolOp))]
         if candidates:
-            target = random.choice(candidates)
-            extra_cond = _grow_tree(max_depth)
+            target = rng.choice(candidates)
+            extra_cond = _grow_tree(cfg, max_depth)
             if not isinstance(extra_cond, (ast.Compare, ast.BoolOp)):
                 extra_cond = ast.Compare(
                     left=extra_cond, ops=[ast.Gt()],
                     comparators=[ast.Constant(value=0)])
-            op = ast.And() if random.random() < 0.6 else ast.Or()
+            op = ast.And() if rng.random() < 0.6 else ast.Or()
             combined = ast.BoolOp(op=op, values=[copy.deepcopy(target), extra_cond])
             _replace_subtree(new_tree, target, combined)
 
@@ -680,6 +716,8 @@ def _mutate_insert_condition(tree: ast.Expression, max_depth: int = 3) -> ast.Ex
     return new_tree
 
 
+# 注意: _MUTATE_OPS 列表保留模块级引用, 但调用时需要传 cfg
+# GPEngine._mutate 中通过 self._mutate_weights 索引并传 cfg
 _MUTATE_OPS = [
     _mutate_subtree,
     _mutate_constant,
@@ -733,6 +771,7 @@ class GPEngine:
         self.elite_count = max(1, int(self.population_size * cfg['elite_ratio']))
         self.seed_ratio = cfg['seed_ratio']
         self.random_inject_count = max(1, int(self.population_size * cfg['random_inject_ratio']))
+        self._save_random_inject: int = self.random_inject_count  # [新增] 2026-07-05 用于停滞恢复
         self.parsimony_penalty = cfg['parsimony_penalty']
 
         # 变异算子权重
@@ -750,7 +789,9 @@ class GPEngine:
 
         # [重构] 2026-07-04 树生成概率配置构建
         # 用户设了的 key 保留，没设的填默认值；权重 fill_value=0 (禁止)
-        self.tree_gen_config = self._build_tree_config(tree_gen_config)
+        # [重构] 2026-07-05 注入独立 rng, 支持多实例并行 + 可复现性
+        rng = random.Random(random_seed) if random_seed is not None else random.Random()
+        self.tree_gen_config = self._build_tree_config(tree_gen_config, rng)
 
         # 数据形状
         self._shape = None
@@ -767,8 +808,12 @@ class GPEngine:
         self.history: List[Dict] = []
 
         # [新增] 2026-07-04 表达式缓存 + 多进程
-        self._fitness_cache: Dict[str, tuple] = {}  # expr_str → (fitness, depth, nodes)
+        self._fitness_cache: Dict[str, tuple] = {}  # canonical_key → (fitness, depth, nodes)
         self._parallel_workers: int = config.get('parallel_workers', 0) if config else 0
+        # [新增] 2026-07-06 P1-1: AST 规范化 memo 移到实例级 + 加锁
+        # 之前是模块级 _CANONICALIZE_STR_MEMO, 多实例多线程并发写会污染
+        self._canonicalize_memo: Dict[str, str] = {}
+        self._canonicalize_lock = threading.Lock()
 
         # [新增] 2026-07-05 SQLite 持久化缓存 — 跨 run 复用
         self._cache_db: str = config.get('cache_db', '') if config else ''
@@ -783,7 +828,10 @@ class GPEngine:
         # [新增] 2026-07-05 方向演化追踪 — 按语义签名分组，观察探索路径
         self.direction_log: Dict[str, List[float]] = {}  # signature → [fitness_per_gen]
         self._direction_best_expr: Dict[str, tuple] = {}  # signature → (best_fitness, expr_str)
-        self._direction_snapshot: int = 0  # 上次更新后的 direction_log 总记录数
+        self._direction_snapshot: int = 0  # [已弃用] 全局快照偏移, 见 _direction_per_sig_snapshot
+        # [修复] 2026-07-06 P1-2: 之前用全局偏移套到每个签名上, 新签名的记录永远取不到。
+        # 改为按签名独立记录偏移。
+        self._direction_per_sig_snapshot: Dict[str, int] = {}
 
         # [新增] 2026-07-05 P0 停滞检测 (AW-MEP 风格)
         self._stagnation_counter: int = 0
@@ -798,9 +846,11 @@ class GPEngine:
         # [新增] 2026-07-05 搜索优化: Lexicase 选择
         self._use_lexicase: bool = config.get('lexicase', False) if config else False
 
-        if random_seed is not None:
-            random.seed(random_seed)
-            np.random.seed(random_seed)
+        # [重构] 2026-07-05 不再 seed 全局 random/np.random, 改用实例 rng
+        # [修复] 2026-07-06 P1-5: 之前仍调用 np.random.seed() 设全局状态,
+        # 多实例多线程下会互相覆盖, 不可复现。完全移除, 由 fitness_calc 自行管理随机数
+        # (调用方应传入 np.random.Generator 而非依赖全局状态)。
+        # 如 fitness_calc 用到 numpy 随机, 调用方需在 fitness_calc 内部用 default_rng(seed)。
 
     # [新增] 2026-07-05 SQLite 持久化缓存 — 跨 run 复用
     def _init_sqlite_cache(self):
@@ -849,12 +899,24 @@ class GPEngine:
         conn.close()
 
     # [重构] 2026-07-04 树配置构建逻辑从 __init__ 抽离
-    def _build_tree_config(self, user_config: TreeGenConfig = None) -> TreeGenConfig:
-        """构建最终的 TreeGenConfig: 用户配置 + 默认填充 + mode/allowlist 透传"""
+    # [重构] 2026-07-05 接收 rng 参数, 注入到最终 config
+    def _build_tree_config(self, user_config: TreeGenConfig = None,
+                           rng: random.Random = None) -> TreeGenConfig:
+        """构建最终的 TreeGenConfig: 用户配置 + 默认填充 + mode/allowlist 透传 + rng 注入"""
         if user_config is None:
-            return DEFAULT_TREE_GEN_CONFIG
+            return TreeGenConfig(
+                group_weights=DEFAULT_TREE_GEN_CONFIG.group_weights,
+                ts_weights=DEFAULT_TREE_GEN_CONFIG.ts_weights,
+                math_weights=DEFAULT_TREE_GEN_CONFIG.math_weights,
+                feature_weights=DEFAULT_TREE_GEN_CONFIG.feature_weights,
+                rng=rng or random.Random(),
+            )
         filled = {}
         for field in dataclass_fields(TreeGenConfig):
+            if field.name == 'rng':
+                # [新增] rng 注入: 优先用外部传入的 (来自 GPEngine 实例)
+                filled[field.name] = rng or user_config.rng or random.Random()
+                continue
             user_val = getattr(user_config, field.name)
             default_val = getattr(DEFAULT_TREE_GEN_CONFIG, field.name)
             if user_val is None:
@@ -908,11 +970,12 @@ class GPEngine:
 
     def _evaluate_individual(self, ind: Individual) -> float:
         # [新增] 2026-07-04 表达式缓存: 命中直接返回 (含 metadata)
-        # [新增] 2026-07-05 用规范化 AST 生成缓存 key，实现语义去重
+        # [重构] 2026-07-05 用 _canonicalize_key 生成规范化字符串 key, 实现语义去重
         #        保留原始 expression_str 用于报告展示
         if not ind.expression_str:
             ind.expression_str = _expr_str(ind.tree)
-        key = _expr_str(_canonicalize_ast(ind.tree))
+        key = _canonicalize_key(ind.tree, ind.expression_str,
+                                self._canonicalize_memo, self._canonicalize_lock)
 
         if key in self._fitness_cache:
             cached_fit, cached_depth, cached_nodes = self._fitness_cache[key]
@@ -941,7 +1004,9 @@ class GPEngine:
             return -999.0
 
         fitness = self.fitness_calc.compute(factor_values)
-        if fitness < -998.0:
+        # [修复] 2026-07-06 P1-4: nan/inf 通过 `< -998.0` 检查 (nan<x 恒为 False),
+        # 会污染选择和缓存。改用 isfinite 拦截 nan/inf。
+        if not np.isfinite(fitness) or fitness < -998.0:
             return -999.0
 
         ind.depth = ast_depth(ind.tree)
@@ -956,22 +1021,25 @@ class GPEngine:
     @staticmethod
     def _expr_signature(expr_str: str) -> str:
         """从表达式提取语义签名，用于方向追踪
-        
+
         [新增] 2026-07-05
+        [修复] 2026-07-05 变量按出现频率排序取前4, 而非字母序 (更能代表表达式特征)
         签名格式: "m:math_funcs|t:ts_funcs|v:vars"
         例: "m:gauss|t:roc|v:REL_AMOUNT" — gauss 变换成交量变化率
-        
+
         同签名表达式 = 同一探索方向，不同签名 = 不同方向
         """
         if not expr_str:
             return "unknown"
         # 提取函数名
         import re
+        from collections import Counter
         funcs = set(re.findall(r'([a-z_]+)\(', expr_str))
         math_sig = '+'.join(sorted(f for f in funcs if f in MATH_FUNCTIONS)) or 'none'
         ts_sig = '+'.join(sorted(f for f in funcs if f in TS_FUNCTIONS or f in TS_FUNCTIONS_2ARG)) or 'none'
-        # 提取变量（大写标识符）
-        vars_sig = '+'.join(sorted(set(re.findall(r'\b([A-Z][A-Z_0-9]+)\b', expr_str)))[:4]) or 'none'
+        # [修复] 变量按出现频率排序取前4 (原 sorted(set(...))[:4] 是字母序, 不代表重要性)
+        var_counts = Counter(re.findall(r'\b([A-Z][A-Z_0-9]+)\b', expr_str))
+        vars_sig = '+'.join(v for v, _ in var_counts.most_common(4)) or 'none'
         return f"m:{math_sig}|t:{ts_sig}|v:{vars_sig}"
 
     def direction_report(self, min_fitness: float = 0.3) -> str:
@@ -1004,29 +1072,32 @@ class GPEngine:
 
     def _update_direction_weights(self):
         """EMA 闭环方向权重更新 — 扫描 direction_log 自动提权好方向
-        
+
         [新增] 2026-07-05 P0: 从方向监控数据中学习，让好方向的 var/ts/math 权重自动提升。
         EMA 公式: new_weight = (1-lr)*old + lr*(fitness/max_fitness)
-        
+        [修复] 2026-07-05 EMA 更新后做归一化, 防止权重发散或归零
+
         只处理自上次 snapshot 以来的新记录，避免每代重复计算。
         """
-        cfg = _TREE_GEN_CONFIG
+        cfg = self.tree_gen_config
         if not cfg or not cfg.adaptive:
             return
-        
+
         # 收集自上次更新以来的新方向记录
+        # [修复] 2026-07-06 P1-2: 改为按签名独立偏移, 新签名也能被处理
         new_records: Dict[str, List[float]] = {}
         total_entries = 0
         for sig, fits in self.direction_log.items():
-            new_fits = fits[self._direction_snapshot:]
+            offset = self._direction_per_sig_snapshot.get(sig, 0)
+            new_fits = fits[offset:]
             if new_fits:
                 new_records[sig] = new_fits
                 total_entries += len(new_fits)
-        self._direction_snapshot = sum(len(v) for v in self.direction_log.values())
-        
+            self._direction_per_sig_snapshot[sig] = len(fits)
+
         if total_entries < 10:
             return  # 样本太少，不够更新
-        
+
         # 计算每个方向的分值 (用最佳 fitness，加权出现频率)
         sig_scores = {}
         for sig, fits in new_records.items():
@@ -1035,38 +1106,38 @@ class GPEngine:
             best = max(fits)
             # 评分 = 最佳 × log(1+出现次数) — 兼顾质量和稳定性
             sig_scores[sig] = best * np.log1p(len(fits))
-        
+
         if not sig_scores:
             return
-        
+
         max_score = max(sig_scores.values())
         if max_score <= 0.1:
             return
-        
+
         # 提取各签名中的变量/函数，按分值得分聚合权重
         var_scores: Dict[str, float] = {}
         ts_scores: Dict[str, float] = {}
         math_scores: Dict[str, float] = {}
-        
+
         for sig, score in sig_scores.items():
             norm_score = score / max_score  # 归一化到 [0, 1]
-            
+
             # 解析签名: "m:gauss|t:ts_roc|v:REL_AMOUNT"
             parts = {}
             for p in sig.split('|'):
                 if ':' in p:
                     k, v = p.split(':', 1)
                     parts[k] = v.split('+') if v != 'none' else []
-            
+
             for v in parts.get('v', []):
                 var_scores[v] = var_scores.get(v, 0) + norm_score
             for f in parts.get('t', []):
                 ts_scores[f] = ts_scores.get(f, 0) + norm_score
             for f in parts.get('m', []):
                 math_scores[f] = math_scores.get(f, 0) + norm_score
-        
+
         lr = cfg.adaptive_lr
-        
+
         # EMA 更新 var_weights
         var_w = cfg.var_weights
         if var_w and var_scores:
@@ -1074,7 +1145,9 @@ class GPEngine:
                 old = var_w.get(v, 0)
                 score = var_scores.get(v, 0)
                 var_w[v] = (1 - lr) * old + lr * score * 3.0  # 放大使得 3.0 区间
-        
+            # [修复] 2026-07-05 归一化 + 最小权重保护, 防止方向被完全关闭
+            self._normalize_weights(var_w, min_w=0.05)
+
         # EMA 更新 ts_weights
         ts_w = cfg.ts_weights
         if ts_w and ts_scores:
@@ -1082,7 +1155,8 @@ class GPEngine:
                 old = ts_w.get(f, 0)
                 score = ts_scores.get(f, 0)
                 ts_w[f] = (1 - lr) * old + lr * score * 3.0
-        
+            self._normalize_weights(ts_w, min_w=0.05)
+
         # EMA 更新 math_weights
         mw = cfg.math_weights
         if mw and math_scores:
@@ -1090,12 +1164,30 @@ class GPEngine:
                 old = mw.get(f, 0)
                 score = math_scores.get(f, 0)
                 mw[f] = (1 - lr) * old + lr * score * 3.0
+            self._normalize_weights(mw, min_w=0.05)
+
+    @staticmethod
+    def _normalize_weights(weights: Dict[str, float], min_w: float = 0.05):
+        """[新增] 2026-07-05 权重归一化: 除以总和 + 最小值保护
+
+        防止 EMA 长期运行后某些权重发散或归零, 保持探索多样性。
+        """
+        if not weights:
+            return
+        total = sum(weights.values())
+        if total <= 0:
+            # 全零 → 等概率
+            for k in weights:
+                weights[k] = 1.0 / len(weights)
+            return
+        for k in weights:
+            weights[k] = max(min_w, weights[k] / total)
 
     def _adapt_operators(self, gen_best_fitness: float):
         """AW-MEP 风格停滞检测 + 算子自适应
-        
+
         [新增] 2026-07-05 P0: 连续 stagnation_threshold 代无改善 → 加大变异、降低交叉。
-        改善后自动恢复默认参数。
+        [修复] 2026-07-05 改善后恢复 random_inject_count 到初始值 (原仅恢复 cross/mut)
         """
         if gen_best_fitness > self._last_best_fitness + 1e-4:
             # 有改善 → 重置计数 + 恢复默认
@@ -1103,6 +1195,7 @@ class GPEngine:
             self._last_best_fitness = gen_best_fitness
             self.crossover_prob = self._save_crossover_prob
             self.mutation_prob = self._save_mutation_prob
+            self.random_inject_count = self._save_random_inject  # [修复] 恢复随机注入
         else:
             self._stagnation_counter += 1
             if self._stagnation_counter >= self._stagnation_threshold:
@@ -1130,10 +1223,11 @@ class GPEngine:
 
     def _evaluate_parallel(self, individuals: List[Individual]):
         """多线程并行求值 — ThreadPoolExecutor 避免 pickle 序列化问题
-        
+
         [重构] 2026-07-04 从 multiprocessing 改为 ThreadPoolExecutor:
         子进程需要 pickle fitness_calc，对 __main__ 定义的类不可行。
         线程共享内存，numpy 操作释放 GIL，实测加速比接近进程方案。
+        [重构] 2026-07-05 用 _canonicalize_key 生成缓存 key
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1147,8 +1241,9 @@ class GPEngine:
 
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
             for ind in individuals:
-                # 先查缓存（用规范化 AST 生成 key，实现语义去重）
-                key = _expr_str(_canonicalize_ast(ind.tree))
+                # 先查缓存（用规范化 key，实现语义去重）
+                key = _canonicalize_key(ind.tree, ind.expression_str,
+                                self._canonicalize_memo, self._canonicalize_lock)
                 if key in self._fitness_cache:
                     ind.fitness, ind.depth, ind.node_count = self._fitness_cache[key]
                     continue
@@ -1165,35 +1260,52 @@ class GPEngine:
     # ── 选择 ──
 
     def _tournament_select(self) -> Individual:
-        candidates = random.sample(self.population,
-                                   min(self.tournament_size, len(self.population)))
+        # [重构] 2026-07-05 用实例 rng 替代全局 random
+        rng = self.tree_gen_config.rng
+        candidates = rng.sample(self.population,
+                                min(self.tournament_size, len(self.population)))
         return max(candidates, key=lambda x: x.fitness)
 
     def _lexicase_select(self) -> Individual:
-        """签名 Lexicase 选择 — 按方向多样性选父母
-        
+        """方向多样性选择 — 按语义方向选父母
+
         [新增] 2026-07-05
+        [修复] 2026-07-06 P1-3: 之前 for sig in cases 循环里 sig 未被使用, 只是反复
+        用整体 fitness 做 20% 容差过滤, 等价于普通锦标赛, 没有方向多样性。
+        改为: 从每个签名的 best_expr 反查对应个体, 组成"方向代表池", 随机选一个。
+        这样真正实现了"按方向多样性选父母"。
         如果不开 Lexicase 或方向记录太少，退回锦标赛。
         """
+        rng = self.tree_gen_config.rng
         valid = [i for i in self.population if i.fitness > -999 and i.expression_str]
         if len(valid) < self.tournament_size:
             return self._tournament_select()
-        
-        sigs = list(self.direction_log.keys())
-        if len(sigs) < 2:
+
+        if len(self._direction_best_expr) < 2:
             return self._tournament_select()
-        
-        cases = random.sample(sigs, min(3, len(sigs)))
-        pool_size = min(30, len(valid))
-        candidates = list(random.sample(valid, pool_size))
-        
-        for sig in cases:
-            if len(candidates) <= 1:
-                break
-            best_v = max(candidates, key=lambda x: x.fitness).fitness
-            candidates = [c for c in candidates if c.fitness >= best_v * 0.8]
-        
-        return random.choice(candidates) if candidates else self._tournament_select()
+
+        # 从每个方向的最佳表达式反查对应个体 (按 expression_str 匹配)
+        valid_by_expr = {i.expression_str: i for i in valid if i.expression_str}
+        representatives = []
+        for sig, (best_fit, best_expr) in self._direction_best_expr.items():
+            ind = valid_by_expr.get(best_expr)
+            if ind is not None:
+                representatives.append(ind)
+
+        if not representatives:
+            return self._tournament_select()
+
+        # 加权选择: fitness 越高被选概率越大, 但保留方向多样性
+        # 用 softmax-like 权重, 避免某方向垄断
+        weights = []
+        for ind in representatives:
+            w = max(ind.fitness, 0.01)  # 避免 0/负权重
+            weights.append(w)
+        total_w = sum(weights)
+        if total_w <= 0:
+            return rng.choice(representatives)
+        probs = [w / total_w for w in weights]
+        return rng.choices(representatives, weights=probs, k=1)[0]
 
     def _select_parent(self) -> Individual:
         """统一选择器 — Lexicase 或锦标赛
@@ -1207,35 +1319,44 @@ class GPEngine:
     # ── 交叉 ──
 
     def _crossover(self, p1: Individual, p2: Individual) -> Individual:
-        """子树交换交叉（带类型兼容性检查）"""
+        """子树交换交叉（带类型兼容性检查 + 深度保护）
+
+        [修复] 2026-07-06 P0-1: 之前 test_tree=deepcopy(child_tree) 后用 n1
+        (来自原 child_tree) 调 _replace_subtree, n1 不在 test_tree 中, 永远返回 False,
+        深度保护完全失效。改为直接在 child_tree 上替换, 超深则回滚到 backup。
+        同时每次循环重新收集 candidates, 避免回滚后 n1 失效。
+        """
+        rng = self.tree_gen_config.rng
         child_tree = copy.deepcopy(p1.tree)
         donor_tree = p2.tree  # 只读
 
-        # 值子树和布尔子树分开收集
-        candidates1_all = _collect_replaceable(child_tree)
         candidates2_all = _collect_replaceable(donor_tree)
-        if not candidates1_all or not candidates2_all:
+        if not candidates2_all:
             return Individual(tree=child_tree, generation=p1.generation + 1)
 
         # 尝试最多3次找到类型兼容的交换对
         for _ in range(3):
-            n1 = random.choice(candidates1_all)
-            n2 = random.choice(candidates2_all)
+            # 每次循环重新收集 child_tree 的可替换节点 (回滚后节点对象已变)
+            candidates1_all = _collect_replaceable(child_tree)
+            if not candidates1_all:
+                break
+            n1 = rng.choice(candidates1_all)
+            n2 = rng.choice(candidates2_all)
             # 类型兼容：同为值类型或同为布尔类型
             n1_is_bool = isinstance(n1, (ast.BoolOp, ast.Compare))
             n2_is_bool = isinstance(n2, (ast.BoolOp, ast.Compare))
             if n1_is_bool != n2_is_bool:
                 continue
 
-            # 深度保护
-            test_tree = copy.deepcopy(child_tree)
-            _replace_subtree(test_tree, n1, copy.deepcopy(n2))
-            ast.fix_missing_locations(test_tree)
-            if ast_depth(test_tree) > self.max_depth:
+            backup = copy.deepcopy(child_tree)
+            replaced = _replace_subtree(child_tree, n1, copy.deepcopy(n2))
+            if not replaced:
+                child_tree = backup
                 continue
-
-            _replace_subtree(child_tree, n1, copy.deepcopy(n2))
             ast.fix_missing_locations(child_tree)
+            if ast_depth(child_tree) > self.max_depth:
+                child_tree = backup  # 越深, 回滚
+                continue
             # [新增] 2026-07-04 交叉后简化 AST
             return Individual(tree=_simplify_ast(child_tree), generation=p1.generation + 1)
 
@@ -1245,25 +1366,38 @@ class GPEngine:
     # ── 变异 ──
 
     def _mutate(self, individual: Individual) -> Individual:
-        """加权随机选择变异算子"""
+        """加权随机选择变异算子
+
+        [修复] 2026-07-06 P1-7: 之前变异后不校验产物深度, 与 P0-1 叠加导致深度无界增长。
+        现在统一在变异后校验, 越深则放弃变异返回原个体副本。
+        """
+        cfg = self.tree_gen_config
+        rng = cfg.rng
         total = sum(w for w, _ in self._mutate_weights)
-        r = random.random() * total
+        r = rng.random() * total
         cumulative = 0
         for weight, mutate_fn in self._mutate_weights:
             cumulative += weight
             if r <= cumulative:
                 try:
-                    new_tree = mutate_fn(individual.tree, max_depth=min(self.max_depth, 4))
+                    new_tree = mutate_fn(cfg, individual.tree, max_depth=min(self.max_depth, 4))
                 except Exception:
+                    new_tree = copy.deepcopy(individual.tree)
+                # [修复] P1-7: 校验产物深度, 越深则放弃
+                if ast_depth(new_tree) > self.max_depth:
                     new_tree = copy.deepcopy(individual.tree)
                 return Individual(tree=new_tree, generation=individual.generation + 1)
         # fallback
-        new_tree = _mutate_subtree(individual.tree, max_depth=min(self.max_depth, 4))
+        new_tree = _mutate_subtree(cfg, individual.tree, max_depth=min(self.max_depth, 4))
+        if ast_depth(new_tree) > self.max_depth:
+            new_tree = copy.deepcopy(individual.tree)
         return Individual(tree=new_tree, generation=individual.generation + 1)
 
     # ── 初始化 ──
 
     def _initialize_population(self):
+        cfg = self.tree_gen_config
+        rng = cfg.rng
         self.population = []
 
         # 1. 种子个体
@@ -1278,8 +1412,8 @@ class GPEngine:
         # 2. 种子变异体（扩展种子邻域）
         seed_trees = [ind.tree for ind in self.population if ind.is_seed]
         while len(self.population) < seed_count and seed_trees:
-            base = random.choice(seed_trees)
-            mutated = _mutate_subtree(base, max_depth=3)
+            base = rng.choice(seed_trees)
+            mutated = _mutate_subtree(cfg, base, max_depth=3)
             self.population.append(Individual(tree=mutated, generation=0))
 
         # 3. 随机个体 (ε-greedy: 部分用全空间探索)
@@ -1287,14 +1421,16 @@ class GPEngine:
         explore_n = int(remaining * self._explore_ratio)
         while len(self.population) < self.population_size:
             if len(self.population) < seed_count + explore_n:
-                tree = _random_tree_explore(self.max_depth)  # 探索通道
+                tree = _random_tree_explore(cfg, self.max_depth)  # 探索通道
             else:
-                tree = _random_tree(self.max_depth)
+                tree = _random_tree(cfg, self.max_depth)
             self.population.append(Individual(tree=tree, generation=0))
 
     # ── 进化循环 ──
 
     def _next_generation(self, gen: int) -> List[Individual]:
+        cfg = self.tree_gen_config
+        rng = cfg.rng
         sorted_pop = sorted(self.population, key=lambda x: x.fitness, reverse=True)
         new_pop = []
 
@@ -1311,7 +1447,7 @@ class GPEngine:
 
         # 遗传操作
         while len(new_pop) < self.population_size - self.random_inject_count:
-            r = random.random()
+            r = rng.random()
             if r < self.crossover_prob:
                 child = self._crossover(self._select_parent(), self._select_parent())
             elif r < self.crossover_prob + self.mutation_prob:
@@ -1326,95 +1462,73 @@ class GPEngine:
         explore_n = min(inject_n, int(inject_n * self._explore_ratio * 2))  # 探索占探索比率×2
         for i in range(inject_n):
             if i < explore_n:
-                tree = _random_tree_explore(self.max_depth)
+                tree = _random_tree_explore(cfg, self.max_depth)
             else:
-                tree = _random_tree(self.max_depth)
+                tree = _random_tree(cfg, self.max_depth)
             new_pop.append(Individual(tree=tree, generation=gen + 1))
 
         return new_pop[:self.population_size]
 
     def run(self, verbose: bool = True) -> 'GPEngine':
         """运行 GP 搜索
-        
+
         [重构] 2026-07-04 用 _activate_config() 上下文管理器替替代手动 global 操作，
         确保配置正确激活/恢复，避免嵌套 run() 或多实例场景下的污染。
+        [重构] 2026-07-05 删除 _activate_config, 不再需要全局变量切换
         """
-        with self._activate_config():
-            # [新增] 2026-07-05 从 SQLite 加载历史缓存
-            n_loaded = self._load_sqlite_cache()
-            if n_loaded and verbose:
-                logger.info(f"[GP] 加载 SQLite 缓存 {n_loaded} 条 (fitness_hash={self._fitness_hash})")
+        # [新增] 2026-07-05 从 SQLite 加载历史缓存
+        n_loaded = self._load_sqlite_cache()
+        if n_loaded and verbose:
+            logger.info(f"[GP] 加载 SQLite 缓存 {n_loaded} 条 (fitness_hash={self._fitness_hash})")
 
-            self._initialize_population()
-            for gen in range(self.generations):
-                self._evaluate_population()
-                gen_best = max(self.population, key=lambda x: x.fitness)
+        self._initialize_population()
+        for gen in range(self.generations):
+            self._evaluate_population()
+            gen_best = max(self.population, key=lambda x: x.fitness)
 
-                valid = [i for i in self.population if i.fitness > -999]
-                gen_stats = {
-                    'generation': gen,
-                    'best_fitness': gen_best.fitness,
-                    'best_depth': gen_best.depth,
-                    'best_expression': gen_best.expression_str,
-                    'avg_fitness': np.mean([i.fitness for i in valid]) if valid else -999,
-                    'valid_count': len(valid),
-                }
-                self.history.append(gen_stats)
+            valid = [i for i in self.population if i.fitness > -999]
+            gen_stats = {
+                'generation': gen,
+                'best_fitness': gen_best.fitness,
+                'best_depth': gen_best.depth,
+                'best_expression': gen_best.expression_str,
+                'avg_fitness': np.mean([i.fitness for i in valid]) if valid else -999,
+                'valid_count': len(valid),
+            }
+            self.history.append(gen_stats)
 
-                # [新增] 2026-07-05 方向追踪: 记录当前种群中各语义方向的最优 fitness
-                for ind in valid:
-                    if ind.fitness > -999:
-                        sig = self._expr_signature(ind.expression_str or _expr_str(ind.tree))
-                        if sig not in self.direction_log:
-                            self.direction_log[sig] = []
-                        self.direction_log[sig].append(ind.fitness)
-                        # 记录该方向的最佳表达式
-                        prev = self._direction_best_expr.get(sig, (-999, ''))
-                        if ind.fitness > prev[0]:
-                            self._direction_best_expr[sig] = (ind.fitness, ind.expression_str or _expr_str(ind.tree))
+            # [新增] 2026-07-05 方向追踪: 记录当前种群中各语义方向的最优 fitness
+            for ind in valid:
+                if ind.fitness > -999:
+                    sig = self._expr_signature(ind.expression_str or _expr_str(ind.tree))
+                    if sig not in self.direction_log:
+                        self.direction_log[sig] = []
+                    self.direction_log[sig].append(ind.fitness)
+                    # 记录该方向的最佳表达式
+                    prev = self._direction_best_expr.get(sig, (-999, ''))
+                    if ind.fitness > prev[0]:
+                        self._direction_best_expr[sig] = (ind.fitness, ind.expression_str or _expr_str(ind.tree))
 
-                # [新增] 2026-07-05 P0: 闭环方向权重 EMA 更新
-                cfg = _TREE_GEN_CONFIG
-                if cfg and cfg.adaptive and gen > 0 and gen % cfg.adaptive_every == 0:
-                    self._update_direction_weights()
+            # [新增] 2026-07-05 P0: 闭环方向权重 EMA 更新
+            cfg = self.tree_gen_config
+            if cfg and cfg.adaptive and gen > 0 and gen % cfg.adaptive_every == 0:
+                self._update_direction_weights()
 
-                # [新增] 2026-07-05 P0: 停滞检测 + 算子自适应 (AW-MEP 风格)
-                self._adapt_operators(gen_best.fitness)
+            # [新增] 2026-07-05 P0: 停滞检测 + 算子自适应 (AW-MEP 风格)
+            self._adapt_operators(gen_best.fitness)
 
-                if verbose and gen % 5 == 0:
-                    logger.info(f"Gen {gen:3d} | best_f={gen_best.fitness:.3f} "
-                                f"depth={gen_best.depth} valid={gen_stats['valid_count']}")
+            if verbose and gen % 5 == 0:
+                logger.info(f"Gen {gen:3d} | best_f={gen_best.fitness:.3f} "
+                            f"depth={gen_best.depth} valid={gen_stats['valid_count']}")
 
-                if self.best_individual is None or gen_best.fitness > self.best_individual.fitness:
-                    self.best_individual = gen_best
+            if self.best_individual is None or gen_best.fitness > self.best_individual.fitness:
+                self.best_individual = gen_best
 
-                if gen < self.generations - 1:
-                    self.population = self._next_generation(gen)
-            # [新增] 2026-07-05 保存缓存到 SQLite
-            self._save_sqlite_cache()
+            if gen < self.generations - 1:
+                self.population = self._next_generation(gen)
+        # [新增] 2026-07-05 保存缓存到 SQLite
+        self._save_sqlite_cache()
         return self
-
-    def _activate_config(self):
-        """上下文管理器: 激活当前实例的 tree_gen_config 到模块全局
-        
-        [重构] 2026-07-04 封装 global 操作为 context manager
-        """
-        class _ConfigContext:
-            def __enter__(self2):
-                global _TREE_GEN_CONFIG
-                self2._saved = _TREE_GEN_CONFIG
-                new_config = self.tree_gen_config
-                if new_config is None:
-                    new_config = DEFAULT_TREE_GEN_CONFIG
-                _TREE_GEN_CONFIG = new_config
-                return self
-            
-            def __exit__(self2, *args):
-                global _TREE_GEN_CONFIG
-                _TREE_GEN_CONFIG = self2._saved
-                return False
-        
-        return _ConfigContext()
 
     def best(self) -> Optional[Individual]:
         return self.best_individual
