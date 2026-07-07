@@ -109,10 +109,19 @@ class GPEngine:
         self._parallel_workers = config.get('parallel_workers', 0) if config else 0
         self._canonicalize_memo: Dict[str, str] = {}
         self._canonicalize_lock = threading.Lock()
-        # [改] 2026-07-06 默认缓存到 output/.gp_cache.db
+        # [改] 2026-07-07 默认缓存到调用者脚本目录下的 output/.gp_cache.db
+        import os
         cache_db = config.get('cache_db', '') if config else ''
         if not cache_db:
-            cache_db = 'output/.gp_cache.db'
+            import inspect
+            caller_file = inspect.stack()[1].frame.f_globals.get('__file__', '')
+            if caller_file:
+                cache_db = os.path.join(os.path.dirname(os.path.abspath(caller_file)), 'output', '.gp_cache.db')
+            else:
+                cache_db = 'output/.gp_cache.db'
+        cache_dir = os.path.dirname(cache_db)
+        if cache_dir:
+            os.makedirs(cache_dir, exist_ok=True)
         fitness_hash = ''
         import hashlib
         fingerprint = f"{self._shape}_{self.parsimony_penalty:.4f}"
