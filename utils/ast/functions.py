@@ -164,7 +164,7 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 import numpy as np
 import talib
 from numba import njit
-from typing import Dict, Callable
+from typing import Dict, Callable, List
 
 
 # ============================================================
@@ -953,7 +953,7 @@ def ts_corr(x, y, d):
     return _ts_corr_core(np.asarray(x, float), np.asarray(y, float), int(d))
 
 def ts_cov(x, y, d):
-    """Rolling covariance (样本协方差, ddof=1)
+    """滚动协方差 (样本协方差, ddof=1)
     [修复] 2026-07-06 过滤 NaN 后计算, 对齐 WQ 规范
     [重构] 2026-07-06 numba @njit 加速"""
     return _ts_cov_core(np.asarray(x, float), np.asarray(y, float), int(d))
@@ -977,7 +977,7 @@ def ts_argmin(x, d):
     return _ts_argmin_core(np.asarray(x, float), int(d))
 
 def ts_roc(x, d):
-    """Rate of change: (x[t]-x[t-d])/x[t-d]"""
+    """变化率: (x[t]-x[t-d])/x[t-d]"""
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
     r[d:] = (x[d:] - x[:-d]) / np.where(np.abs(x[:-d]) > 1e-10, x[:-d], np.nan)
     return r
@@ -1002,7 +1002,7 @@ def ts_quantile(x, d, p=0.5):
     return _ts_quantile_core(np.asarray(x, float), _validate_window(d, 'ts_quantile'), float(p))
 
 def ts_av_diff(x, d):
-    """Current minus rolling mean (deviation)
+    """当前值减滚动均值 (偏离度)
     [重构] 2026-07-06 numba @njit 加速"""
     x = np.asarray(x, float)
     return x - _ts_mean_core(x, _validate_window(d, 'ts_av_diff'))
@@ -1013,12 +1013,12 @@ def ts_decay_linear(x, d):
     return _ts_decay_linear_core(np.asarray(x, float), _validate_window(d, 'ts_decay_linear'))
 
 def ts_product(x, d):
-    """Rolling product over d periods
+    """d 期滚动乘积
     [重构] 2026-07-06 numba @njit 加速"""
     return _ts_product_core(np.asarray(x, float), _validate_window(d, 'ts_product'))
 
 def ts_regression(y, x, d, rettype=2):
-    """Rolling linear regression: y = alpha + beta*x + eps
+    """滚动线性回归: y = alpha + beta*x + eps
 
     Args:
         y: 因变量
@@ -1092,14 +1092,14 @@ def cs_zscore(x):
     return _cs_zscore_core(x)
 
 def cs_scale(x, scale=1.0):
-    """Cross-sectional scale: sum(abs(x)) = scale
+    """截面缩放: sum(abs(x)) = scale
     [重构] 2026-07-06 numba @njit 加速 (2D); 1D 保持原逻辑"""
     x = np.asarray(x, float)
     if x.ndim == 1: return x / (np.sum(np.abs(x)) + 1e-10) * scale
     return _cs_scale_core(x, float(scale))
 
 def cs_winsorize(x, std=4.0):
-    """Cross-sectional winsorize at +/-std (样本标准差, ddof=1)
+    """截面缩尾: 按 +/-std 截尾 (样本标准差, ddof=1)
     [重构] 2026-07-06 numba @njit 加速 (2D); 1D 保持原逻辑整体截尾"""
     x = np.asarray(x, float)
     if x.ndim == 1:
@@ -1108,13 +1108,13 @@ def cs_winsorize(x, std=4.0):
     return _cs_winsorize_core(x, float(std))
 
 def cs_normalize(x, use_std=False, limit=0.0):
-    """Cross-sectional normalize"""
+    """截面归一化"""
     if use_std:
         return cs_scale(cs_zscore(x))
     return cs_scale(x, 1.0)
 
 def cs_quantile(x, driver='gaussian', sigma=1.0):
-    """Cross-sectional quantile (等价 cs_rank)"""
+    """截面分位数 (等价 cs_rank)"""
     return cs_rank(x)
 
 
@@ -1217,7 +1217,7 @@ def persist(x, n=3):
 # ============================================================
 
 def _feature_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
-    """RSI centered: (RSI-50)/50, range [-1,1]. talib-aligned.
+    """RSI 中心化: (RSI-50)/50, 值域 [-1,1]. talib 对齐.
     [修复] 2026-07-06 保留冷启动期 NaN (原 nan_to_num 填充 50.0 掩盖缺失数据, 与冷启动保护原则冲突)"""
     c = np.asarray(close, float)
     result = talib.RSI(c, timeperiod=period)
@@ -1225,13 +1225,13 @@ def _feature_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
 
 
 def _feature_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    """ATR - Wilder smoothed. talib-aligned."""
+    """ATR - Wilder 平滑. talib 对齐."""
     h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
     return talib.ATR(h, l, c, timeperiod=period)
 
 
 def _feature_atr_sma(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    """ATR-SMA: simple rolling mean of TR (original V4, kept for compat)
+    """ATR-SMA: TR 的简单滚动均值 (V4 原始版本，保留兼容)
     [修复] 2026-07-06 用 shift 替代 roll, 避免首位引入末尾数据 (NaN 安全)"""
     h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
     prev_c = np.empty_like(c)
@@ -1243,7 +1243,7 @@ def _feature_atr_sma(high: np.ndarray, low: np.ndarray, close: np.ndarray, perio
 
 
 def _wilder_smooth(x: np.ndarray, period: int) -> np.ndarray:
-    """Wilder smoothing: S[t]=(S[t-1]*(p-1)+x[t])/p, seed=SMA. talib-aligned."""
+    """Wilder 平滑: S[t]=(S[t-1]*(p-1)+x[t])/p, 初始值=SMA. talib 对齐."""
     x = np.asarray(x, float)
     n = len(x)
     r = np.full(n, np.nan)
@@ -1259,7 +1259,7 @@ def _wilder_smooth(x: np.ndarray, period: int) -> np.ndarray:
 
 
 def _feature_ema(x: np.ndarray, period: int = 20) -> np.ndarray:
-    """EMA: recursive, talib-aligned. k=2/(p+1), seed=SMA."""
+    """EMA: 递归计算, talib 对齐. k=2/(p+1), 初始值=SMA."""
     x = np.asarray(x, float)
     n = len(x)
     k = 2.0 / (period + 1)
@@ -1276,69 +1276,69 @@ def _feature_ema(x: np.ndarray, period: int = 20) -> np.ndarray:
 
 
 def _feature_bbwidth(close: np.ndarray, period: int = 20) -> np.ndarray:
-    """Bollinger Band Width = (upper-lower)/middle. talib-aligned."""
+    """布林带宽度 = (上轨-下轨)/中轨. talib 对齐."""
     c = np.asarray(close, float)
     upper, middle, lower = talib.BBANDS(c, timeperiod=period, nbdevup=2, nbdevdn=2, matype=0)
     return np.where(middle > 0, (upper - lower) / middle, 0)
 
 
 def _feature_stddev(close: np.ndarray, period: int = 20) -> np.ndarray:
-    """Standard Deviation. talib-aligned."""
+    """标准差. talib 对齐."""
     c = np.asarray(close, float)
     return talib.STDDEV(c, timeperiod=period, nbdev=1)
 
 
 def _feature_adx(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    """ADX - Average Directional Index. talib-aligned."""
+    """ADX - 平均趋向指数. talib 对齐."""
     h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
     return talib.ADX(h, l, c, timeperiod=period)
 
 
 def _feature_cci(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    """CCI - Commodity Channel Index. talib-aligned."""
+    """CCI - 商品通道指数. talib 对齐."""
     h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
     return talib.CCI(h, l, c, timeperiod=period)
 
 
 def _feature_macd(close: np.ndarray, fast: int = 12, slow: int = 26, signal: int = 9) -> np.ndarray:
-    """MACD histogram = 2*(DIF-DEA). talib-aligned."""
+    """MACD 柱状图 = 2*(DIF-DEA). talib 对齐."""
     c = np.asarray(close, float)
     dif, dea, hist = talib.MACD(c, fastperiod=fast, slowperiod=slow, signalperiod=signal)
     return 2 * (dif - dea)
 
 
 def _feature_trima(close: np.ndarray, period: int = 40) -> np.ndarray:
-    """TRIMA - Triangular Moving Average. talib-aligned."""
+    """TRIMA - 三角移动平均. talib 对齐."""
     c = np.asarray(close, float)
     return talib.TRIMA(c, timeperiod=period)
 
 
 def _feature_tsf(close: np.ndarray, period: int = 7) -> np.ndarray:
-    """TSF - Time Series Forecast. talib-aligned."""
+    """TSF - 时间序列预测. talib 对齐."""
     c = np.asarray(close, float)
     return talib.TSF(c, timeperiod=period)
 
 
 def _feature_kama(close: np.ndarray, period: int = 30) -> np.ndarray:
-    """KAMA - Kaufman Adaptive Moving Average. talib-aligned."""
+    """KAMA - 卡夫曼自适应移动平均. talib 对齐."""
     c = np.asarray(close, float)
     return talib.KAMA(c, timeperiod=period)
 
 
 def _feature_wma(close: np.ndarray, period: int = 20) -> np.ndarray:
-    """WMA - Weighted Moving Average. talib-aligned."""
+    """WMA - 加权移动平均. talib 对齐."""
     c = np.asarray(close, float)
     return talib.WMA(c, timeperiod=period)
 
 
 def _feature_dema(close: np.ndarray, period: int = 20) -> np.ndarray:
-    """DEMA - Double Exponential Moving Average. talib-aligned."""
+    """DEMA - 双指数移动平均. talib 对齐."""
     c = np.asarray(close, float)
     return talib.DEMA(c, timeperiod=period)
 
 
 def _feature_hv(close: np.ndarray, period: int = 20) -> np.ndarray:
-    """Historical Volatility: annualized std of daily returns x100."""
+    """历史波动率: 日收益率年化标准差 x100."""
     c = np.asarray(close, float)
     rets = np.diff(c) / np.where(c[:-1] > 0, c[:-1], 1)
     rets = np.insert(rets, 0, 0)
@@ -1346,25 +1346,25 @@ def _feature_hv(close: np.ndarray, period: int = 20) -> np.ndarray:
 
 
 def _feature_natr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
-    """NATR - Normalized ATR. talib-aligned."""
+    """NATR - 归一化 ATR. talib 对齐."""
     h, l, c = np.asarray(high, float), np.asarray(low, float), np.asarray(close, float)
     return talib.NATR(h, l, c, timeperiod=period)
 
 
 def _feature_var(close: np.ndarray, period: int = 20) -> np.ndarray:
-    """Variance. talib-aligned."""
+    """方差. talib 对齐."""
     c = np.asarray(close, float)
     return talib.VAR(c, timeperiod=period)
 
 
 def _feature_linearreg(close: np.ndarray, period: int = 20) -> np.ndarray:
-    """Linear Regression value. talib-aligned."""
+    """线性回归值. talib 对齐."""
     c = np.asarray(close, float)
     return talib.LINEARREG(c, timeperiod=period)
 
 
 def _feature_vol_ratio(close: np.ndarray, volume: np.ndarray, short: int = 5, long: int = 20) -> np.ndarray:
-    """Volume ratio = SMA(vol,short) / SMA(vol,long). No talib equivalent.
+    """量比 = SMA(成交量,短期) / SMA(成交量,长期). 无 talib 等价.
     [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)"""
     v = np.asarray(volume, float)
     # [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)
@@ -1374,7 +1374,7 @@ def _feature_vol_ratio(close: np.ndarray, volume: np.ndarray, short: int = 5, lo
 
 
 def _feature_amt_ratio(amount: np.ndarray, short: int = 5, long: int = 20) -> np.ndarray:
-    """Amount ratio = short_mean / long_mean
+    """额比 = 短期均值 / 长期均值
     [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)"""
     a = np.asarray(amount, float)
     # [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)
@@ -1476,32 +1476,47 @@ SAFE_CONSTANTS = {'True': 1.0, 'False': 0.0, 'None': 0.0, 'pi': np.pi, 'e': np.e
 # ============================================================
 
 FUNC_CATEGORIES = {
-    '时序统计': ['ts_mean', 'ts_std', 'ts_sum', 'ts_max', 'ts_min', 'ts_median',
-                'ts_delta', 'ts_delay', 'ts_rank', 'ts_corr', 'ts_cov',
-                'ts_skew', 'ts_kurt', 'ts_argmax', 'ts_argmin',
-                'ts_roc', 'ts_zscore', 'ts_scale', 'ts_quantile',
-                'ts_av_diff', 'ts_decay_linear', 'ts_product', 'ts_var', 'ts_logret',
-                'ts_regression', 'ts_resi', 'ts_reg_slope', 'ts_reg_intercept',
-                'ts_reg_resid', 'ts_reg_predict', 'ts_reg_rsq',
-                'ts_intercept', 'ts_predict', 'ts_resid', 'ts_rsq'],
-    '扩张统计': ['expanding_mean', 'expanding_median', 'expanding_std', 'expanding_percentile'],
-    '截面算子': ['cs_rank', 'cs_zscore', 'cs_scale', 'cs_winsorize', 'cs_quantile'],
-    '特征计算': ['rsi', 'atr', 'atr_sma', 'macd', 'adx', 'cci', 'bb_width', 'stddev',
-                'ema', 'tsf', 'kama', 'trima', 'wma', 'dema', 'hv', 'natr',
-                'var', 'linearreg', 'vol_ratio', 'amt_ratio', 'wilder_smooth'],
-    '数学运算': ['abs', 'log', 'sqrt', 'sign', 'exp', 'tanh', 'sigmoid', 'relu',
-                'sin', 'cos', 'gauss', 'p4', 'softsign', 'square_sigmoid',
-                'signed_power', 'safe_max', 'safe_min'],
-    '信号确认': ['persist'],
+    'ts_function': [
+        'ts_mean', 'ts_std', 'ts_sum', 'ts_max', 'ts_min', 'ts_median',
+        'ts_delta', 'ts_delay', 'ts_rank', 'ts_corr', 'ts_cov',
+        'ts_skew', 'ts_kurt', 'ts_argmax', 'ts_argmin',
+        'ts_roc', 'ts_zscore', 'ts_scale', 'ts_quantile',
+        'ts_av_diff', 'ts_decay_linear', 'ts_product', 'ts_var', 'ts_logret',
+        'ts_regression', 'ts_resi', 'ts_reg_slope', 'ts_reg_intercept',
+        'ts_reg_resid', 'ts_reg_predict', 'ts_reg_rsq',
+        'ts_intercept', 'ts_predict', 'ts_resid', 'ts_rsq', 'ts_slope',
+        # 原 '扩张统计'
+        'expanding_mean', 'expanding_median', 'expanding_std', 'expanding_percentile',
+        # 原 '信号确认'
+        'persist',
+    ],
+    'cs_function': [
+        # 原 '截面算子' — 单独成类，避免过度嵌套 cs_rank(ts_rank(...))
+        'cs_rank', 'cs_zscore', 'cs_scale', 'cs_winsorize', 'cs_quantile',
+        'cs_normalize',
+    ],
+    'ta_function': [
+        'rsi', 'atr', 'atr_sma', 'macd', 'adx', 'cci', 'bb_width', 'stddev',
+        'ema', 'tsf', 'kama', 'trima', 'wma', 'dema', 'hv', 'natr',
+        'var', 'linearreg',
+    ],
+    'math_function': [
+        'abs', 'log', 'sqrt', 'sign', 'exp', 'tanh', 'sigmoid', 'relu',
+        'sin', 'cos', 'gauss', 'p4', 'softsign', 'square_sigmoid',
+        'signed_power', 'safe_max', 'safe_min',
+    ],
+    'feature_function': [
+        'vol_ratio', 'amt_ratio', 'wilder_smooth',
+    ],
 }
 
 
 def get_func_category(name: str) -> str:
-    """查询函数所属分类"""
+    """查询函数所属 GP 大类（直接对齐 group_weights key）"""
     for cat, names in FUNC_CATEGORIES.items():
         if name in names:
             return cat
-    return '自定义'
+    return 'math_function'  # 未分类默认归 math_function（无窗口，最安全）
 
 
 # ============================================================
@@ -1520,15 +1535,19 @@ def get_func_category(name: str) -> str:
 # 兼容旧路径:
 #   from signals.v4 import register_function  # 仍可用，重导出链
 
-def register_function(name: str, func: Callable) -> None:
-    """临时注册自定义函数到表达式引擎。
+def register_function(name: str, func: Callable, category: str = 'math_function') -> None:
+    """临时注册自定义函数到表达式引擎，并加入 GP 权重池。
 
-    进程级全局注册, 当前脚本内所有 Expression 生效。
-    脚本退出自动销毁, 无泄漏风险。
+    进程级全局注册，当前脚本内所有 Expression 生效。
+    脚本退出自动销毁，无泄漏风险。
 
     Args:
-        name: 函数名 (表达式中的调用名)
+        name: 函数名（表达式中的调用名）
         func: 函数实现，签名为 (*np.ndarray) -> np.ndarray
+        category: GP 大类，直接对齐 group_weights 的函数类 key。
+                  默认 'math_function'。可选: 'ts_function' / 'ta_function' /
+                  'math_function' / 'feature_function'。
+                  [修改] 2026-07-07: 直接写入 FUNC_CATEGORIES，不再使用独立映射表。
     """
     name_lower = name.lower()
     if name_lower in FUNC_REGISTRY:
@@ -1539,7 +1558,20 @@ def register_function(name: str, func: Callable) -> None:
         )
     FUNC_REGISTRY[name_lower] = func
 
+    # [修改] 2026-07-07 直接写入 FUNC_CATEGORIES
+    if category not in FUNC_CATEGORIES:
+        FUNC_CATEGORIES[category] = []
+    if name_lower not in FUNC_CATEGORIES[category]:
+        FUNC_CATEGORIES[category].append(name_lower)
+
 
 def unregister_function(name: str) -> bool:
     """注销自定义函数，返回是否成功。内置函数不可注销。"""
-    return FUNC_REGISTRY.pop(name.lower(), None) is not None
+    name_lower = name.lower()
+    removed = FUNC_REGISTRY.pop(name_lower, None) is not None
+    if removed:
+        for cat_names in FUNC_CATEGORIES.values():
+            if name_lower in cat_names:
+                cat_names.remove(name_lower)
+                break
+    return removed
