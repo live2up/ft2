@@ -109,12 +109,19 @@ class GPEngine:
         self._parallel_workers = config.get('parallel_workers', 0) if config else 0
         self._canonicalize_memo: Dict[str, str] = {}
         self._canonicalize_lock = threading.Lock()
-        # [改] 2026-07-07 默认缓存到调用者脚本目录下的 output/.gp_cache.db
+        # [优化] 2026-07-07 栈搜索: 取最后一个非ft2帧, 支持多层外部封装
         import os
         cache_db = config.get('cache_db', '') if config else ''
         if not cache_db:
             import inspect
-            caller_file = inspect.stack()[1].frame.f_globals.get('__file__', '')
+            # [修复] 2026-07-07 按目录结构: engine.py 固定位于 ft2/utils/gp/v5/, 上溯3级得 ft2 根
+            _FT2_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+            caller_file = ''
+            for frame_info in inspect.stack():
+                fname = frame_info.frame.f_globals.get('__file__', '')
+                if fname and not fname.replace('\\', '/').startswith(_FT2_ROOT):
+                    caller_file = fname  # 不break, 继续遍历至栈底, 取最外层用户脚本
             if caller_file:
                 cache_db = os.path.join(os.path.dirname(os.path.abspath(caller_file)), 'output', '.gp_cache.db')
             else:
