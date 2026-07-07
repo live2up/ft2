@@ -21,28 +21,9 @@ logger = logging.getLogger(__name__)
 GP_VARIABLES = ['CLOSE', 'OPEN', 'HIGH', 'LOW', 'VOLUME', 'AMOUNT']
 GP_CONSTANTS = [0.0, 0.5, 1.0, -1.0, 2.0, 0.01, 0.02, 0.05, 1.5, 3.0]
 
-TS_FUNCTIONS = {
-    'ts_rank': [5, 10, 20, 60], 'ts_zscore': [10, 20, 60],
-    'ts_mean': [5, 10, 20, 60], 'ts_std': [10, 20, 60],
-    'ts_sum': [5, 10, 20], 'ts_delta': [1, 5, 10, 20],
-    'ts_delay': [1, 5, 10, 20], 'ts_roc': [5, 10, 20],
-    'ts_decay_linear': [5, 10, 20], 'ts_skew': [20, 60],
-    'ts_kurt': [20, 60], 'ts_resid': [10, 20],
-    'ts_slope': [10, 20], 'ts_rsq': [10, 20],
-    'ts_intercept': [10, 20], 'ts_predict': [10, 20],
-}
-
-TS_FUNCTIONS_2ARG = {
-    'ts_corr': [10, 20, 60], 'ts_cov': [10, 20],
-    'ts_reg_slope': [5, 10], 'ts_reg_resid': [5, 10],
-    'ts_reg_rsq': [5, 10],
-}
-
-FEATURE_FUNCTIONS_1ARG = {'linearreg': [10, 20], 'tsf': [10, 20]}
-FEATURE_FUNCTIONS_3ARG = {'natr': [5, 14], 'atr': [14]}
-RATIO_FUNCTIONS = {'amt_ratio': [(5, 20)], 'vol_ratio': [(5, 20)]}
-
-MATH_FUNCTIONS = ['sin', 'cos', 'exp', 'log', 'sqrt', 'abs', 'tanh', 'gauss', 'p4', 'neg']
+# [重构] 2026-07-07 移除 TS_FUNCTIONS / MATH_FUNCTIONS 等硬编码映射，
+# 改从 utils.ast.functions.FUNC_REGISTRY 动态读取。
+# GP 所需的所有函数元数据（分类 / 参数个数 / 参数池）统一由注册表管理。
 
 # ============================================================
 # TreeGenConfig — 树生成概率配置
@@ -68,7 +49,6 @@ class TreeGenConfig:
     group_weights: Optional[Dict[str, float]] = None
     ts_weights: Optional[Dict[str, float]] = None
     math_weights: Optional[Dict[str, float]] = None
-    feature_weights: Optional[Dict[str, float]] = None
     var_weights: Optional[Dict[str, float]] = None
     var_allowlist: Optional[set] = None
     func_allowlist: Optional[set] = None
@@ -78,18 +58,16 @@ class TreeGenConfig:
     rng: random.Random = field(default_factory=random.Random)
 
 DEFAULT_TREE_GEN_CONFIG = TreeGenConfig(
-    group_weights={'ts_function':25, 'feature_function':13, 'math_function':12,
-                   'comparison':13, 'logic':11, 'binary_op':12,
+    group_weights={'ts_function':30, 'math_function':15,
+                   'comparison':15, 'logic':13, 'binary_op':13,
                    'unary_op':9, 'ternary':5},
-    ts_weights={fn: 1.0 for fn in TS_FUNCTIONS},
-    math_weights={fn: 1.0 for fn in MATH_FUNCTIONS},
-    feature_weights={'feature_1arg': 0.5, 'feature_3arg': 0.3, 'ratio': 0.2},
+    # [重构] 2026-07-07 移除 feature_weights，所有函数统一由 ts_weights/math_weights 控制。
+    # ts_weights/math_weights 默认为空，由 get_full_default_weights() 从 FUNC_REGISTRY 动态填充。
+    ts_weights={},
+    math_weights={},
 )
 
 _FILL_VAR_KEYS = GP_VARIABLES[:]
-_FILL_TS_KEYS = list(TS_FUNCTIONS.keys())
-_FILL_MATH_KEYS = MATH_FUNCTIONS[:]
-_FILL_FEATURE_KEYS = list(DEFAULT_TREE_GEN_CONFIG.feature_weights.keys())
 _FILL_GROUP_KEYS = list(DEFAULT_TREE_GEN_CONFIG.group_weights.keys())
 
 def _fill_weights(user_weights, default_keys, fill_value=0):
@@ -108,6 +86,73 @@ def _fill_weights(user_weights, default_keys, fill_value=0):
     if not nonzero and filled:
         nonzero = {k: 1.0 for k in filled}
     return nonzero
+
+
+# [重构] 2026-07-07 从 FUNC_CATEGORIES 动态读取函数分类，自动适配 group_weights
+# feature_function 合并到 ts_weights（ta_function 同类处理）
+_FUNCTION_GROUP_MAP = {
+    'ts_function': ('ts_weights', [10, 20]),
+    'cs_function': ('ts_weights', [10, 20]),
+    'ta_function': ('ts_weights', [10, 20]),
+    'feature_function': ('ts_weights', [10, 20]),
+    'math_function': ('math_weights', None),
+    # comparison / logic / binary_op / unary_op / ternary 无子权重池
+}
+
+
+def _get_funcs_by_group(group_name: str) -> list:
+    """从 FUNC_CATEGORIES 获取指定 group_weights 大类下的函数名列表。"""
+    from utils.ast.functions import FUNC_CATEGORIES
+    return sorted(set(FUNC_CATEGORIES.get(group_name, [])))
+
+
+def get_full_default_weights() -> dict:
+    """获取包含自定义注册函数的完整默认权重配置。
+
+    在 DEFAULT_TREE_GEN_CONFIG 基础上，合并通过 register_function 注册的自定义函数。
+    自定义函数默认权重 1.0。ts_weights 涵盖 ts/cs/ta/feature_function，
+    math_weights 涵盖 math_function。
+    """
+    ts_w = dict(DEFAULT_TREE_GEN_CONFIG.ts_weights)
+    math_w = dict(DEFAULT_TREE_GEN_CONFIG.math_weights)
+
+    for name in _get_funcs_by_group('ts_function'):
+        ts_w.setdefault(name, 1.0)
+    for name in _get_funcs_by_group('cs_function'):
+        ts_w.setdefault(name, 1.0)
+    for name in _get_funcs_by_group('ta_function'):
+        ts_w.setdefault(name, 1.0)
+    for name in _get_funcs_by_group('feature_function'):
+        ts_w.setdefault(name, 1.0)
+    for name in _get_funcs_by_group('math_function'):
+        math_w.setdefault(name, 1.0)
+
+    return {
+        'group_weights': DEFAULT_TREE_GEN_CONFIG.group_weights,
+        'ts_weights': ts_w,
+        'math_weights': math_w,
+    }
+
+
+def _get_fill_keys(field_name: str) -> list:
+    """按权重字段名获取默认 key 集合（含自定义注册函数），替代废弃的 _FILL_TS_KEYS 等。
+
+    由 engine.py _build_tree_config 在合并用户权重时调用，
+    从 FUNC_REGISTRY 动态读取，确保自定义注册函数也被纳入。
+    """
+    if field_name == 'ts_weights':
+        return (_get_funcs_by_group('ts_function') +
+                _get_funcs_by_group('cs_function') +
+                _get_funcs_by_group('ta_function') +
+                _get_funcs_by_group('feature_function'))
+    elif field_name == 'math_weights':
+        return _get_funcs_by_group('math_function')
+    elif field_name == 'var_weights':
+        return list(GP_VARIABLES)
+    elif field_name == 'group_weights':
+        return list(_FILL_GROUP_KEYS)
+    return []
+
 
 DEFAULT_GP_CONFIG = {
     'population_size': 200, 'generations': 20, 'max_depth': 10,

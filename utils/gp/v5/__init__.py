@@ -15,8 +15,7 @@ utils/gp/v5/ — 遗传编程引擎 v5
 
 from .config import (
     TreeGenConfig, Individual, DEFAULT_GP_CONFIG, DEFAULT_TREE_GEN_CONFIG,
-    GP_VARIABLES, GP_CONSTANTS, TS_FUNCTIONS, TS_FUNCTIONS_2ARG,
-    MATH_FUNCTIONS, _fill_weights,
+    GP_VARIABLES, GP_CONSTANTS, _fill_weights,
 )
 from .ast_utils import (
     _expr_str, _collect_replaceable, _replace_subtree, _simplify_ast, _canonicalize_key,
@@ -31,8 +30,7 @@ from .engine import GPEngine
 __all__ = [
     'GPEngine', 'Individual', 'TreeGenConfig',
     'DEFAULT_GP_CONFIG', 'DEFAULT_TREE_GEN_CONFIG',
-    'GP_VARIABLES', 'GP_CONSTANTS', 'TS_FUNCTIONS', 'TS_FUNCTIONS_2ARG',
-    'MATH_FUNCTIONS', '_fill_weights',
+    'GP_VARIABLES', 'GP_CONSTANTS', '_fill_weights',
     '_expr_str', '_collect_replaceable', '_replace_subtree',
     '_simplify_ast', '_canonicalize_key',
     '_grow_tree', '_random_tree', '_random_tree_explore',

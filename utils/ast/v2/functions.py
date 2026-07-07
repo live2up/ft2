@@ -1405,11 +1405,14 @@ class FunctionSpec:
             例如 ts_mean(x, d) 为 1，ts_corr(x, y, d) 为 2，natr(H,L,C,d) 为 3。
         param_pool: 配置参数候选列表。元素为标量时生成一个常数参数；
             为 tuple 时生成多个常数参数；为 None 时不附加配置参数。
+        data_vars: 固定变量名列表。非 None 时 GP 直接填入这些变量名，
+            而非生成随机子树。例如 natr 的 data_vars=['HIGH','LOW','CLOSE']。
     """
     func: Callable
     category: str
     data_arity: int = 1
     param_pool: Optional[List[Any]] = None
+    data_vars: Optional[List[str]] = None
 
     def __call__(self, *args, **kwargs):
         # [兼容] 保持 FUNC_REGISTRY[name](...) 可直接调用
@@ -1439,7 +1442,8 @@ def get_func_category(name: str) -> str:
 
 def _register(name: str, func: Callable, category: str,
               data_arity: Optional[int] = None,
-              param_pool: Optional[List[Any]] = None) -> None:
+              param_pool: Optional[List[Any]] = None,
+              data_vars: Optional[List[str]] = None) -> None:
     """统一注册内置/自定义函数，同时维护 FUNC_REGISTRY 与 FUNC_CATEGORIES。"""
     name_lower = name.lower()
     if data_arity is None:
@@ -1447,6 +1451,7 @@ def _register(name: str, func: Callable, category: str,
     FUNC_REGISTRY[name_lower] = FunctionSpec(
         func=func, category=category,
         data_arity=data_arity, param_pool=param_pool,
+        data_vars=data_vars,
     )
     if category not in FUNC_CATEGORIES:
         FUNC_CATEGORIES[category] = []
@@ -1535,12 +1540,16 @@ _register('persist', persist, 'ts_function', param_pool=[3, 5, 10])
 
 # ── 特征计算 (从 OHLCV 实时算, 无需 FeatureSpace) ──
 _register('rsi', _feature_rsi, 'ta_function', param_pool=[14, 20])
-_register('atr', _feature_atr, 'ta_function', data_arity=3, param_pool=[14])
-_register('atr_sma', _feature_atr_sma, 'ta_function', data_arity=3, param_pool=[14])
+_register('atr', _feature_atr, 'ta_function', data_arity=3, param_pool=[14],
+           data_vars=['HIGH', 'LOW', 'CLOSE'])
+_register('atr_sma', _feature_atr_sma, 'ta_function', data_arity=3, param_pool=[14],
+           data_vars=['HIGH', 'LOW', 'CLOSE'])
 _register('bb_width', _feature_bbwidth, 'ta_function', param_pool=[20])
 _register('stddev', _feature_stddev, 'ta_function', param_pool=[10, 20])
-_register('adx', _feature_adx, 'ta_function', data_arity=3, param_pool=[14, 20])
-_register('cci', _feature_cci, 'ta_function', data_arity=3, param_pool=[14, 20])
+_register('adx', _feature_adx, 'ta_function', data_arity=3, param_pool=[14, 20],
+           data_vars=['HIGH', 'LOW', 'CLOSE'])
+_register('cci', _feature_cci, 'ta_function', data_arity=3, param_pool=[14, 20],
+           data_vars=['HIGH', 'LOW', 'CLOSE'])
 _register('macd', _feature_macd, 'ta_function', param_pool=[(12, 26, 9)])
 _register('trima', _feature_trima, 'ta_function', param_pool=[40])
 _register('ema', _feature_ema, 'ta_function', param_pool=[5, 10, 20, 60])
@@ -1550,11 +1559,14 @@ _register('kama', _feature_kama, 'ta_function', param_pool=[30])
 _register('wma', _feature_wma, 'ta_function', param_pool=[5, 10, 20, 60])
 _register('dema', _feature_dema, 'ta_function', param_pool=[10, 20])
 _register('hv', _feature_hv, 'ta_function', param_pool=[20, 60])
-_register('natr', _feature_natr, 'ta_function', data_arity=3, param_pool=[5, 14])
+_register('natr', _feature_natr, 'ta_function', data_arity=3, param_pool=[5, 14],
+           data_vars=['HIGH', 'LOW', 'CLOSE'])
 _register('var', _feature_var, 'ta_function', param_pool=[10, 20])
 _register('linearreg', _feature_linearreg, 'ta_function', param_pool=[10, 20])
-_register('vol_ratio', _feature_vol_ratio, 'ta_function', data_arity=2, param_pool=[(5, 20)])
-_register('amt_ratio', _feature_amt_ratio, 'feature_function', param_pool=[(5, 20)])
+_register('vol_ratio', _feature_vol_ratio, 'ta_function', data_arity=2, param_pool=[(5, 20)],
+           data_vars=['VOLUME'])
+_register('amt_ratio', _feature_amt_ratio, 'feature_function', param_pool=[(5, 20)],
+           data_vars=['AMOUNT'])
 
 # ── 旧名别名 — [2026-07-03] 已停止生产使用, 后续删除 ──
 _register('ts_resi', ts_resid, 'ts_function', param_pool=[10, 20])
@@ -1587,6 +1599,7 @@ def register_function(
     category: str = 'math_function',
     data_arity: Optional[int] = None,
     param_pool: Optional[List[Any]] = None,
+    data_vars: Optional[List[str]] = None,
 ) -> None:
     """临时注册自定义函数到表达式引擎，并加入 GP 权重池。
 
@@ -1604,7 +1617,8 @@ def register_function(
                   默认 1。
         param_pool: 配置参数候选列表。元素为标量时生成一个常数参数；
                   为 tuple 时生成多个常数参数；为 None 时不附加配置参数。
-                  [新增] 2026-07-07 支持注册时直接配置参数范围。
+        data_vars: 固定变量名列表。非 None 时 GP 直接填入这些变量名，
+                  而非生成随机子树。例如 natr 的 data_vars=['HIGH','LOW','CLOSE']。
     """
     name_lower = name.lower()
     if name_lower in FUNC_REGISTRY:
@@ -1614,7 +1628,8 @@ def register_function(
             f"原函数: {FUNC_REGISTRY[name_lower].__name__}"
         )
     # [重构] 2026-07-07 统一走 _register，保证 FUNC_REGISTRY 与 FUNC_CATEGORIES 同步
-    _register(name_lower, func, category, data_arity=data_arity, param_pool=param_pool)
+    _register(name_lower, func, category, data_arity=data_arity,
+              param_pool=param_pool, data_vars=data_vars)
 
 
 def unregister_function(name: str) -> bool:

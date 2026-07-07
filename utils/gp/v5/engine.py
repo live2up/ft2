@@ -16,11 +16,10 @@ from dataclasses import fields as dataclass_fields
 from utils.ast.dsl import parse_expression, ast_depth, ast_node_count
 from .config import (
     GP_VARIABLES,
-    TS_FUNCTIONS, TS_FUNCTIONS_2ARG, MATH_FUNCTIONS,
     TreeGenConfig, Individual,
     DEFAULT_TREE_GEN_CONFIG, DEFAULT_GP_CONFIG,
-    _FILL_VAR_KEYS, _FILL_TS_KEYS, _FILL_MATH_KEYS,
-    _FILL_FEATURE_KEYS, _FILL_GROUP_KEYS, _fill_weights,
+    _FILL_VAR_KEYS, _FILL_GROUP_KEYS, _fill_weights,
+    get_full_default_weights, _get_funcs_by_group, _get_fill_keys,
 )
 from .ast_utils import (
     _expr_str, _collect_replaceable, _replace_subtree, _simplify_ast, _canonicalize_key,
@@ -157,12 +156,14 @@ class GPEngine:
 
     def _build_tree_config(self, user_config: TreeGenConfig = None,
                            rng: random.Random = None) -> TreeGenConfig:
+        # [新增] 2026-07-07 自定义注册函数也纳入默认权重池
+        full_defaults = get_full_default_weights()
         if user_config is None:
             return TreeGenConfig(
-                group_weights=DEFAULT_TREE_GEN_CONFIG.group_weights,
-                ts_weights=DEFAULT_TREE_GEN_CONFIG.ts_weights,
-                math_weights=DEFAULT_TREE_GEN_CONFIG.math_weights,
-                feature_weights=DEFAULT_TREE_GEN_CONFIG.feature_weights,
+                group_weights=full_defaults['group_weights'],
+                ts_weights=full_defaults['ts_weights'],
+                math_weights=full_defaults['math_weights'],
+                feature_weights=full_defaults['feature_weights'],
                 rng=rng or random.Random(),
             )
         filled = {}
@@ -171,20 +172,19 @@ class GPEngine:
                 filled[field.name] = rng or user_config.rng or random.Random()
                 continue
             user_val = getattr(user_config, field.name)
-            default_val = getattr(DEFAULT_TREE_GEN_CONFIG, field.name)
             if user_val is None:
-                filled[field.name] = default_val
+                # [新增] 2026-07-07 使用包含自定义函数的完整默认权重
+                default_val = full_defaults.get(field.name)
+                if default_val is not None:
+                    filled[field.name] = default_val
+                else:
+                    filled[field.name] = getattr(DEFAULT_TREE_GEN_CONFIG, field.name)
             elif field.name in ('mode', 'var_allowlist', 'func_allowlist',
                                 'adaptive', 'adaptive_lr', 'adaptive_every'):
                 filled[field.name] = user_val
             else:
-                key_set = {
-                    'group_weights': _FILL_GROUP_KEYS,
-                    'ts_weights': _FILL_TS_KEYS,
-                    'math_weights': _FILL_MATH_KEYS,
-                    'feature_weights': _FILL_FEATURE_KEYS,
-                    'var_weights': _FILL_VAR_KEYS,
-                }.get(field.name, [])
+                # [重构] 2026-07-07 用 _get_fill_keys 动态获取 key 集合，不再依赖 _FILL_TS_KEYS 等硬编码常量
+                key_set = _get_fill_keys(field.name)
                 filled[field.name] = _fill_weights(user_val, key_set)
         return TreeGenConfig(**filled)
 
@@ -293,9 +293,17 @@ class GPEngine:
             return "unknown"
         import re
         from collections import Counter
+        from utils.ast.functions import FUNC_REGISTRY
         funcs = set(re.findall(r'([a-z_]+)\(', expr_str))
-        math_sig = '+'.join(sorted(f for f in funcs if f in MATH_FUNCTIONS)) or 'none'
-        ts_sig = '+'.join(sorted(f for f in funcs if f in TS_FUNCTIONS or f in TS_FUNCTIONS_2ARG)) or 'none'
+        math_sig = '+'.join(sorted(
+            f for f in funcs
+            if f in FUNC_REGISTRY and FUNC_REGISTRY[f].category == 'math_function'
+        )) or 'none'
+        ts_sig = '+'.join(sorted(
+            f for f in funcs
+            if f in FUNC_REGISTRY and FUNC_REGISTRY[f].category in (
+                'ts_function', 'cs_function', 'ta_function', 'feature_function')
+        )) or 'none'
         var_counts = Counter(re.findall(r'\b([A-Z][A-Z_0-9]+)\b', expr_str))
         vars_sig = '+'.join(v for v, _ in var_counts.most_common(4)) or 'none'
         return f"m:{math_sig}|t:{ts_sig}|v:{vars_sig}"

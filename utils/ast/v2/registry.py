@@ -25,7 +25,7 @@ from .functions import (
     ts_delta, ts_delay, ts_rank, ts_corr, ts_cov,
     ts_skew, ts_kurt, ts_argmax, ts_argmin, ts_roc, ts_zscore,
     ts_scale, ts_quantile, ts_av_diff, ts_decay_linear, ts_product,
-    ts_regression, ts_resid,
+    ts_resid,
     ts_slope, ts_rsq, ts_intercept, ts_predict,
     expanding_mean, expanding_median, expanding_std, expanding_percentile,
     cs_rank, cs_zscore, cs_scale, cs_winsorize, cs_quantile,
