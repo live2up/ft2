@@ -14,13 +14,14 @@ def test_comprehensive():
     """综合测试：混合自由内容与模块嵌套"""
     print("\n[综合测试]...")
     
-    nb = Notebook("综合测试报告")
-    
+    nb = Notebook("Notebook 综合展示测试")
+
     # ========== 【自由内容】报告头部 ==========
-    nb.title("策略回测报告", level=1)
+    nb.title("Notebook 展示能力测试", level=1)
     nb.divider()
     nb.markdown("""
-**策略类型**: 趋势跟踪 | **回测区间**: 2024-01 至 2024-05 | **初始资金**: 1,000,000
+**模块**: ft2.notebook | **渲染引擎**: Jinja2 + Vue3 + ECharts | **表格组件**: ft-table
+**测试范围**: 图表类(折线/柱状/饼图/散点/K线/热力/Grid) · 表格类 · 文本类(Text/Markdown/Code/HTML)
     """)
     
     # 【自由内容】核心指标（全局可见，不在section中）
@@ -407,7 +408,7 @@ def on_bar(bar):
 </div>
     """)
     
-    nb.export_html(local_static=True)  # local_static=True: 使用本地 JS 文件，离线可查看
+    nb.export_html(local_static=True, base_dir=os.path.dirname(os.path.abspath(__file__)))  # local_static=True: 使用本地 JS 文件，离线可查看；base_dir: 输出到脚本所在目录
     
 
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>综合测试报告</title>
+    <title>Notebook 综合展示测试</title>
     <link rel="stylesheet" href="file:///d:/01-Doc/Quant/ft2/template/js/notebook3D.css">
     <script src="file:///d:/01-Doc/Quant/ft2/template/js/vue.global.prod.js"></script>
     <script src="file:///d:/01-Doc/Quant/ft2/template/js/ft-table.js"></script>
@@ -15,12 +15,12 @@
     <script id="notebook-data" type="application/ld+json">{
   "@context": "https://schema.org",
   "@type": "Dataset",
-  "title": "综合测试报告",
-  "createdAt": "2026-07-03 12:15:02",
+  "title": "Notebook 综合展示测试",
+  "createdAt": "2026-07-07 11:21:12",
   "children": [
     {
       "type": "title",
-      "content": "策略回测报告",
+      "content": "Notebook 展示能力测试",
       "options": {
         "level": 1
       }
@@ -31,7 +31,7 @@
     },
     {
       "type": "markdown",
-      "content": "**策略类型**: 趋势跟踪 | **回测区间**: 2024-01 至 2024-05 | **初始资金**: 1,000,000"
+      "content": "**模块**: ft2.notebook | **渲染引擎**: Jinja2 + Vue3 + ECharts | **表格组件**: ft-table\n**测试范围**: 图表类(折线/柱状/饼图/散点/K线/热力/Grid) · 表格类 · 文本类(Text/Markdown/Code/HTML)"
     },
     {
       "type": "metrics",
@@ -1529,17 +1529,17 @@
                 {
                   "data": [
                     [
-                      5,
+                      2,
                       0,
                       0.02
                     ],
                     [
-                      1,
+                      0,
                       0,
                       -0.01
                     ],
                     [
-                      4,
+                      5,
                       0,
                       0.03
                     ],
@@ -1549,27 +1549,27 @@
                       0.01
                     ],
                     [
-                      0,
-                      0,
-                      -0.02
-                    ],
-                    [
-                      2,
-                      0,
-                      0.04
-                    ],
-                    [
-                      5,
                       1,
-                      0.05
-                    ],
-                    [
-                      1,
-                      1,
+                      0,
                       -0.02
                     ],
                     [
                       4,
+                      0,
+                      0.04
+                    ],
+                    [
+                      2,
+                      1,
+                      0.05
+                    ],
+                    [
+                      0,
+                      1,
+                      -0.02
+                    ],
+                    [
+                      5,
                       1,
                       0.08
                     ],
@@ -1579,12 +1579,12 @@
                       0.03
                     ],
                     [
-                      0,
+                      1,
                       1,
                       0.06
                     ],
                     [
-                      2,
+                      4,
                       1,
                       -0.01
                     ]
@@ -1602,12 +1602,12 @@
               "xAxis": [
                 {
                   "data": [
-                    "05",
                     "02",
-                    "06",
+                    "05",
+                    "01",
                     "04",
-                    "03",
-                    "01"
+                    "06",
+                    "03"
                   ]
                 }
               ],
@@ -2280,8 +2280,8 @@
                     ]
                   ],
                   "type": "candlestick",
-                  "yAxisIndex": 0,
-                  "xAxisIndex": 0
+                  "xAxisIndex": 0,
+                  "yAxisIndex": 0
                 },
                 {
                   "name": "成交金额",
@@ -2293,8 +2293,8 @@
                     20000
                   ],
                   "type": "bar",
-                  "yAxisIndex": 1,
-                  "xAxisIndex": 1
+                  "xAxisIndex": 1,
+                  "yAxisIndex": 1
                 }
               ],
               "legend": [
@@ -2337,13 +2337,13 @@
               "grid": [
                 {
                   "containLabel": true,
-                  "height": "300px",
-                  "top": "28px"
+                  "top": "28px",
+                  "height": "300px"
                 },
                 {
                   "containLabel": true,
-                  "height": "150px",
-                  "top": "386px"
+                  "top": "386px",
+                  "height": "150px"
                 }
               ],
               "yAxis": [
@@ -2393,8 +2393,8 @@
                     ]
                   ],
                   "type": "line",
-                  "yAxisIndex": 0,
-                  "xAxisIndex": 0
+                  "xAxisIndex": 0,
+                  "yAxisIndex": 0
                 },
                 {
                   "name": "信号",
@@ -2406,8 +2406,8 @@
                     1
                   ],
                   "type": "bar",
-                  "yAxisIndex": 1,
-                  "xAxisIndex": 1
+                  "xAxisIndex": 1,
+                  "yAxisIndex": 1
                 },
                 {
                   "name": "仓位",
@@ -2434,8 +2434,8 @@
                     ]
                   ],
                   "type": "line",
-                  "yAxisIndex": 2,
-                  "xAxisIndex": 2
+                  "xAxisIndex": 2,
+                  "yAxisIndex": 2
                 }
               ],
               "legend": [
@@ -2493,18 +2493,18 @@
               "grid": [
                 {
                   "containLabel": true,
-                  "height": "200px",
-                  "top": "28px"
+                  "top": "28px",
+                  "height": "200px"
                 },
                 {
                   "containLabel": true,
-                  "height": "100px",
-                  "top": "286px"
+                  "top": "286px",
+                  "height": "100px"
                 },
                 {
                   "containLabel": true,
-                  "height": "150px",
-                  "top": "444px"
+                  "top": "444px",
+                  "height": "150px"
                 }
               ],
               "yAxis": [
@@ -2578,8 +2578,8 @@
                     ]
                   ],
                   "type": "line",
-                  "yAxisIndex": 0,
-                  "xAxisIndex": 0
+                  "xAxisIndex": 0,
+                  "yAxisIndex": 0
                 },
                 {
                   "name": "仓位",
@@ -2596,8 +2596,8 @@
                     0.8
                   ],
                   "type": "bar",
-                  "yAxisIndex": 1,
-                  "xAxisIndex": 1
+                  "xAxisIndex": 1,
+                  "yAxisIndex": 1
                 }
               ],
               "legend": [
@@ -2650,13 +2650,13 @@
               "grid": [
                 {
                   "containLabel": true,
-                  "height": "300px",
-                  "top": "28px"
+                  "top": "28px",
+                  "height": "300px"
                 },
                 {
                   "containLabel": true,
-                  "height": "150px",
-                  "top": "386px"
+                  "top": "386px",
+                  "height": "150px"
                 }
               ],
               "yAxis": [
