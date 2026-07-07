@@ -8,6 +8,7 @@
     <script src="file:///d:/01-Doc/Quant/ft2/template/js/vue.global.prod.js"></script>
     <script src="file:///d:/01-Doc/Quant/ft2/template/js/ft-table.js"></script>
     <script src="file:///d:/01-Doc/Quant/ft2/template/js/echarts.min.js"></script>
+    <script src="file:///d:/01-Doc/Quant/ft2/template/js/marked.min.js"></script>
     <script src="file:///d:/01-Doc/Quant/ft2/template/js/snapdom.min.js"></script>
 
     <!-- AI 优先读取：Notebook 结构化数据（JSON-LD） -->
@@ -15,7 +16,7 @@
   "@context": "https://schema.org",
   "@type": "Dataset",
   "title": "综合测试报告",
-  "createdAt": "2026-05-30 12:55:20",
+  "createdAt": "2026-07-03 12:15:02",
   "children": [
     {
       "type": "title",
@@ -30,7 +31,7 @@
     },
     {
       "type": "markdown",
-      "content": "\n**策略类型**: 趋势跟踪 | **回测区间**: 2024-01 至 2024-05 | **初始资金**: 1,000,000\n    "
+      "content": "**策略类型**: 趋势跟踪 | **回测区间**: 2024-01 至 2024-05 | **初始资金**: 1,000,000"
     },
     {
       "type": "metrics",
@@ -146,7 +147,8 @@
               ]
             },
             "width": "100%",
-            "height": "400px"
+            "height": "400px",
+            "chartType": "line"
           },
           "title": "净值曲线（字典格式：xAxis + series）"
         },
@@ -1084,7 +1086,8 @@
               ]
             },
             "width": "100%",
-            "height": "400px"
+            "height": "400px",
+            "chartType": "line"
           },
           "title": "100条数据折线图测试"
         },
@@ -1167,7 +1170,8 @@
               ]
             },
             "width": "100%",
-            "height": "400px"
+            "height": "400px",
+            "chartType": "line"
           },
           "title": "净值曲线（DataFrame格式：第一列=X轴）"
         },
@@ -1220,7 +1224,8 @@
               ]
             },
             "width": "100%",
-            "height": "400px"
+            "height": "400px",
+            "chartType": "bar"
           },
           "title": "月度盈亏（字典格式）"
         },
@@ -1275,9 +1280,83 @@
               ]
             },
             "width": "100%",
-            "height": "400px"
+            "height": "400px",
+            "chartType": "bar"
           },
-          "title": "月度盈亏（DataFrame格式）"
+          "title": "月度盈亏堆叠柱状图"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "股票",
+                  "data": [
+                    60,
+                    55,
+                    50,
+                    48,
+                    52,
+                    58
+                  ],
+                  "stack": "group",
+                  "type": "bar"
+                },
+                {
+                  "name": "债券",
+                  "data": [
+                    25,
+                    28,
+                    30,
+                    32,
+                    28,
+                    25
+                  ],
+                  "stack": "group",
+                  "type": "bar"
+                },
+                {
+                  "name": "现金",
+                  "data": [
+                    15,
+                    17,
+                    20,
+                    20,
+                    20,
+                    17
+                  ],
+                  "stack": "group",
+                  "type": "bar"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "股票",
+                    "债券",
+                    "现金"
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
+                  "data": [
+                    "1月",
+                    "2月",
+                    "3月",
+                    "4月",
+                    "5月",
+                    "6月"
+                  ]
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "400px",
+            "chartType": "bar"
+          },
+          "title": "资产配置堆叠对比（工具栏N=归一化，%=百分比）"
         },
         {
           "type": "section",
@@ -1319,7 +1398,8 @@
                   ]
                 },
                 "width": "100%",
-                "height": "400px"
+                "height": "400px",
+                "chartType": "bar"
               },
               "title": "月度收益"
             },
@@ -1357,7 +1437,8 @@
                   ]
                 },
                 "width": "100%",
-                "height": "250px"
+                "height": "250px",
+                "chartType": "pie"
               },
               "title": "资产配置"
             }
@@ -1435,7 +1516,8 @@
               ]
             },
             "width": "100%",
-            "height": 250
+            "height": 250,
+            "chartType": "area"
           },
           "title": "回撤曲线"
         },
@@ -1447,17 +1529,17 @@
                 {
                   "data": [
                     [
-                      1,
+                      5,
                       0,
                       0.02
                     ],
                     [
-                      2,
+                      1,
                       0,
                       -0.01
                     ],
                     [
-                      0,
+                      4,
                       0,
                       0.03
                     ],
@@ -1467,27 +1549,27 @@
                       0.01
                     ],
                     [
-                      4,
+                      0,
                       0,
                       -0.02
                     ],
                     [
-                      5,
+                      2,
                       0,
                       0.04
                     ],
                     [
-                      1,
+                      5,
                       1,
                       0.05
                     ],
                     [
-                      2,
+                      1,
                       1,
                       -0.02
                     ],
                     [
-                      0,
+                      4,
                       1,
                       0.08
                     ],
@@ -1497,12 +1579,12 @@
                       0.03
                     ],
                     [
-                      4,
+                      0,
                       1,
                       0.06
                     ],
                     [
-                      5,
+                      2,
                       1,
                       -0.01
                     ]
@@ -1520,12 +1602,12 @@
               "xAxis": [
                 {
                   "data": [
-                    "03",
-                    "01",
-                    "02",
-                    "04",
                     "05",
-                    "06"
+                    "02",
+                    "06",
+                    "04",
+                    "03",
+                    "01"
                   ]
                 }
               ],
@@ -1543,7 +1625,8 @@
               }
             },
             "width": "100%",
-            "height": "400px"
+            "height": "400px",
+            "chartType": "heatmap"
           },
           "title": "月度收益热力图（字典格式：Y轴=年份，X轴=月份）"
         },
@@ -1651,7 +1734,8 @@
               }
             },
             "width": "100%",
-            "height": "400px"
+            "height": "400px",
+            "chartType": "heatmap"
           },
           "title": "月度收益热力图（DataFrame格式：第一列=X轴）"
         },
@@ -1661,28 +1745,48 @@
             "charts": {
               "series": [
                 {
-                  "name": "收益率",
+                  "name": "波动率 vs 收益率",
                   "data": [
-                    [
-                      "浦发银行",
-                      5.2
-                    ],
-                    [
-                      "平安银行",
-                      -3.1
-                    ],
-                    [
-                      "万科A",
-                      8.7
-                    ],
-                    [
-                      "贵州茅台",
-                      12.3
-                    ],
-                    [
-                      "中国平安",
-                      -1.5
-                    ]
+                    {
+                      "name": "茅台",
+                      "value": [
+                        15.2,
+                        0.82
+                      ],
+                      "symbolKeepAspect": false
+                    },
+                    {
+                      "name": "平安银行",
+                      "value": [
+                        8.1,
+                        0.45
+                      ],
+                      "symbolKeepAspect": false
+                    },
+                    {
+                      "name": "万科A",
+                      "value": [
+                        22.3,
+                        0.31
+                      ],
+                      "symbolKeepAspect": false
+                    },
+                    {
+                      "name": "招商银行",
+                      "value": [
+                        10.5,
+                        0.56
+                      ],
+                      "symbolKeepAspect": false
+                    },
+                    {
+                      "name": "宁德时代",
+                      "value": [
+                        28.7,
+                        -0.15
+                      ],
+                      "symbolKeepAspect": false
+                    }
                   ],
                   "type": "scatter"
                 }
@@ -1690,26 +1794,27 @@
               "legend": [
                 {
                   "data": [
-                    "收益率"
+                    "波动率 vs 收益率"
                   ]
                 }
               ],
               "xAxis": [
                 {
-                  "data": [
-                    "浦发银行",
-                    "平安银行",
-                    "万科A",
-                    "贵州茅台",
-                    "中国平安"
-                  ]
+                  "name": "波动率",
+                  "data": []
+                }
+              ],
+              "yAxis": [
+                {
+                  "name": "收益率"
                 }
               ]
             },
             "width": "100%",
-            "height": "400px"
+            "height": "400px",
+            "chartType": "scatter"
           },
-          "title": "类目散点图（xAxis标签 + y值）"
+          "title": "DataFrame散点图（推荐: 名称+X+Y，tooltip显示股票名）"
         },
         {
           "type": "chart",
@@ -1857,9 +1962,149 @@
               ]
             },
             "width": "100%",
-            "height": "400px"
+            "height": "400px",
+            "chartType": "scatter"
           },
-          "title": "数值散点图（[x,y] 二维数组）"
+          "title": "数值散点图（进阶: [x,y] 二维数组）"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "收益率",
+                  "data": [
+                    [
+                      "浦发银行",
+                      5.2
+                    ],
+                    [
+                      "平安银行",
+                      -3.1
+                    ],
+                    [
+                      "万科A",
+                      8.7
+                    ],
+                    [
+                      "贵州茅台",
+                      12.3
+                    ],
+                    [
+                      "中国平安",
+                      -1.5
+                    ]
+                  ],
+                  "type": "scatter"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "收益率"
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
+                  "data": [
+                    "浦发银行",
+                    "平安银行",
+                    "万科A",
+                    "贵州茅台",
+                    "中国平安"
+                  ]
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "400px",
+            "chartType": "scatter"
+          },
+          "title": "类目散点图（进阶: xAxis标签 + y值）"
+        },
+        {
+          "type": "chart",
+          "content": {
+            "charts": {
+              "series": [
+                {
+                  "name": "波动率 vs 收益率",
+                  "data": [
+                    {
+                      "name": "茅台",
+                      "value": [
+                        15.2,
+                        0.82,
+                        60.0
+                      ],
+                      "symbolKeepAspect": false
+                    },
+                    {
+                      "name": "平安银行",
+                      "value": [
+                        8.1,
+                        0.45,
+                        30.0
+                      ],
+                      "symbolKeepAspect": false
+                    },
+                    {
+                      "name": "万科A",
+                      "value": [
+                        22.3,
+                        0.31,
+                        80.0
+                      ],
+                      "symbolKeepAspect": false
+                    },
+                    {
+                      "name": "招商银行",
+                      "value": [
+                        10.5,
+                        0.56,
+                        50.0
+                      ],
+                      "symbolKeepAspect": false
+                    },
+                    {
+                      "name": "宁德时代",
+                      "value": [
+                        28.7,
+                        -0.15,
+                        95.0
+                      ],
+                      "symbolKeepAspect": false
+                    }
+                  ],
+                  "type": "scatter"
+                }
+              ],
+              "legend": [
+                {
+                  "data": [
+                    "波动率 vs 收益率"
+                  ]
+                }
+              ],
+              "xAxis": [
+                {
+                  "name": "波动率",
+                  "data": []
+                }
+              ],
+              "yAxis": [
+                {
+                  "name": "收益率"
+                }
+              ]
+            },
+            "width": "100%",
+            "height": "400px",
+            "chartType": "scatter"
+          },
+          "title": "气泡图（4列: 名称+X+Y+大小，大小列=气泡尺寸）"
         },
         {
           "type": "chart",
@@ -1923,7 +2168,8 @@
               ]
             },
             "width": "100%",
-            "height": "400px"
+            "height": "400px",
+            "chartType": "kline"
           },
           "title": "K线图（标准格式）"
         },
@@ -1989,7 +2235,8 @@
               ]
             },
             "width": "100%",
-            "height": "400px"
+            "height": "400px",
+            "chartType": "kline"
           },
           "title": "K线图（DataFrame格式）"
         },
@@ -2033,8 +2280,8 @@
                     ]
                   ],
                   "type": "candlestick",
-                  "xAxisIndex": 0,
-                  "yAxisIndex": 0
+                  "yAxisIndex": 0,
+                  "xAxisIndex": 0
                 },
                 {
                   "name": "成交金额",
@@ -2046,8 +2293,8 @@
                     20000
                   ],
                   "type": "bar",
-                  "xAxisIndex": 1,
-                  "yAxisIndex": 1
+                  "yAxisIndex": 1,
+                  "xAxisIndex": 1
                 }
               ],
               "legend": [
@@ -2146,8 +2393,8 @@
                     ]
                   ],
                   "type": "line",
-                  "xAxisIndex": 0,
-                  "yAxisIndex": 0
+                  "yAxisIndex": 0,
+                  "xAxisIndex": 0
                 },
                 {
                   "name": "信号",
@@ -2159,8 +2406,8 @@
                     1
                   ],
                   "type": "bar",
-                  "xAxisIndex": 1,
-                  "yAxisIndex": 1
+                  "yAxisIndex": 1,
+                  "xAxisIndex": 1
                 },
                 {
                   "name": "仓位",
@@ -2187,8 +2434,8 @@
                     ]
                   ],
                   "type": "line",
-                  "xAxisIndex": 2,
-                  "yAxisIndex": 2
+                  "yAxisIndex": 2,
+                  "xAxisIndex": 2
                 }
               ],
               "legend": [
@@ -2331,8 +2578,8 @@
                     ]
                   ],
                   "type": "line",
-                  "xAxisIndex": 0,
-                  "yAxisIndex": 0
+                  "yAxisIndex": 0,
+                  "xAxisIndex": 0
                 },
                 {
                   "name": "仓位",
@@ -2349,8 +2596,8 @@
                     0.8
                   ],
                   "type": "bar",
-                  "xAxisIndex": 1,
-                  "yAxisIndex": 1
+                  "yAxisIndex": 1,
+                  "xAxisIndex": 1
                 }
               ],
               "legend": [
@@ -2434,7 +2681,7 @@
           "children": [
             {
               "type": "markdown",
-              "content": "\n**VaR(95%)**: 2.5%  \n**CVaR(95%)**: 3.8%  \n**下行波动率**: 8.2%\n            "
+              "content": "**VaR(95%)**: 2.5%  \n**CVaR(95%)**: 3.8%  \n**下行波动率**: 8.2%"
             }
           ],
           "title": "风险评估",

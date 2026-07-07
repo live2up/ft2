@@ -3,8 +3,8 @@ Notebook 模块测试
 """
 
 import sys, os
-# [修复] 2026-05-30 使用相对路径获取项目根目录，替代硬编码的绝对路径
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+# [修复] 2026-07-07 从 demo/ 上移一层到项目根目录
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import pandas as pd
 import numpy as np
 from notebook import Notebook
@@ -407,7 +407,7 @@ def on_bar(bar):
 </div>
     """)
     
-    nb.export_html(local_static=True)
+    nb.export_html(local_static=True)  # local_static=True: 使用本地 JS 文件，离线可查看
     
 
 
