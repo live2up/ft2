@@ -46,3 +46,14 @@ ft2.notebook ← 任意模块独立调用，无依赖
 ## 数据流
 
 原始 OHLCV 数据 → signals / factor / pms 计算信号/排名/配置 → ft2.core 回测执行 → 指标计算 → ft2.notebook → HTML 报告
+
+---
+
+## 示例报告
+
+> 以下 HTML 报告由 ft2.notebook 生成，托管于 GitHub Pages（CDN: `livepu/ft2`）。
+
+| 报告 | 说明 |
+|------|------|
+| [Notebook 综合展示测试](https://cdn.jsdelivr.net/gh/livepu/ft2@master/demo/Notebook%20%E7%BB%BC%E5%90%88%E5%B1%95%E7%A4%BA%E6%B5%8B%E8%AF%95.html) | Notebook 渲染能力全量测试：图表类(折线/柱状/饼图/散点/K线/热力/Grid) · 表格类 · 文本类 |
+| [双风格并行报告](https://cdn.jsdelivr.net/gh/livepu/ft2@master/demo/23-a-%E5%8F%8C%E9%A3%8E%E6%A0%BC%E5%B9%B6%E8%A1%8C_%E5%BC%BARD+%E7%A8%B3AE_D%E9%A2%91.html) | 因子轮动回测报告：双风格(强RD+稳AE)并行策略，日频调仓 |

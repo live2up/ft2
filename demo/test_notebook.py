@@ -408,7 +408,7 @@ def on_bar(bar):
 </div>
     """)
     
-    nb.export_html(local_static=True, base_dir=os.path.dirname(os.path.abspath(__file__)))  # local_static=True: 使用本地 JS 文件，离线可查看；base_dir: 输出到脚本所在目录
+    nb.export_html(local_static=False, base_dir=os.path.dirname(os.path.abspath(__file__)))  # local_static=True: 使用本地 JS 文件，离线可查看；base_dir: 输出到脚本所在目录
     
 
 
