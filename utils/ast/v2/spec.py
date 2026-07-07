@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-utils/ast/spec.py — AST 规格与构建器 (公共基础设施)
+utils/ast/spec.py — AST 规格层 + 表达式基类 (公共基础设施)
 =============================================================================
 
 在五层架构中的位置: 规格层 — 定义 AST 的结构约束与安全构建
 
 用途:
-  1. AST 节点构建器 — GP 引擎/LLM 用类型安全的方式构造 AST 树
-  2. 表达式规范化器 — 统一表达式格式, 消除等价表达式的差异
-  3. 语法规格 — LLM prompt 中引用, 明确定义"能写什么"
+  1. AstExpression 表达式基类 — 解析+自省 (signals/factor 子类继承)
+  2. AST 节点构建器 — GP 引擎/LLM 用类型安全的方式构造 AST 树
+  3. 表达式规范化器 — 统一表达式格式, 消除等价表达式的差异
+  4. 语法规格 — LLM prompt 中引用, 明确定义"能写什么"
 
 设计原则:
   - 构建器自带校验: 拒绝不合法的参数组合
@@ -16,13 +17,59 @@ utils/ast/spec.py — AST 规格与构建器 (公共基础设施)
   - 规格文档化: 可直接作为 LLM system prompt 的一部分
 
 [新增] 2026-06-22 AST 规范化
+[重构] 2026-07-08 合并 expr_base.py, AstExpression 基类移入此文件
 =============================================================================
 """
 import ast
 import operator
 from typing import Optional, List, Union
 
-from .registry import FUNC_REGISTRY, is_valid_variable, SAFE_CONSTANTS
+from .functions import FUNC_REGISTRY, is_valid_variable, SAFE_CONSTANTS
+from .dsl import parse_expression, get_variables, get_functions, ast_node_count
+from .resolver import _has_any_cs, _is_outer_cs_rank_call
+
+
+# ============================================================
+# AstExpression — DSL 表达式基类
+# [重构] 2026-07-08 从 expr_base.py 合并
+# ============================================================
+
+class AstExpression:
+    """DSL 表达式基类
+
+    封装了 DSL 表达式从字符串到 AST 树的完整解析和自省流程。
+    子类只需实现各自的求值方法 (generate / evaluate / evaluate_ranked)。
+
+    Attributes:
+        expr_str (str):     原始表达式字符串
+        name (str):         表达式名称 (默认取前60字符)
+        _tree (ast.Expression): 解析后的 Python AST 树
+        variables (list):   表达式引用的变量名列表 (ALL_CAPS)
+        functions (list):   表达式调用的函数名列表 (snake_case)
+        complexity (int):   AST 节点总数
+    """
+
+    def __init__(self, expr_str: str, name: str = None):
+        self.expr_str = expr_str.strip()
+        self.name = name or self.expr_str[:60]
+        self._tree = parse_expression(self.expr_str)
+        self.variables = get_variables(self._tree)
+        self.functions = get_functions(self._tree)
+        self.complexity = ast_node_count(self._tree)
+        self._has_cs = _has_any_cs(self._tree)
+        self._is_outer_cs_rank = _is_outer_cs_rank_call(self._tree)
+
+    @property
+    def features_used(self) -> List[str]:
+        """表达式依赖的所有变量 (兼容旧 API)"""
+        return self.variables
+
+    def __repr__(self):
+        cls_name = type(self).__name__
+        return f"{cls_name}({self.expr_str[:60]!r})"
+
+    def __str__(self):
+        return self.expr_str
 
 
 # ============================================================
@@ -346,8 +393,7 @@ def grammar_spec_for_llm() -> str:
 
 def grammar_spec_compact() -> str:
     """返回紧凑版语法规格 (减少 token)"""
-    from .functions import FUNC_CATEGORIES
-    from .variables import VAR_CATEGORIES
+    from .functions import FUNC_CATEGORIES, VAR_CATEGORIES
 
     lines = [
         "# AST DSL Compact Grammar",

@@ -29,9 +29,8 @@ import ast
 import numpy as np
 from typing import Dict
 
-from utils.ast.expr_base import AstExpression
+from utils.ast import AstExpression, CsResolver, normalize_data_keys
 from utils.ast.dsl import evaluate, eval_colwise
-from utils.ast import CsResolver, normalize_data_keys
 
 
 class _ExpressionFromAST:

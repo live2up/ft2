@@ -100,6 +100,22 @@ def _random_data_call(cfg: TreeGenConfig, depth: int) -> ast.Call:
         else:
             args.append(ast.Constant(value=chosen))
 
+    # [P0修复] 2026-07-08 额外配置参数：从 param_constraints 采样
+    # 处理 param_pool 无法覆盖的参数 (如浮点比例、连续范围)
+    if spec and spec.param_constraints:
+        for pc in spec.param_constraints:
+            if pc.pool is not None:
+                val = rng.choice(pc.pool)
+            elif pc.dtype == 'int':
+                lo = int(pc.min_val) if pc.min_val is not None else 1
+                hi = int(pc.max_val) if pc.max_val is not None else 100
+                val = rng.randint(lo, hi)
+            else:
+                lo = pc.min_val if pc.min_val is not None else 0.0
+                hi = pc.max_val if pc.max_val is not None else 1.0
+                val = rng.uniform(lo, hi)
+            args.append(ast.Constant(value=val))
+
     return ast.Call(
         func=ast.Name(id=func_name, ctx=ast.Load()),
         args=args, keywords=[],
@@ -133,6 +149,29 @@ def _random_math_call(cfg: TreeGenConfig, depth: int) -> ast.Call:
             args.append(_grow_tree(cfg, depth - 1, prefer_variable=True))
     else:
         args.append(_grow_tree(cfg, depth - 1, prefer_variable=True))
+
+    # [P0修复] 2026-07-08 数学函数也可能有 param_pool / param_constraints
+    if spec and spec.param_pool:
+        chosen = rng.choice(spec.param_pool)
+        if isinstance(chosen, tuple):
+            for p in chosen:
+                args.append(ast.Constant(value=p))
+        else:
+            args.append(ast.Constant(value=chosen))
+
+    if spec and spec.param_constraints:
+        for pc in spec.param_constraints:
+            if pc.pool is not None:
+                val = rng.choice(pc.pool)
+            elif pc.dtype == 'int':
+                lo = int(pc.min_val) if pc.min_val is not None else 1
+                hi = int(pc.max_val) if pc.max_val is not None else 100
+                val = rng.randint(lo, hi)
+            else:
+                lo = pc.min_val if pc.min_val is not None else 0.0
+                hi = pc.max_val if pc.max_val is not None else 1.0
+                val = rng.uniform(lo, hi)
+            args.append(ast.Constant(value=val))
 
     return ast.Call(
         func=ast.Name(id=func_name, ctx=ast.Load()),

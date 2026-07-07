@@ -26,7 +26,7 @@ import operator
 import numpy as np
 from typing import Dict, Any, Union
 
-from .registry import (
+from .functions import (
     FUNC_REGISTRY, SAFE_CONSTANTS,
     is_valid_variable, VALID_VAR_PREFIXES,
 )

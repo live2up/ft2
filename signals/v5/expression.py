@@ -34,9 +34,8 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List
 
-from utils.ast.expr_base import AstExpression
+from utils.ast import AstExpression, CsResolver, normalize_data_keys
 from utils.ast.dsl import evaluate
-from utils.ast import CsResolver, normalize_data_keys
 
 
 class Expression(AstExpression):

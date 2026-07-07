@@ -163,9 +163,9 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 """
 import numpy as np
 import talib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from numba import njit
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 
 
 # ============================================================
@@ -1394,6 +1394,30 @@ def _feature_amt_ratio(amount: np.ndarray, short: int = 5, long: int = 20) -> np
 # [重构] 2026-07-07 引入 FunctionSpec: 把函数实现、GP 分类、数据参数个数、
 # 参数候选池封装到一个 dataclass 中。GP 生成器可直接读取 data_arity/param_pool
 # 生成合法表达式，不再依赖 TS_FUNCTIONS/TS_FUNCTIONS_2ARG 等硬编码分池。
+# [重构] 2026-07-08 新增 ParamConstraint: 描述带值域约束的配置参数 (如浮点比例、
+# 正整数窗口等)。param_pool 描述离散候选, param_constraints 描述连续范围约束,
+# 两者互补。GP 生成器优先用 param_pool, 其次用 param_constraints 采样。
+
+@dataclass
+class ParamConstraint:
+    """配置参数约束 — 描述 param_pool 无法覆盖的带约束参数。
+
+    用于函数签名中 param_pool 之外的额外参数 (如 ts_quantile 的 p, cs_scale 的 scale)。
+
+    Args:
+        name: 参数名 (仅用于文档/调试, 不参与生成逻辑)
+        dtype: 'int' 或 'float', 默认 'float'
+        min_val: 最小值 (含), None 表示无下界
+        max_val: 最大值 (含), None 表示无上界
+        pool: 离散候选列表。非 None 时优先于 min/max 采样
+    """
+    name: str
+    dtype: str = 'float'
+    min_val: Optional[float] = None
+    max_val: Optional[float] = None
+    pool: Optional[List[Any]] = None
+
+
 @dataclass
 class FunctionSpec:
     """函数注册项：实现 + 表达式/GP 元数据。
@@ -1403,8 +1427,11 @@ class FunctionSpec:
         category: GP 大类，对齐 group_weights 的 key。
         data_arity: 需要由 GP 生成子树填充的数据序列参数个数。
             例如 ts_mean(x, d) 为 1，ts_corr(x, y, d) 为 2，natr(H,L,C,d) 为 3。
-        param_pool: 配置参数候选列表。元素为标量时生成一个常数参数；
+        param_pool: 第一组配置参数候选列表。元素为标量时生成一个常数参数；
             为 tuple 时生成多个常数参数；为 None 时不附加配置参数。
+        param_constraints: 额外配置参数约束列表 (带值域/类型)。
+            用于 param_pool 无法覆盖的参数 (如浮点比例、连续范围)。
+            GP 生成器在 param_pool 之后按顺序追加这些参数。
         data_vars: 固定变量名列表。非 None 时 GP 直接填入这些变量名，
             而非生成随机子树。例如 natr 的 data_vars=['HIGH','LOW','CLOSE']。
     """
@@ -1412,6 +1439,7 @@ class FunctionSpec:
     category: str
     data_arity: int = 1
     param_pool: Optional[List[Any]] = None
+    param_constraints: Optional[List[ParamConstraint]] = None
     data_vars: Optional[List[str]] = None
 
     def __call__(self, *args, **kwargs):
@@ -1443,14 +1471,23 @@ def get_func_category(name: str) -> str:
 def _register(name: str, func: Callable, category: str,
               data_arity: Optional[int] = None,
               param_pool: Optional[List[Any]] = None,
+              param_constraints: Optional[List[ParamConstraint]] = None,
               data_vars: Optional[List[str]] = None) -> None:
-    """统一注册内置/自定义函数，同时维护 FUNC_REGISTRY 与 FUNC_CATEGORIES。"""
+    """统一注册内置/自定义函数，同时维护 FUNC_REGISTRY 与 FUNC_CATEGORIES。
+
+    [规范] 2026-07-08 data_vars 非空时, data_arity 自动取 len(data_vars),
+    无需手动指定。消除 data_arity 与 data_vars 的冗余。
+    """
     name_lower = name.lower()
-    if data_arity is None:
+    # data_vars 优先: 有固定变量时, data_arity 自动推导
+    if data_vars is not None:
+        data_arity = len(data_vars)
+    elif data_arity is None:
         data_arity = 1
     FUNC_REGISTRY[name_lower] = FunctionSpec(
         func=func, category=category,
         data_arity=data_arity, param_pool=param_pool,
+        param_constraints=param_constraints,
         data_vars=data_vars,
     )
     if category not in FUNC_CATEGORIES:
@@ -1484,7 +1521,8 @@ _register('ts_var', lambda x, d: ts_std(x, d) ** 2, 'ts_function', param_pool=[1
 _register('ts_logret', lambda x: safe_log(x / ts_delay(x, 1)), 'ts_function')
 _register('ts_zscore', ts_zscore, 'ts_function', param_pool=[10, 20, 60])
 _register('ts_scale', ts_scale, 'ts_function', param_pool=[10, 20])
-_register('ts_quantile', ts_quantile, 'ts_function', param_pool=[5, 10, 20])
+_register('ts_quantile', ts_quantile, 'ts_function', param_pool=[5, 10, 20],
+          param_constraints=[ParamConstraint('p', 'float', 0.0, 1.0)])
 _register('ts_av_diff', ts_av_diff, 'ts_function', param_pool=[10, 20])
 _register('ts_decay_linear', ts_decay_linear, 'ts_function', param_pool=[5, 10, 20])
 _register('ts_product', ts_product, 'ts_function', param_pool=[10, 20])
@@ -1509,8 +1547,10 @@ _register('expanding_percentile', expanding_percentile, 'ts_function', param_poo
 # ── 截面 (cs_) ──
 _register('cs_rank', cs_rank, 'cs_function')
 _register('cs_zscore', cs_zscore, 'cs_function')
-_register('cs_scale', cs_scale, 'cs_function')
-_register('cs_winsorize', cs_winsorize, 'cs_function')
+_register('cs_scale', cs_scale, 'cs_function',
+          param_constraints=[ParamConstraint('scale', 'float', 0.5, 2.0)])
+_register('cs_winsorize', cs_winsorize, 'cs_function',
+          param_constraints=[ParamConstraint('std', 'float', 2.0, 5.0)])
 _register('cs_quantile', cs_quantile, 'cs_function')
 # [修复] 2026-07-07 补上 cs_normalize 注册（旧硬编码列表中有但从未注册）
 _register('cs_normalize', cs_normalize, 'cs_function')
@@ -1531,7 +1571,8 @@ _register('gauss', safe_gauss, 'math_function')
 _register('p4', safe_p4, 'math_function')
 _register('neg', safe_neg, 'math_function')
 _register('square_sigmoid', safe_square_sigmoid, 'math_function')
-_register('signed_power', signed_power, 'math_function')
+_register('signed_power', signed_power, 'math_function',
+          param_constraints=[ParamConstraint('exponent', 'float', 0.5, 4.0)])
 _register('safe_max', safe_max, 'math_function', data_arity=2)
 _register('safe_min', safe_min, 'math_function', data_arity=2)
 
@@ -1563,8 +1604,9 @@ _register('natr', _feature_natr, 'ta_function', data_arity=3, param_pool=[5, 14]
            data_vars=['HIGH', 'LOW', 'CLOSE'])
 _register('var', _feature_var, 'ta_function', param_pool=[10, 20])
 _register('linearreg', _feature_linearreg, 'ta_function', param_pool=[10, 20])
-_register('vol_ratio', _feature_vol_ratio, 'ta_function', data_arity=2, param_pool=[(5, 20)],
-           data_vars=['VOLUME'])
+# [修复] 2026-07-08 vol_ratio 签名 (close, volume, short, long), data_vars 需含 CLOSE
+_register('vol_ratio', _feature_vol_ratio, 'ta_function', param_pool=[(5, 20)],
+           data_vars=['CLOSE', 'VOLUME'])
 _register('amt_ratio', _feature_amt_ratio, 'feature_function', param_pool=[(5, 20)],
            data_vars=['AMOUNT'])
 
@@ -1575,6 +1617,130 @@ _register('ts_rsquare', ts_rsq, 'ts_function', param_pool=[10, 20])
 
 # 安全常量 (表达式中的 True/False/None/pi/e)
 SAFE_CONSTANTS = {'True': 1.0, 'False': 0.0, 'None': 0.0, 'pi': np.pi, 'e': np.e}
+
+
+# ============================================================
+# 变量层 — 合并自 variables.py
+# [重构] 2026-07-08 将 variables.py 合并到 functions.py,
+# 统一管理"能引用什么"(变量)和"能算什么"(函数)两类元数据。
+# variables.py 保留为兼容层, 仅 re-export。
+# ============================================================
+
+VALID_VAR_PREFIXES = [
+    # ═══════════════════════════════════════════════════════════
+    # 第1组: 活跃 — 因子表达式高频使用 (由 data_loader 注入)
+    # ═══════════════════════════════════════════════════════════
+    'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME', 'AMOUNT',     # 原始 OHLCV
+    'VWAP',                                                  # 均价 (WQ065)
+    'RETURNS',                                               # close[t]/close[t-1]-1
+
+    # ═══════════════════════════════════════════════════════════
+    # 第2组: 活跃 — 派生变量前缀 (匹配 REL_CLOSE, BENCH_RETURNS 等后缀)
+    # ═══════════════════════════════════════════════════════════
+    'REL',          # 前缀: REL_CLOSE / REL_AMOUNT / REL_VOLUME
+    'BENCH',        # 前缀: BENCH_CLOSE / BENCH_RETURNS
+    'SHARE',        # 完整: SHARE = amount / Σamount (跨品种总成交额占比)
+    'DOWNSIDE_VOL', # 完整: DOWNSIDE_VOL = std(returns[returns<0]) (下行风险)
+
+    # ═══════════════════════════════════════════════════════════
+    # 第3组: 活跃 — 基本面变量 (从 parquet 注入)
+    # ═══════════════════════════════════════════════════════════
+    'PE_TTM_INDEX',     # 滚动市盈率
+    'PB_MRQ',           # 市净率
+    'TURNOVERRATIO',    # 换手率
+    'TOTALCAPITAL',     # 总市值
+
+    # ═══════════════════════════════════════════════════════════
+    # 第4组: 预留 — talib 指标 (函数通道已覆盖, 变量通道为性能预留)
+    # ═══════════════════════════════════════════════════════════
+    'ATR', 'STDDEV', 'HV', 'NATR',
+    'BBWIDTH',
+    'TRIMA', 'SMA', 'MA', 'EMA', 'TSF', 'WMA', 'DEMA', 'KAMA', 'ADX',
+    'RSI', 'CCI', 'MACD', 'MFI', 'ULTOSC', 'ROC',
+    'LINEARREG', 'VAR', 'CORREL',
+    'VOL_RATIO', 'VOL_CHG', 'OBV', 'UP_RATIO',
+    'AVGPRICE', 'WCLPRICE',
+
+    # ═══════════════════════════════════════════════════════════
+    # 第5组: 预留 — 行业广度 / 市场级变量 (择时信号用)
+    # ═══════════════════════════════════════════════════════════
+    'SECTOR_UP', 'SECTOR_MOM', 'SECTOR_AD',
+    'BREADTH_S', 'BREADTH_M', 'BREADTH_L', 'BREADTH_AMT',
+    'DISP', 'ROTSPD', 'NHL', 'SKEW',
+    'VMED', 'VDISP', 'VSKEW',
+    'IND_CORR',
+    'TAILUP', 'TAILDOWN', 'TAILNET',
+]
+
+
+VAR_CATEGORIES = {
+    '原始OHLCV': ['OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME', 'AMOUNT', 'VWAP', 'RETURNS'],
+    '相对基准': ['REL', 'BENCH'],
+    '市场份额': ['SHARE'],
+    '下行风险': ['DOWNSIDE_VOL'],
+    '基本面': ['PE_TTM_INDEX', 'PB_MRQ', 'TURNOVERRATIO', 'TOTALCAPITAL'],
+    '波动率': ['ATR', 'STDDEV', 'HV', 'NATR'],
+    '通道指标': ['BBWIDTH'],
+    '趋势指标': ['TRIMA', 'SMA', 'MA', 'EMA', 'TSF', 'WMA', 'DEMA', 'KAMA', 'ADX'],
+    '动量指标': ['RSI', 'CCI', 'MACD', 'MFI', 'ULTOSC', 'ROC'],
+    '统计指标': ['LINEARREG', 'VAR', 'CORREL'],
+    '量价指标': ['VOL_RATIO', 'VOL_CHG', 'OBV', 'UP_RATIO'],
+    '价格水平': ['AVGPRICE', 'WCLPRICE'],
+    '市场宽度': ['SECTOR_UP', 'SECTOR_MOM', 'SECTOR_AD',
+                'BREADTH_S', 'BREADTH_M', 'BREADTH_L', 'BREADTH_AMT'],
+    '市场结构': ['DISP', 'ROTSPD', 'NHL', 'SKEW', 'IND_CORR'],
+    '资金结构': ['VMED', 'VDISP', 'VSKEW'],
+    '尾部风险': ['TAILUP', 'TAILDOWN', 'TAILNET'],
+}
+
+
+def get_var_category(prefix: str) -> str:
+    """查询变量前缀所属分类"""
+    upper = prefix.upper()
+    for cat, prefixes in VAR_CATEGORIES.items():
+        for pfx in prefixes:
+            if upper == pfx or upper.startswith(pfx + '_'):
+                return cat
+    return '自定义'
+
+
+def is_valid_variable(name: str) -> bool:
+    """检查变量名是否合法（匹配已注册前缀）
+
+    规则:
+      1. 精确匹配任一前缀 (如 CLOSE, SECTOR_UP)
+      2. 前缀 + '_' + 后缀 (如 RSI_14, BREADTH_S)
+         后缀只能含 ASCII 字母数字和下划线
+    """
+    upper = name.upper()
+    if upper in VALID_VAR_PREFIXES:
+        return True
+    for pfx in VALID_VAR_PREFIXES:
+        if upper.startswith(pfx + '_'):
+            rest = upper[len(pfx) + 1:]
+            if rest and all(c.isascii() and (c.isalnum() or c == '_') for c in rest):
+                return True
+    return False
+
+
+def register_variable(prefix: str) -> None:
+    """临时注册自定义变量前缀到表达式引擎。
+
+    进程级全局注册, 当前脚本内所有 Expression 生效。
+    脚本退出自动销毁, 无泄漏风险。
+    """
+    upper = prefix.upper()
+    if upper not in VALID_VAR_PREFIXES:
+        VALID_VAR_PREFIXES.append(upper)
+
+
+def unregister_variable(prefix: str) -> bool:
+    """注销自定义变量前缀，返回是否成功。"""
+    upper = prefix.upper()
+    if upper in VALID_VAR_PREFIXES:
+        VALID_VAR_PREFIXES.remove(upper)
+        return True
+    return False
 
 
 # ============================================================
@@ -1599,6 +1765,7 @@ def register_function(
     category: str = 'math_function',
     data_arity: Optional[int] = None,
     param_pool: Optional[List[Any]] = None,
+    param_constraints: Optional[List[ParamConstraint]] = None,
     data_vars: Optional[List[str]] = None,
 ) -> None:
     """临时注册自定义函数到表达式引擎，并加入 GP 权重池。
@@ -1617,6 +1784,8 @@ def register_function(
                   默认 1。
         param_pool: 配置参数候选列表。元素为标量时生成一个常数参数；
                   为 tuple 时生成多个常数参数；为 None 时不附加配置参数。
+        param_constraints: 额外配置参数约束列表 (带值域/类型)。
+                  用于 param_pool 无法覆盖的参数 (如浮点比例、连续范围)。
         data_vars: 固定变量名列表。非 None 时 GP 直接填入这些变量名，
                   而非生成随机子树。例如 natr 的 data_vars=['HIGH','LOW','CLOSE']。
     """
@@ -1629,7 +1798,8 @@ def register_function(
         )
     # [重构] 2026-07-07 统一走 _register，保证 FUNC_REGISTRY 与 FUNC_CATEGORIES 同步
     _register(name_lower, func, category, data_arity=data_arity,
-              param_pool=param_pool, data_vars=data_vars)
+              param_pool=param_pool, param_constraints=param_constraints,
+              data_vars=data_vars)
 
 
 def unregister_function(name: str) -> bool:
