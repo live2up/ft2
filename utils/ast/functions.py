@@ -13,14 +13,14 @@ utils/ast/functions.py — 原语层 (公共基础设施)
   ◆ 函数命名 (snake_case, 小写 + 前缀)
     前缀约定:
       ts_       → Time Series (窗口滚动, 只用历史数据)
-      ts_reg_   → 双变量滚动线性回归 y~x (ts_reg_slope/y~x残差等)
+      reg_      → 双变量滚动线性回归 y~x (reg_slope/reg_resid 等)
       cs_       → Cross Sectional (截面统计, 需完整 2D 面板)
       expanding_→ 扩展窗口 (起始→当前, 无固定窗口)
       无前缀    → 逐元素数学 / talib 特征 / 信号
 
     回归函数命名区分:
-      ts_reg_*(y, x, d)  → 双变量 y~x 回归 (如 CLOSE~VOLUME)
-      ts_*(x, w)         → 单变量 x~t 趋势回归 (如 CLOSE~time)
+      reg_*(y, x, d)  → 双变量 y~x 回归 (如 CLOSE~VOLUME)
+      ts_*(x, w)      → 单变量 x~t 趋势回归 (如 CLOSE~time)
 
     回归后缀统一 (统计学标准缩写):
       slope      = 斜率
@@ -59,7 +59,7 @@ utils/ast/functions.py — 原语层 (公共基础设施)
   ┌─ 内部工具 (3)
   │  _rolling / _expanding / _persist
 
-  ├─ 时序 ts_ (28 + 2 lambda + 5 别名 = 35 条目)
+  ├─ 时序 ts_ (28 + 2 lambda = 30 条目)
   │  基础:      mean / std / sum / max / min / median
   │  周期:      delta / delay / roc
   │  统计:      rank / zscore / scale / quantile / av_diff
@@ -101,7 +101,7 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 
   ├─ 旧名别名 (3) — [2026-07-03] 已停止生产使用, 后续删除
   │  ts_resi                    → 改用 ts_resid
-  │  ts_regression_residual     → 改用 ts_resid
+  │  ts_regression_residual     → 改用 reg_resid
   │  ts_rsquare                 → 改用 ts_rsq
 
   └─ 注册 (2)
@@ -143,10 +143,10 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 ═══════════════════════════════════════════════════════════════
 公共模式 / 可复用抽象
 
-  # 防除零模式 (6处: ts_roc/ts_zscore/ts_scale/cs_zscore/cs_scale/ts_regression)
+  # 防除零模式 (6处: ts_roc/ts_zscore/ts_scale/cs_zscore/cs_scale/regression)
   result = value / divisor if divisor > 1e-10 else 0.0
 
-  # NaN过滤模式 (7处: ts_product/ts_regression/ts_resi/
+  # NaN过滤模式 (7处: ts_product/regression/ts_resid/
   #                  ts_decay_linear/ts_scale/cs_zscore/cs_scale/cs_winsorize)
   valid = ~np.isnan(arr)
   # 当前分散在各函数中, 未来可抽为 _nan_filter(seg, min_valid=1) 辅助函数
@@ -163,8 +163,9 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 """
 import numpy as np
 import talib
+from dataclasses import dataclass
 from numba import njit
-from typing import Dict, Callable, List
+from typing import Any, Callable, Dict, List, Optional
 
 
 # ============================================================
@@ -1017,7 +1018,7 @@ def ts_product(x, d):
     [重构] 2026-07-06 numba @njit 加速"""
     return _ts_product_core(np.asarray(x, float), _validate_window(d, 'ts_product'))
 
-def ts_regression(y, x, d, rettype=2):
+def regression(y, x, d, rettype=2):
     """滚动线性回归: y = alpha + beta*x + eps
 
     Args:
@@ -1029,6 +1030,10 @@ def ts_regression(y, x, d, rettype=2):
     [重构] 2026-07-06 numba @njit 加速
     """
     return _ts_regression_core(np.asarray(y, float), np.asarray(x, float), int(d), int(rettype))
+
+
+# [兼容] 2026-07-03 旧名别名（已停止生产使用，后续删除）
+ts_regression_residual = lambda y, x, d: regression(y, x, d, 2)  # 默认 rettype=2 → 残差
 
 
 def ts_resid(x, window):
@@ -1386,137 +1391,178 @@ def _feature_amt_ratio(amount: np.ndarray, short: int = 5, long: int = 20) -> np
 # 函数注册表
 # ============================================================
 
-FUNC_REGISTRY: Dict[str, Callable] = {
-    # ── 时序 (ts_) ──
-    'ts_mean':   ts_mean,   'ts_std':    ts_std,
-    'ts_sum':    ts_sum,    'ts_max':    ts_max,
-    'ts_min':    ts_min,    'ts_median': ts_median,
-    'ts_delta':  ts_delta,  'ts_delay':  ts_delay,
-    'ts_rank':   ts_rank,   'ts_corr':   ts_corr,
-    'ts_skew':   ts_skew,   'ts_kurt':   ts_kurt,
-    'ts_argmax': ts_argmax, 'ts_argmin': ts_argmin,
-    'ts_roc':    ts_roc,
-    'ts_cov':      ts_cov,
-    'ts_var':      lambda x, d: ts_std(x, d) ** 2,
-    'ts_logret':   lambda x: safe_log(x / ts_delay(x, 1)),
-    'ts_zscore':   ts_zscore,
-    'ts_scale':    ts_scale,
-    'ts_quantile': ts_quantile,
-    'ts_av_diff':  ts_av_diff,
-    'ts_decay_linear': ts_decay_linear,
-    'ts_product':  ts_product,
-    'ts_regression': ts_regression,
-    'ts_reg_slope':      lambda y, x, d: ts_regression(y, x, d, 0),
-    'ts_reg_intercept':  lambda y, x, d: ts_regression(y, x, d, 1),
-    'ts_reg_resid':      lambda y, x, d: ts_regression(y, x, d, 2),
-    'ts_reg_predict':    lambda y, x, d: ts_regression(y, x, d, 3),
-    'ts_reg_rsq':        lambda y, x, d: ts_regression(y, x, d, 4),
-    'ts_resid': ts_resid,                    # 统计学标准缩写
-    'ts_slope': ts_slope,
-    'ts_rsq': ts_rsq,                        # 统计学标准缩写
-    'ts_intercept': ts_intercept,
-    'ts_predict': ts_predict,
+# [重构] 2026-07-07 引入 FunctionSpec: 把函数实现、GP 分类、数据参数个数、
+# 参数候选池封装到一个 dataclass 中。GP 生成器可直接读取 data_arity/param_pool
+# 生成合法表达式，不再依赖 TS_FUNCTIONS/TS_FUNCTIONS_2ARG 等硬编码分池。
+@dataclass
+class FunctionSpec:
+    """函数注册项：实现 + 表达式/GP 元数据。
 
-    # ── 扩张统计 (expanding_) ──
-    'expanding_mean': expanding_mean, 'expanding_median': expanding_median,
-    'expanding_std':  expanding_std,  'expanding_percentile': expanding_percentile,
+    Args:
+        func: 函数实现，签名为 (*np.ndarray) -> np.ndarray。
+        category: GP 大类，对齐 group_weights 的 key。
+        data_arity: 需要由 GP 生成子树填充的数据序列参数个数。
+            例如 ts_mean(x, d) 为 1，ts_corr(x, y, d) 为 2，natr(H,L,C,d) 为 3。
+        param_pool: 配置参数候选列表。元素为标量时生成一个常数参数；
+            为 tuple 时生成多个常数参数；为 None 时不附加配置参数。
+    """
+    func: Callable
+    category: str
+    data_arity: int = 1
+    param_pool: Optional[List[Any]] = None
 
-    # ── 截面 (cs_) ──
-    'cs_rank':   cs_rank,   'cs_zscore':   cs_zscore,
-    'cs_scale':  cs_scale,  'cs_winsorize': cs_winsorize,
-    'cs_quantile': cs_quantile,
+    def __call__(self, *args, **kwargs):
+        # [兼容] 保持 FUNC_REGISTRY[name](...) 可直接调用
+        return self.func(*args, **kwargs)
 
-    # ── 数学 ──
-    'abs': safe_abs, 'log': safe_log, 'sqrt': safe_sqrt,
-    'sign': safe_sign, 'exp': safe_exp, 'tanh': safe_tanh,
-    'sigmoid': safe_sigmoid, 'relu': safe_relu, 'softsign': safe_softsign,
-    'sin': lambda x: np.sin(x), 'cos': lambda x: np.cos(x),
-    'gauss': safe_gauss, 'p4': safe_p4, 'neg': safe_neg, 'square_sigmoid': safe_square_sigmoid,
-    'signed_power': signed_power,
-    'safe_max': safe_max, 'safe_min': safe_min,
-
-    # ── 信号 ──
-    'persist': persist,
-
-    # ── 特征计算 (从 OHLCV 实时算, 无需 FeatureSpace) ──
-    'rsi':         _feature_rsi,
-    'atr':         _feature_atr,
-    'atr_sma':     _feature_atr_sma,
-    'bb_width':    _feature_bbwidth,
-    'stddev':      _feature_stddev,
-    'adx':         _feature_adx,
-    'cci':         _feature_cci,
-    'macd':        _feature_macd,
-    'trima':       _feature_trima,
-    'ema':         _feature_ema,
-    'wilder_smooth': _wilder_smooth,
-    'tsf':         _feature_tsf,
-    'kama':        _feature_kama,
-    'wma':         _feature_wma,
-    'dema':        _feature_dema,
-    'hv':          _feature_hv,
-    'natr':        _feature_natr,
-    'var':         _feature_var,
-    'linearreg':   _feature_linearreg,
-    'vol_ratio':   _feature_vol_ratio,
-    'amt_ratio':   _feature_amt_ratio,
-
-    # ── 旧名别名 — [2026-07-03] 已停止生产使用, 后续删除 ──
-    'ts_resi': ts_resid,                     # → 改用 ts_resid
-    'ts_regression_residual': ts_resid,      # → 改用 ts_resid
-    'ts_rsquare': ts_rsq,                    # → 改用 ts_rsq
-}
-
-# 安全常量 (表达式中的 True/False/None/pi/e)
-SAFE_CONSTANTS = {'True': 1.0, 'False': 0.0, 'None': 0.0, 'pi': np.pi, 'e': np.e}
+    def __getattr__(self, name):
+        # [兼容] 旧代码可能访问 FUNC_REGISTRY[name].__name__ / __doc__ 等属性
+        return getattr(self.func, name)
 
 
 # ============================================================
 # 函数分类索引 (供 LLM 理解可用原语)
 # ============================================================
 
-FUNC_CATEGORIES = {
-    'ts_function': [
-        'ts_mean', 'ts_std', 'ts_sum', 'ts_max', 'ts_min', 'ts_median',
-        'ts_delta', 'ts_delay', 'ts_rank', 'ts_corr', 'ts_cov',
-        'ts_skew', 'ts_kurt', 'ts_argmax', 'ts_argmin',
-        'ts_roc', 'ts_zscore', 'ts_scale', 'ts_quantile',
-        'ts_av_diff', 'ts_decay_linear', 'ts_product', 'ts_var', 'ts_logret',
-        'ts_regression', 'ts_resi', 'ts_reg_slope', 'ts_reg_intercept',
-        'ts_reg_resid', 'ts_reg_predict', 'ts_reg_rsq',
-        'ts_intercept', 'ts_predict', 'ts_resid', 'ts_rsq', 'ts_slope',
-        # 原 '扩张统计'
-        'expanding_mean', 'expanding_median', 'expanding_std', 'expanding_percentile',
-        # 原 '信号确认'
-        'persist',
-    ],
-    'cs_function': [
-        # 原 '截面算子' — 单独成类，避免过度嵌套 cs_rank(ts_rank(...))
-        'cs_rank', 'cs_zscore', 'cs_scale', 'cs_winsorize', 'cs_quantile',
-        'cs_normalize',
-    ],
-    'ta_function': [
-        'rsi', 'atr', 'atr_sma', 'macd', 'adx', 'cci', 'bb_width', 'stddev',
-        'ema', 'tsf', 'kama', 'trima', 'wma', 'dema', 'hv', 'natr',
-        'var', 'linearreg',
-    ],
-    'math_function': [
-        'abs', 'log', 'sqrt', 'sign', 'exp', 'tanh', 'sigmoid', 'relu',
-        'sin', 'cos', 'gauss', 'p4', 'softsign', 'square_sigmoid',
-        'signed_power', 'safe_max', 'safe_min',
-    ],
-    'feature_function': [
-        'vol_ratio', 'amt_ratio', 'wilder_smooth',
-    ],
-}
+# [重构] 2026-07-07 FUNC_CATEGORIES 不再硬编码，由 _register 自动维护
+# 人只填一次 _register(..., category=...)，两个 dict 自动同步
+FUNC_CATEGORIES: Dict[str, List[str]] = {}
 
 
 def get_func_category(name: str) -> str:
     """查询函数所属 GP 大类（直接对齐 group_weights key）"""
-    for cat, names in FUNC_CATEGORIES.items():
-        if name in names:
-            return cat
-    return 'math_function'  # 未分类默认归 math_function（无窗口，最安全）
+    spec = FUNC_REGISTRY.get(name.lower())
+    # [重构] 2026-07-07 FUNC_CATEGORIES 由 _register 自动维护，与 FUNC_REGISTRY 完全同步
+    # 无需兜底遍历，直接返回 spec.category
+    return spec.category if spec is not None else 'math_function'
+
+
+def _register(name: str, func: Callable, category: str,
+              data_arity: Optional[int] = None,
+              param_pool: Optional[List[Any]] = None) -> None:
+    """统一注册内置/自定义函数，同时维护 FUNC_REGISTRY 与 FUNC_CATEGORIES。"""
+    name_lower = name.lower()
+    if data_arity is None:
+        data_arity = 1
+    FUNC_REGISTRY[name_lower] = FunctionSpec(
+        func=func, category=category,
+        data_arity=data_arity, param_pool=param_pool,
+    )
+    if category not in FUNC_CATEGORIES:
+        FUNC_CATEGORIES[category] = []
+    if name_lower not in FUNC_CATEGORIES[category]:
+        FUNC_CATEGORIES[category].append(name_lower)
+
+
+FUNC_REGISTRY: Dict[str, FunctionSpec] = {}
+
+# [重构] 2026-07-07 内置函数统一通过 _register 注册，param_pool 直接内联
+
+# ── 时序 (ts_) ──
+_register('ts_mean', ts_mean, 'ts_function', param_pool=[5, 10, 20, 60])
+_register('ts_std', ts_std, 'ts_function', param_pool=[10, 20, 60])
+_register('ts_sum', ts_sum, 'ts_function', param_pool=[5, 10, 20])
+_register('ts_max', ts_max, 'ts_function', param_pool=[10, 20])
+_register('ts_min', ts_min, 'ts_function', param_pool=[10, 20])
+_register('ts_median', ts_median, 'ts_function', param_pool=[10, 20])
+_register('ts_delta', ts_delta, 'ts_function', param_pool=[1, 5, 10, 20])
+_register('ts_delay', ts_delay, 'ts_function', param_pool=[1, 5, 10, 20])
+_register('ts_rank', ts_rank, 'ts_function', param_pool=[5, 10, 20, 60])
+_register('ts_corr', ts_corr, 'ts_function', data_arity=2, param_pool=[10, 20, 60])
+_register('ts_skew', ts_skew, 'ts_function', param_pool=[20, 60])
+_register('ts_kurt', ts_kurt, 'ts_function', param_pool=[20, 60])
+_register('ts_argmax', ts_argmax, 'ts_function', param_pool=[10, 20])
+_register('ts_argmin', ts_argmin, 'ts_function', param_pool=[10, 20])
+_register('ts_roc', ts_roc, 'ts_function', param_pool=[5, 10, 20])
+_register('ts_cov', ts_cov, 'ts_function', data_arity=2, param_pool=[5, 10, 20])
+_register('ts_var', lambda x, d: ts_std(x, d) ** 2, 'ts_function', param_pool=[10, 20])
+_register('ts_logret', lambda x: safe_log(x / ts_delay(x, 1)), 'ts_function')
+_register('ts_zscore', ts_zscore, 'ts_function', param_pool=[10, 20, 60])
+_register('ts_scale', ts_scale, 'ts_function', param_pool=[10, 20])
+_register('ts_quantile', ts_quantile, 'ts_function', param_pool=[5, 10, 20])
+_register('ts_av_diff', ts_av_diff, 'ts_function', param_pool=[10, 20])
+_register('ts_decay_linear', ts_decay_linear, 'ts_function', param_pool=[5, 10, 20])
+_register('ts_product', ts_product, 'ts_function', param_pool=[10, 20])
+# ── 双变量回归 reg_ (y~x, 3 参数: y, x, d) ──
+_register('reg_slope', lambda y, x, d: regression(y, x, d, 0), 'ts_function', data_arity=2, param_pool=[5, 10])
+_register('reg_intercept', lambda y, x, d: regression(y, x, d, 1), 'ts_function', data_arity=2, param_pool=[5, 10])
+_register('reg_resid', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_arity=2, param_pool=[5, 10])
+_register('reg_predict', lambda y, x, d: regression(y, x, d, 3), 'ts_function', data_arity=2, param_pool=[5, 10])
+_register('reg_rsq', lambda y, x, d: regression(y, x, d, 4), 'ts_function', data_arity=2, param_pool=[5, 10])
+_register('ts_slope', ts_slope, 'ts_function', param_pool=[10, 20])
+_register('ts_intercept', ts_intercept, 'ts_function', param_pool=[10, 20])
+_register('ts_resid', ts_resid, 'ts_function', param_pool=[10, 20])
+_register('ts_predict', ts_predict, 'ts_function', param_pool=[10, 20])
+_register('ts_rsq', ts_rsq, 'ts_function', param_pool=[10, 20])
+
+# ── 扩张统计 (expanding_) ──
+_register('expanding_mean', expanding_mean, 'ts_function', param_pool=[20, 60])
+_register('expanding_median', expanding_median, 'ts_function', param_pool=[20, 60])
+_register('expanding_std', expanding_std, 'ts_function', param_pool=[20, 60])
+_register('expanding_percentile', expanding_percentile, 'ts_function', param_pool=[(0.1, 20), (0.5, 20), (0.9, 20)])
+
+# ── 截面 (cs_) ──
+_register('cs_rank', cs_rank, 'cs_function')
+_register('cs_zscore', cs_zscore, 'cs_function')
+_register('cs_scale', cs_scale, 'cs_function')
+_register('cs_winsorize', cs_winsorize, 'cs_function')
+_register('cs_quantile', cs_quantile, 'cs_function')
+# [修复] 2026-07-07 补上 cs_normalize 注册（旧硬编码列表中有但从未注册）
+_register('cs_normalize', cs_normalize, 'cs_function')
+
+# ── 数学 ──
+_register('abs', safe_abs, 'math_function')
+_register('log', safe_log, 'math_function')
+_register('sqrt', safe_sqrt, 'math_function')
+_register('sign', safe_sign, 'math_function')
+_register('exp', safe_exp, 'math_function')
+_register('tanh', safe_tanh, 'math_function')
+_register('sigmoid', safe_sigmoid, 'math_function')
+_register('relu', safe_relu, 'math_function')
+_register('softsign', safe_softsign, 'math_function')
+_register('sin', lambda x: np.sin(x), 'math_function')
+_register('cos', lambda x: np.cos(x), 'math_function')
+_register('gauss', safe_gauss, 'math_function')
+_register('p4', safe_p4, 'math_function')
+_register('neg', safe_neg, 'math_function')
+_register('square_sigmoid', safe_square_sigmoid, 'math_function')
+_register('signed_power', signed_power, 'math_function')
+_register('safe_max', safe_max, 'math_function', data_arity=2)
+_register('safe_min', safe_min, 'math_function', data_arity=2)
+
+# ── 信号 ──
+_register('persist', persist, 'ts_function', param_pool=[3, 5, 10])
+
+# ── 特征计算 (从 OHLCV 实时算, 无需 FeatureSpace) ──
+_register('rsi', _feature_rsi, 'ta_function', param_pool=[14, 20])
+_register('atr', _feature_atr, 'ta_function', data_arity=3, param_pool=[14])
+_register('atr_sma', _feature_atr_sma, 'ta_function', data_arity=3, param_pool=[14])
+_register('bb_width', _feature_bbwidth, 'ta_function', param_pool=[20])
+_register('stddev', _feature_stddev, 'ta_function', param_pool=[10, 20])
+_register('adx', _feature_adx, 'ta_function', data_arity=3, param_pool=[14, 20])
+_register('cci', _feature_cci, 'ta_function', data_arity=3, param_pool=[14, 20])
+_register('macd', _feature_macd, 'ta_function', param_pool=[(12, 26, 9)])
+_register('trima', _feature_trima, 'ta_function', param_pool=[40])
+_register('ema', _feature_ema, 'ta_function', param_pool=[5, 10, 20, 60])
+_register('wilder_smooth', _wilder_smooth, 'feature_function', param_pool=[10, 20])
+_register('tsf', _feature_tsf, 'ta_function', param_pool=[10, 20])
+_register('kama', _feature_kama, 'ta_function', param_pool=[30])
+_register('wma', _feature_wma, 'ta_function', param_pool=[5, 10, 20, 60])
+_register('dema', _feature_dema, 'ta_function', param_pool=[10, 20])
+_register('hv', _feature_hv, 'ta_function', param_pool=[20, 60])
+_register('natr', _feature_natr, 'ta_function', data_arity=3, param_pool=[5, 14])
+_register('var', _feature_var, 'ta_function', param_pool=[10, 20])
+_register('linearreg', _feature_linearreg, 'ta_function', param_pool=[10, 20])
+_register('vol_ratio', _feature_vol_ratio, 'ta_function', data_arity=2, param_pool=[(5, 20)])
+_register('amt_ratio', _feature_amt_ratio, 'feature_function', param_pool=[(5, 20)])
+
+# ── 旧名别名 — [2026-07-03] 已停止生产使用, 后续删除 ──
+_register('ts_resi', ts_resid, 'ts_function', param_pool=[10, 20])
+_register('ts_regression_residual', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_arity=2, param_pool=[5, 10])
+_register('ts_rsquare', ts_rsq, 'ts_function', param_pool=[10, 20])
+
+# 安全常量 (表达式中的 True/False/None/pi/e)
+SAFE_CONSTANTS = {'True': 1.0, 'False': 0.0, 'None': 0.0, 'pi': np.pi, 'e': np.e}
 
 
 # ============================================================
@@ -1535,7 +1581,13 @@ def get_func_category(name: str) -> str:
 # 兼容旧路径:
 #   from signals.v4 import register_function  # 仍可用，重导出链
 
-def register_function(name: str, func: Callable, category: str = 'math_function') -> None:
+def register_function(
+    name: str,
+    func: Callable,
+    category: str = 'math_function',
+    data_arity: Optional[int] = None,
+    param_pool: Optional[List[Any]] = None,
+) -> None:
     """临时注册自定义函数到表达式引擎，并加入 GP 权重池。
 
     进程级全局注册，当前脚本内所有 Expression 生效。
@@ -1547,7 +1599,12 @@ def register_function(name: str, func: Callable, category: str = 'math_function'
         category: GP 大类，直接对齐 group_weights 的函数类 key。
                   默认 'math_function'。可选: 'ts_function' / 'ta_function' /
                   'math_function' / 'feature_function'。
-                  [修改] 2026-07-07: 直接写入 FUNC_CATEGORIES，不再使用独立映射表。
+        data_arity: 数据序列参数个数。GP 生成器据此生成正确数量的子树。
+                  例如 ts_mean 为 1，ts_corr 为 2，natr 为 3。
+                  默认 1。
+        param_pool: 配置参数候选列表。元素为标量时生成一个常数参数；
+                  为 tuple 时生成多个常数参数；为 None 时不附加配置参数。
+                  [新增] 2026-07-07 支持注册时直接配置参数范围。
     """
     name_lower = name.lower()
     if name_lower in FUNC_REGISTRY:
@@ -1556,13 +1613,8 @@ def register_function(name: str, func: Callable, category: str = 'math_function'
             f"register_function: '{name}' 已存在，将被覆盖。"
             f"原函数: {FUNC_REGISTRY[name_lower].__name__}"
         )
-    FUNC_REGISTRY[name_lower] = func
-
-    # [修改] 2026-07-07 直接写入 FUNC_CATEGORIES
-    if category not in FUNC_CATEGORIES:
-        FUNC_CATEGORIES[category] = []
-    if name_lower not in FUNC_CATEGORIES[category]:
-        FUNC_CATEGORIES[category].append(name_lower)
+    # [重构] 2026-07-07 统一走 _register，保证 FUNC_REGISTRY 与 FUNC_CATEGORIES 同步
+    _register(name_lower, func, category, data_arity=data_arity, param_pool=param_pool)
 
 
 def unregister_function(name: str) -> bool:
