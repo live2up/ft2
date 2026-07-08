@@ -3,6 +3,8 @@ utils/gp/v5/cache.py — Fitness 缓存（内存 + SQLite 持久化）
 =============================================================================
 [抽取] 2026-07-06 从 engine.py 拆分。封装缓存逻辑，支持 LRU 上限演进。
 """
+import hashlib
+import sqlite3
 import threading
 from typing import Dict, Optional, Tuple
 
@@ -26,13 +28,12 @@ class FitnessCache:
             self._init_db()
 
     def _init_db(self):
-        import sqlite3
         conn = sqlite3.connect(self._db)
         conn.execute('''CREATE TABLE IF NOT EXISTS expressions (
             expr_hash TEXT PRIMARY KEY,
             expression TEXT NOT NULL,
             fitness REAL, depth INTEGER, nodes INTEGER,
-            fitness_hash TEXT, created TEXT DEFAULT (datetime('now'))
+            fitness_hash TEXT, created_at TEXT DEFAULT (datetime('now'))
         )''')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_expr_hash ON expressions(fitness_hash)')
         conn.commit()
@@ -48,7 +49,6 @@ class FitnessCache:
         """从 SQLite 加载当前配置指纹的缓存到内存"""
         if not self._db:
             return 0
-        import sqlite3
         conn = sqlite3.connect(self._db)
         rows = conn.execute(
             'SELECT expression, fitness, depth, nodes FROM expressions WHERE fitness_hash=?',
@@ -63,7 +63,6 @@ class FitnessCache:
         """将内存缓存增量写入 SQLite (INSERT OR REPLACE)"""
         if not self._db:
             return
-        import hashlib, sqlite3
         conn = sqlite3.connect(self._db)
         for expr, (fit, dep, nod) in self._mem.items():
             eh = hashlib.md5(expr.encode()).hexdigest()[:16]

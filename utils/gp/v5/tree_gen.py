@@ -14,7 +14,7 @@ from .config import (
     TreeGenConfig, get_full_default_weights,
 )
 from .ast_utils import (
-    _collect_replaceable, _replace_subtree, _simplify_ast,
+    _collect_replaceable, _replace_subtree, _simplify_ast, _parent_map,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,11 +26,20 @@ logger = logging.getLogger(__name__)
 
 def _random_variable(cfg: TreeGenConfig) -> ast.Name:
     rng = cfg.rng
+    vw = cfg.var_weights
+    # [修复] 2026-07-08 var_allowlist 不再与 GP_VARIABLES 取交集.
+    # 原实现 list(var_allowlist & set(GP_VARIABLES)) 会过滤掉所有自定义变量
+    # (如 REL_CLOSE/MY_VAR), 导致 var_allowlist 完全失效.
+    # 新逻辑: 优先与 var_weights keys 取交集 (保持权重一致性),
+    #         若无 var_weights 则直接使用 var_allowlist (用户显式白名单已是最严约束).
+    # 自定义变量通过 ast.register_variable() 注册合法性 + var_weights 指定生成偏置.
     if cfg.var_allowlist:
-        choices = list(cfg.var_allowlist & set(GP_VARIABLES))
+        if vw:
+            choices = list(cfg.var_allowlist & set(vw.keys()))
+        else:
+            choices = list(cfg.var_allowlist)
         if choices:
             return ast.Name(id=rng.choice(choices), ctx=ast.Load())
-    vw = cfg.var_weights
     if vw:
         var_names = list(vw.keys())
         var_weights = [vw[v] for v in var_names]
@@ -54,17 +63,21 @@ def _get_func_spec(func_name: str):
     return FUNC_REGISTRY.get(func_name.lower())
 
 
-def _random_data_call(cfg: TreeGenConfig, depth: int) -> ast.Call:
-    """统一数据函数生成器：读取 FUNC_REGISTRY 的 data_arity / data_vars / param_pool。
+def _random_call(cfg: TreeGenConfig, depth: int, weight_key: str) -> ast.Call:
+    """统一函数调用生成器：从 ast FunctionSpec 读取全部参数元数据。
 
-    涵盖 ts_function / ta_function / cs_function / feature_function 四个分类，
-    从 cfg.ts_weights 选择函数。
+    [重构] 2026-07-08 合并 _random_data_call + _random_math_call。
+    所有函数元数据 (data_arity / data_vars / param_pool / param_constraints)
+    统一从 FUNC_REGISTRY 读取，GP 不再维护参数知识。
+
+    Args:
+        weight_key: 'ts_weights' 或 'math_weights'，指定从哪个权重池选函数
     """
     rng = cfg.rng
-    tw = cfg.ts_weights
-    if tw:
-        func_names = list(tw.keys())
-        func_weights = [tw[fn] for fn in func_names]
+    weights = getattr(cfg, weight_key, None)
+    if weights:
+        func_names = list(weights.keys())
+        func_weights = [weights[fn] for fn in func_names]
         if cfg.func_allowlist:
             filtered = [(n, w) for n, w in zip(func_names, func_weights) if n in cfg.func_allowlist]
             if filtered:
@@ -79,9 +92,23 @@ def _random_data_call(cfg: TreeGenConfig, depth: int) -> ast.Call:
         func_name = rng.choice(list(FUNC_REGISTRY.keys()))
 
     spec = _get_func_spec(func_name)
+    args = _build_call_args(cfg, spec, depth)
+    return ast.Call(
+        func=ast.Name(id=func_name, ctx=ast.Load()),
+        args=args, keywords=[],
+    )
+
+
+def _build_call_args(cfg: TreeGenConfig, spec, depth: int) -> list:
+    """根据 FunctionSpec 构建函数参数列表。
+
+    [重构] 2026-07-08 提取公共逻辑，供生成和变异复用。
+    顺序: data_vars/子树 → param_pool → param_constraints
+    """
+    rng = cfg.rng
     args = []
 
-    # 数据参数：data_vars 优先（固定变量如 H,L,C），否则生成子树
+    # 1. 数据参数: data_vars 优先 (固定变量), 否则按 data_arity 生成子树
     if spec and spec.data_vars:
         for v in spec.data_vars:
             args.append(ast.Name(id=v, ctx=ast.Load()))
@@ -91,7 +118,7 @@ def _random_data_call(cfg: TreeGenConfig, depth: int) -> ast.Call:
     else:
         args.append(_grow_tree(cfg, depth - 1, prefer_variable=True))
 
-    # 配置参数：从 param_pool 抽选
+    # 2. 离散配置参数: 从 param_pool 抽选
     if spec and spec.param_pool:
         chosen = rng.choice(spec.param_pool)
         if isinstance(chosen, tuple):
@@ -100,83 +127,25 @@ def _random_data_call(cfg: TreeGenConfig, depth: int) -> ast.Call:
         else:
             args.append(ast.Constant(value=chosen))
 
-    # [P0修复] 2026-07-08 额外配置参数：从 param_constraints 采样
-    # 处理 param_pool 无法覆盖的参数 (如浮点比例、连续范围)
+    # 3. 连续范围参数: 从 param_constraints 采样
     if spec and spec.param_constraints:
         for pc in spec.param_constraints:
-            if pc.pool is not None:
-                val = rng.choice(pc.pool)
-            elif pc.dtype == 'int':
-                lo = int(pc.min_val) if pc.min_val is not None else 1
-                hi = int(pc.max_val) if pc.max_val is not None else 100
-                val = rng.randint(lo, hi)
-            else:
-                lo = pc.min_val if pc.min_val is not None else 0.0
-                hi = pc.max_val if pc.max_val is not None else 1.0
-                val = rng.uniform(lo, hi)
-            args.append(ast.Constant(value=val))
+            args.append(ast.Constant(value=_sample_param_constraint(pc, rng)))
 
-    return ast.Call(
-        func=ast.Name(id=func_name, ctx=ast.Load()),
-        args=args, keywords=[],
-    )
+    return args
 
 
-def _random_math_call(cfg: TreeGenConfig, depth: int) -> ast.Call:
-    """统一数学函数生成器：从 cfg.math_weights 选择，按 data_arity 生成子树。"""
-    rng = cfg.rng
-    mw = cfg.math_weights
-    if mw:
-        func_names = list(mw.keys())
-        func_weights = [mw[fn] for fn in func_names]
-        if cfg.func_allowlist:
-            filtered = [(n, w) for n, w in zip(func_names, func_weights) if n in cfg.func_allowlist]
-            if filtered:
-                func_names, func_weights = zip(*filtered)
-        func_name = rng.choices(func_names, weights=func_weights, k=1)[0]
-    elif cfg.func_allowlist:
-        from utils.ast.functions import FUNC_REGISTRY
-        available = [f for f in cfg.func_allowlist if f in FUNC_REGISTRY]
-        func_name = rng.choice(available) if available else rng.choice(list(FUNC_REGISTRY.keys()))
-    else:
-        from utils.ast.functions import FUNC_REGISTRY
-        func_name = rng.choice(list(FUNC_REGISTRY.keys()))
-
-    spec = _get_func_spec(func_name)
-    args = []
-    if spec:
-        for _ in range(spec.data_arity):
-            args.append(_grow_tree(cfg, depth - 1, prefer_variable=True))
-    else:
-        args.append(_grow_tree(cfg, depth - 1, prefer_variable=True))
-
-    # [P0修复] 2026-07-08 数学函数也可能有 param_pool / param_constraints
-    if spec and spec.param_pool:
-        chosen = rng.choice(spec.param_pool)
-        if isinstance(chosen, tuple):
-            for p in chosen:
-                args.append(ast.Constant(value=p))
-        else:
-            args.append(ast.Constant(value=chosen))
-
-    if spec and spec.param_constraints:
-        for pc in spec.param_constraints:
-            if pc.pool is not None:
-                val = rng.choice(pc.pool)
-            elif pc.dtype == 'int':
-                lo = int(pc.min_val) if pc.min_val is not None else 1
-                hi = int(pc.max_val) if pc.max_val is not None else 100
-                val = rng.randint(lo, hi)
-            else:
-                lo = pc.min_val if pc.min_val is not None else 0.0
-                hi = pc.max_val if pc.max_val is not None else 1.0
-                val = rng.uniform(lo, hi)
-            args.append(ast.Constant(value=val))
-
-    return ast.Call(
-        func=ast.Name(id=func_name, ctx=ast.Load()),
-        args=args, keywords=[],
-    )
+def _sample_param_constraint(pc, rng) -> float:
+    """从 ParamConstraint 采样一个值。"""
+    if pc.pool is not None:
+        return rng.choice(pc.pool)
+    if pc.dtype == 'int':
+        lo = int(pc.min_val) if pc.min_val is not None else 1
+        hi = int(pc.max_val) if pc.max_val is not None else 100
+        return rng.randint(lo, hi)
+    lo = pc.min_val if pc.min_val is not None else 0.0
+    hi = pc.max_val if pc.max_val is not None else 1.0
+    return rng.uniform(lo, hi)
 
 
 def _random_compare(cfg: TreeGenConfig, left: ast.AST) -> ast.Compare:
@@ -210,9 +179,9 @@ def _grow_tree(cfg: TreeGenConfig, depth: int, prefer_variable: bool = False) ->
     chosen = rng.choices(groups, weights=gweights, k=1)[0]
 
     if chosen in ('ts_function', 'cs_function', 'ta_function', 'feature_function'):
-        return _random_data_call(cfg, depth)
+        return _random_call(cfg, depth, 'ts_weights')
     elif chosen == 'math_function':
-        return _random_math_call(cfg, depth)
+        return _random_call(cfg, depth, 'math_weights')
     elif chosen == 'comparison':
         return _random_compare(cfg, _grow_tree(cfg, depth - 1, prefer_variable=True))
     elif chosen == 'logic':
@@ -296,41 +265,78 @@ def _mutate_subtree(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4
     return _simplify_ast(new_tree)
 
 
-def _mutate_constant(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
-    """常数微调变异"""
+def _mutate_param(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
+    """参数变异: spec 感知，从 FunctionSpec 重新采样参数。
+
+    [重构] 2026-07-08 合并 _mutate_constant + _mutate_window。
+    读取 param_pool / param_constraints，在合法范围内重新采样:
+    - 窗口参数 (int): 从 param_pool 重新采样，无 pool 则 ±delta
+    - 范围参数 (float): 从 param_constraints 范围内重新采样
+    - 通用常数: 高斯扰动
+    """
     rng = cfg.rng
     new_tree = copy.deepcopy(tree)
-    constants = [n for n in ast.walk(new_tree.body)
-                 if isinstance(n, ast.Constant) and isinstance(n.value, (int, float))]
-    if not constants:
+
+    # 收集所有 (常量节点, 所属 Call, 参数索引)
+    parents = _parent_map(new_tree)
+    candidates = []
+    for node in ast.walk(new_tree.body):
+        # [修复] 2026-07-08 排除 bool (bool 是 int 子类, 不应参与参数变异)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            parent = parents.get(node)
+            if isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name):
+                arg_idx = parent.args.index(node)
+                candidates.append((node, parent, arg_idx))
+            else:
+                candidates.append((node, None, -1))
+
+    if not candidates:
         return new_tree
-    target = rng.choice(constants)
+
+    target, call_node, arg_idx = rng.choice(candidates)
+
+    # 尝试从 spec 读取参数约束
+    if call_node is not None:
+        spec = _get_func_spec(call_node.func.id)
+        if spec:
+            # 计算参数布局: [data_args...] [param_pool_args...] [param_constraints_args...]
+            n_data = len(spec.data_vars) if spec.data_vars else spec.data_arity
+            n_pool = 0
+            if spec.param_pool:
+                sample = spec.param_pool[0]
+                n_pool = len(sample) if isinstance(sample, tuple) else 1
+
+            pool_start = n_data
+            pool_end = pool_start + n_pool
+            constraint_start = pool_end
+
+            # 窗口参数: 从 param_pool 重新采样
+            if pool_start <= arg_idx < pool_end:
+                if spec.param_pool:
+                    chosen = rng.choice(spec.param_pool)
+                    if isinstance(chosen, tuple):
+                        target.value = chosen[arg_idx - pool_start]
+                    else:
+                        target.value = chosen
+                    return new_tree
+
+            # 范围参数: 从 param_constraints 重新采样
+            if arg_idx >= constraint_start and spec.param_constraints:
+                ci = arg_idx - constraint_start
+                if 0 <= ci < len(spec.param_constraints):
+                    target.value = _sample_param_constraint(spec.param_constraints[ci], rng)
+                    return new_tree
+
+    # fallback: 通用常数扰动
     v = target.value
-    if isinstance(v, int):
+    if isinstance(v, int) and not isinstance(v, bool):
         delta = rng.choice([-5, -2, -1, 1, 2, 5])
         target.value = max(1, v + delta)
-    elif abs(v) < 0.1:
+    elif isinstance(v, float) and abs(v) < 0.1:
         target.value = rng.choice([0.001, 0.01, 0.02, 0.05])
     else:
         noise = rng.gauss(0, abs(v) * 0.1 + 0.01)
         target.value = round(v + noise, 4)
-    return new_tree
-
-
-def _mutate_window(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
-    """窗口参数变异"""
-    rng = cfg.rng
-    new_tree = copy.deepcopy(tree)
-    calls = [n for n in ast.walk(new_tree.body)
-             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
-    if not calls:
-        return new_tree
-    target = rng.choice(calls)
-    for i, arg in enumerate(target.args):
-        if isinstance(arg, ast.Constant) and isinstance(arg.value, int):
-            delta = rng.choice([-5, -2, -1, 1, 2, 5])
-            arg.value = max(2, arg.value + delta)
-            return new_tree
     return new_tree
 
 
@@ -397,12 +403,3 @@ def _mutate_insert_condition(cfg: TreeGenConfig, tree: ast.Expression, max_depth
 
     ast.fix_missing_locations(new_tree)
     return new_tree
-
-
-_MUTATE_OPS = [
-    _mutate_subtree,
-    _mutate_constant,
-    _mutate_window,
-    _mutate_logic,
-    _mutate_insert_condition,
-]

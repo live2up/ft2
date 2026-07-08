@@ -2,11 +2,11 @@
 utils/gp/v5/ — 遗传编程引擎 v5
 
 模块结构:
-  config.py     — TreeGenConfig + Individual + 常量 (不变)
-  ast_utils.py  — AST 纯函数工具 (抽取自 engine.py)
-  tree_gen.py   — 随机树生成 + 变异算子 (抽取自 engine.py)
-  cache.py      — FitnessCache (抽取自 engine.py)
-  engine.py     — GPEngine 主类 (精简后)
+  config.py     — TreeGenConfig + Individual + 常量
+  ast_utils.py  — AST 纯函数工具
+  tree_gen.py   — 随机树生成 + 变异算子
+  cache.py      — FitnessCache
+  engine.py     — GPEngine 主类
 
 提供:
   from utils.gp.v5 import GPEngine, Individual, TreeGenConfig
@@ -22,7 +22,7 @@ from .ast_utils import (
 )
 from .tree_gen import (
     _grow_tree, _random_tree, _random_tree_explore,
-    _mutate_subtree, _MUTATE_OPS,
+    _mutate_subtree, _mutate_param,
 )
 from .cache import FitnessCache
 from .engine import GPEngine
@@ -34,6 +34,6 @@ __all__ = [
     '_expr_str', '_collect_replaceable', '_replace_subtree',
     '_simplify_ast', '_canonicalize_key',
     '_grow_tree', '_random_tree', '_random_tree_explore',
-    '_mutate_subtree', '_MUTATE_OPS',
+    '_mutate_subtree', '_mutate_param',
     'FitnessCache',
 ]

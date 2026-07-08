@@ -18,6 +18,12 @@ logger = logging.getLogger(__name__)
 # 配置
 # ============================================================
 
+# [重构] 2026-07-08 GP 默认变量/常数池
+# GP_VARIABLES: fallback 变量池 — 仅当用户未设 var_weights 且未设 var_allowlist 时使用.
+#   自定义变量不经此池: 通过 ast.register_variable() 注册合法性 + var_weights 指定生成偏置.
+#   ast 是单一事实来源 (变量合法性 + 函数元数据), GP 仅消费 ast 注册表.
+# GP_CONSTANTS: GP 随机生成常数节点的数值池 (与 ast SAFE_CONSTANTS 不同:
+#   SAFE_CONSTANTS 是解析时的命名常量 True/pi/e, GP_CONSTANTS 是生成时的数值候选)
 GP_VARIABLES = ['CLOSE', 'OPEN', 'HIGH', 'LOW', 'VOLUME', 'AMOUNT']
 GP_CONSTANTS = [0.0, 0.5, 1.0, -1.0, 2.0, 0.01, 0.02, 0.05, 1.5, 3.0]
 

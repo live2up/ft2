@@ -1426,14 +1426,16 @@ class FunctionSpec:
         func: 函数实现，签名为 (*np.ndarray) -> np.ndarray。
         category: GP 大类，对齐 group_weights 的 key。
         data_arity: 需要由 GP 生成子树填充的数据序列参数个数。
-            例如 ts_mean(x, d) 为 1，ts_corr(x, y, d) 为 2，natr(H,L,C,d) 为 3。
+            例如 ts_mean(x, d) 为 1，ts_corr(x, y, d) 为 2。
+            data_vars 非空时自动取 len(data_vars)，无需手动指定。
         param_pool: 第一组配置参数候选列表。元素为标量时生成一个常数参数；
             为 tuple 时生成多个常数参数；为 None 时不附加配置参数。
         param_constraints: 额外配置参数约束列表 (带值域/类型)。
             用于 param_pool 无法覆盖的参数 (如浮点比例、连续范围)。
             GP 生成器在 param_pool 之后按顺序追加这些参数。
         data_vars: 固定变量名列表。非 None 时 GP 直接填入这些变量名，
-            而非生成随机子树。例如 natr 的 data_vars=['HIGH','LOW','CLOSE']。
+            而非生成随机子树。用于指标计算类函数 (如 natr 固定需要 H/L/C)。
+            设置时 data_arity 自动取 len(data_vars)。
     """
     func: Callable
     category: str

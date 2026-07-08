@@ -18,7 +18,7 @@ from .config import (
     GP_VARIABLES,
     TreeGenConfig, Individual,
     DEFAULT_TREE_GEN_CONFIG, DEFAULT_GP_CONFIG,
-    _FILL_VAR_KEYS, _FILL_GROUP_KEYS, _fill_weights,
+    _fill_weights,
     get_full_default_weights, _get_funcs_by_group, _get_fill_keys,
 )
 from .ast_utils import (
@@ -26,8 +26,8 @@ from .ast_utils import (
 )
 from .tree_gen import (
     _grow_tree, _random_tree, _random_tree_explore,
-    _mutate_subtree, _mutate_constant, _mutate_window,
-    _mutate_logic, _mutate_insert_condition, _MUTATE_OPS,
+    _mutate_subtree, _mutate_param,
+    _mutate_logic, _mutate_insert_condition,
 )
 from .cache import FitnessCache
 
@@ -74,13 +74,17 @@ class GPEngine:
         self.parsimony_penalty = cfg['parsimony_penalty']
 
         # 变异算子权重
+        # [重构] 2026-07-08 _mutate_constant + _mutate_window → _mutate_param
+        # [修复] 2026-07-08 mode='continuous' 时自动屏蔽 logic/insert_condition 算子
         w = cfg
+        mode = tree_gen_config.mode if tree_gen_config else 'hybrid'
+        _logic_w = 0.0 if mode == 'continuous' else w['mutate_logic_weight']
+        _cond_w = 0.0 if mode == 'continuous' else w['mutate_insert_cond_weight']
         self._mutate_weights = [
             (w['mutate_subtree_weight'], _mutate_subtree),
-            (w['mutate_constant_weight'], _mutate_constant),
-            (w['mutate_window_weight'], _mutate_window),
-            (w['mutate_logic_weight'], _mutate_logic),
-            (w['mutate_insert_cond_weight'], _mutate_insert_condition),
+            (w['mutate_constant_weight'] + w['mutate_window_weight'], _mutate_param),
+            (_logic_w, _mutate_logic),
+            (_cond_w, _mutate_insert_condition),
         ]
 
         # 种子
@@ -159,11 +163,11 @@ class GPEngine:
         # [新增] 2026-07-07 自定义注册函数也纳入默认权重池
         full_defaults = get_full_default_weights()
         if user_config is None:
+            # [修复] 2026-07-08 移除已删除的 feature_weights 引用
             return TreeGenConfig(
                 group_weights=full_defaults['group_weights'],
                 ts_weights=full_defaults['ts_weights'],
                 math_weights=full_defaults['math_weights'],
-                feature_weights=full_defaults['feature_weights'],
                 rng=rng or random.Random(),
             )
         filled = {}
