@@ -591,16 +591,26 @@ class GPEngine:
         rng = self.tree_gen_config.rng
 
         # [重构] 2026-07-08 从快照 lexicase_pool 直接 O(1) 抽样
+        # [修复] 2026-07-09 改为每方向抽 fitness 最高代表 + 均匀随机选，
+        #            避免比例抽样使弱方向虽有代表却几乎不会被选到。
         if not self._snap or len(self._snap.lexicase_pool) < 2:
             return self._tournament_select()
 
         pool = self._snap.lexicase_pool
-        weights = [max(ind.fitness, 0.01) for ind in pool]
-        total_w = sum(weights)
-        if total_w <= 0:
-            return rng.choice(pool)
-        probs = [w / total_w for w in weights]
-        return rng.choices(pool, weights=probs, k=1)[0]
+
+        # 按 signature 分组，每方向选最佳代表
+        sig_reps: Dict[str, Individual] = {}
+        for ind in pool:
+            sig = ind.signature
+            if not sig:
+                continue
+            if sig not in sig_reps or ind.fitness > sig_reps[sig].fitness:
+                sig_reps[sig] = ind
+
+        reps = list(sig_reps.values())
+        if len(reps) < 2:
+            return self._tournament_select()
+        return rng.choice(reps)
 
     def _select_parent(self) -> Individual:
         if self._use_lexicase:
@@ -731,8 +741,26 @@ class GPEngine:
             new_pop.append(child)
 
         inject_n = self.random_inject_count
-        explore_n = min(inject_n, int(inject_n * self._explore_ratio * 2))
-        for i in range(inject_n):
+        # [修复] 2026-07-09 按总人口算探索数，保持每代 15% 探索强度不衰减
+        explore_n = min(inject_n, int(self.population_size * self._explore_ratio))
+
+        # [新增] 2026-07-09 注入 motif 种子（取代部分纯随机注入，保持多样性）
+        motif_injected = 0
+        if self._motif_enabled:
+            motif_seeds = self._get_motif_seeds(self._motif_inject_count)
+            for expr in motif_seeds:
+                if len(new_pop) >= self.population_size:
+                    break
+                try:
+                    ind = Individual.from_expr(expr, generation=gen + 1)
+                    ind.age = 1
+                    new_pop.append(ind)
+                    motif_injected += 1
+                except Exception:
+                    continue
+
+        remaining_inject = max(0, inject_n - motif_injected)
+        for i in range(remaining_inject):
             if i < explore_n:
                 tree = _random_tree_explore(cfg, self.max_depth)
             else:
@@ -790,11 +818,16 @@ class GPEngine:
                 if ind.signature:
                     by_sig.setdefault(ind.signature, []).append(ind)
             # 预计算 lexicase_pool（一代一次，避免后代 425 次重复构建）
+            # [修复] 2026-07-08 threshold 基于当前代各方向 best，而非历史 best
+            # 原实现用 self._direction_best_expr（全局历史最优），导致历史高 fitness
+            # 方向持续过滤掉当前代个体，pool 萎缩，lexicase 退化。
+            # [修复] 2026-07-09 threshold = best - abs(best) * ε，避免负 fitness 方向被挡
             lexicase_pool: List[Individual] = []
             seen_expr: set = set()
-            for sig, (best_fit, _) in self._direction_best_expr.items():
-                threshold = best_fit * (1.0 - self._epsilon)
-                for ind in by_sig.get(sig, []):
+            for sig, inds in by_sig.items():
+                best_this_gen = max(ind.fitness for ind in inds)
+                threshold = best_this_gen - abs(best_this_gen) * self._epsilon
+                for ind in inds:
                     if ind.fitness >= threshold and ind.expression_str not in seen_expr:
                         seen_expr.add(ind.expression_str)
                         lexicase_pool.append(ind)

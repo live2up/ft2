@@ -230,7 +230,10 @@ def _random_tree(cfg: TreeGenConfig, max_depth: int = 6) -> ast.Expression:
 
 
 def _random_tree_explore(user_cfg: TreeGenConfig, max_depth: int = 6) -> ast.Expression:
-    """ε-greedy 探索通道: 无视用户权重，用默认全空间生成树（含自定义注册函数）"""
+    """ε-greedy 探索通道: 无视用户权重，用默认全空间生成树（含自定义注册函数）
+
+    [修复] 2026-07-09 传递 var_allowlist / func_allowlist，避免探索通道生成白名单外变量。
+    """
     user_mode = user_cfg.mode if user_cfg else None
     full_defaults = get_full_default_weights()
     explore_cfg = TreeGenConfig(
@@ -238,6 +241,8 @@ def _random_tree_explore(user_cfg: TreeGenConfig, max_depth: int = 6) -> ast.Exp
         group_weights=full_defaults['group_weights'],
         ts_weights=full_defaults['ts_weights'],
         math_weights=full_defaults['math_weights'],
+        var_allowlist=user_cfg.var_allowlist if user_cfg else None,
+        func_allowlist=user_cfg.func_allowlist if user_cfg else None,
         rng=user_cfg.rng,
     )
     rng = explore_cfg.rng
