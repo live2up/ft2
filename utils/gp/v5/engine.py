@@ -24,6 +24,7 @@ from .config import (
 )
 from .ast_utils import (
     _expr_str, _collect_replaceable, _replace_subtree, _simplify_ast, _canonicalize_key,
+    _extract_subtrees,
 )
 from .tree_gen import (
     _grow_tree, _random_tree, _random_tree_explore,

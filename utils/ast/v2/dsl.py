@@ -532,16 +532,20 @@ def cross_sectional_rank(vals: np.ndarray) -> np.ndarray:
 # 表达式自省扩展 — 结构化描述
 # ============================================================
 
-def ast_depth(tree: ast.Expression) -> int:
+def ast_depth(tree) -> int:
     """计算 AST 最大深度"""
     def _depth(node):
         children = list(ast.iter_child_nodes(node))
         if not children:
             return 1
         return 1 + max(_depth(c) for c in children)
-    return _depth(tree.body)
+    # [兼容] 2026-07-08 支持任意 AST 节点，不仅限于 ast.Expression
+    body = tree.body if hasattr(tree, 'body') else tree
+    return _depth(body)
 
 
-def ast_node_count(tree: ast.Expression) -> int:
+def ast_node_count(tree) -> int:
     """计算 AST 节点总数"""
-    return sum(1 for _ in ast.walk(tree.body))
+    # [兼容] 2026-07-08 支持任意 AST 节点，不仅限于 ast.Expression
+    body = tree.body if hasattr(tree, 'body') else tree
+    return sum(1 for _ in ast.walk(body))
