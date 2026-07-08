@@ -60,7 +60,7 @@ from .functions import (
     FUNC_REGISTRY, SAFE_CONSTANTS,
     FunctionSpec, ParamRange, VarSpec,
     register_function, unregister_function,
-    FUNC_CATEGORIES, get_func_category,
+    FUNC_CATEGORIES, VALID_FUNC_CATEGORIES, get_func_category,
 )
 
 # ── 变量层 (functions.py) ──
@@ -110,7 +110,7 @@ __all__ = [
     'FUNC_REGISTRY', 'SAFE_CONSTANTS',
     'FunctionSpec', 'ParamRange', 'VarSpec',
     'register_function', 'unregister_function',
-    'FUNC_CATEGORIES', 'get_func_category',
+    'FUNC_CATEGORIES', 'VALID_FUNC_CATEGORIES', 'get_func_category',
 
     # variables — 变量层
     'VALID_VAR_PREFIXES', 'is_valid_variable',

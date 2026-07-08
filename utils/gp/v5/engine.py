@@ -82,7 +82,7 @@ class GPEngine:
         _cond_w = 0.0 if mode == 'continuous' else w['mutate_insert_cond_weight']
         self._mutate_weights = [
             (w['mutate_subtree_weight'], _mutate_subtree),
-            (w['mutate_constant_weight'] + w['mutate_window_weight'], _mutate_param),
+            (w['mutate_param_weight'], _mutate_param),
             (_logic_w, _mutate_logic),
             (_cond_w, _mutate_insert_condition),
         ]
@@ -306,7 +306,8 @@ class GPEngine:
         ts_sig = '+'.join(sorted(
             f for f in funcs
             if f in FUNC_REGISTRY and FUNC_REGISTRY[f].category in (
-                'ts_function', 'cs_function', 'ta_function', 'feature_function')
+                'ts_function', 'cs_function', 'ta_function', 'feature_function',
+                'signal_function')
         )) or 'none'
         var_counts = Counter(re.findall(r'\b([A-Z][A-Z_0-9]+)\b', expr_str))
         vars_sig = '+'.join(v for v, _ in var_counts.most_common(4)) or 'none'

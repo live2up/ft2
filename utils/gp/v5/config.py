@@ -95,12 +95,13 @@ def _fill_weights(user_weights, default_keys, fill_value=0):
 
 
 # [重构] 2026-07-07 从 FUNC_CATEGORIES 动态读取函数分类，自动适配 group_weights
-# feature_function 合并到 ts_weights（ta_function 同类处理）
+# feature_function/signal_function 合并到 ts_weights（ta_function 同类处理）
 _FUNCTION_GROUP_MAP = {
     'ts_function': ('ts_weights', [10, 20]),
     'cs_function': ('ts_weights', [10, 20]),
     'ta_function': ('ts_weights', [10, 20]),
     'feature_function': ('ts_weights', [10, 20]),
+    'signal_function': ('ts_weights', [10, 20]),
     'math_function': ('math_weights', None),
     # comparison / logic / binary_op / unary_op / ternary 无子权重池
 }
@@ -130,6 +131,8 @@ def get_full_default_weights() -> dict:
         ts_w.setdefault(name, 1.0)
     for name in _get_funcs_by_group('feature_function'):
         ts_w.setdefault(name, 1.0)
+    for name in _get_funcs_by_group('signal_function'):
+        ts_w.setdefault(name, 1.0)
     for name in _get_funcs_by_group('math_function'):
         math_w.setdefault(name, 1.0)
 
@@ -150,7 +153,8 @@ def _get_fill_keys(field_name: str) -> list:
         return (_get_funcs_by_group('ts_function') +
                 _get_funcs_by_group('cs_function') +
                 _get_funcs_by_group('ta_function') +
-                _get_funcs_by_group('feature_function'))
+                _get_funcs_by_group('feature_function') +
+                _get_funcs_by_group('signal_function'))
     elif field_name == 'math_weights':
         return _get_funcs_by_group('math_function')
     elif field_name == 'var_weights':
@@ -165,8 +169,8 @@ DEFAULT_GP_CONFIG = {
     'tournament_size': 5, 'crossover_prob': 0.6, 'mutation_prob': 0.25,
     'elite_ratio': 0.05, 'seed_ratio': 0.4, 'random_inject_ratio': 0.05,
     'parsimony_penalty': 0.001,
-    'mutate_subtree_weight': 0.30, 'mutate_constant_weight': 0.20,
-    'mutate_window_weight': 0.20, 'mutate_logic_weight': 0.15,
+    'mutate_subtree_weight': 0.30, 'mutate_param_weight': 0.40,
+    'mutate_logic_weight': 0.15,
     'mutate_insert_cond_weight': 0.15,
 }
 

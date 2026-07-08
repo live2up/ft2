@@ -1479,6 +1479,12 @@ class FunctionSpec:
 # 人只填一次 _register(..., category=...)，两个 dict 自动同步
 FUNC_CATEGORIES: Dict[str, List[str]] = {}
 
+# 有效函数分类 — GP group_weights 的 key，超出此范围的 category 会被拒绝
+VALID_FUNC_CATEGORIES = frozenset([
+    'ts_function', 'cs_function', 'math_function',
+    'ta_function', 'feature_function',
+])
+
 
 def get_func_category(name: str) -> str:
     """查询函数所属 GP 大类（直接对齐 group_weights key）"""
@@ -1500,6 +1506,11 @@ def _register(name: str, func: Callable, category: str,
     [调整] 2026-07-08 data_arity → data_args, param_constraints → param_ranges
     """
     name_lower = name.lower()
+    if category not in VALID_FUNC_CATEGORIES:
+        raise ValueError(
+            f"无效函数分类 '{category}' (函数 '{name_lower}')。"
+            f"有效分类: {sorted(VALID_FUNC_CATEGORIES)}"
+        )
     # data_vars 优先: 有固定变量时, data_args 自动推导
     if data_vars is not None:
         data_args = len(data_vars)
@@ -1825,8 +1836,7 @@ def register_function(
         name: 函数名（表达式中的调用名）
         func: 函数实现，签名为 (*np.ndarray) -> np.ndarray
         category: GP 大类，直接对齐 group_weights 的函数类 key。
-                  默认 'math_function'。可选: 'ts_function' / 'ta_function' /
-                  'math_function' / 'feature_function'。
+                  默认 'math_function'。有效分类见 VALID_FUNC_CATEGORIES。
         data_args: 数据序列参数个数。GP 生成器据此生成正确数量的子树。
                   例如 ts_mean 为 1，ts_corr 为 2，natr 为 3。
                   默认 1。

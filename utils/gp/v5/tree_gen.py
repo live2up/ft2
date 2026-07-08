@@ -161,7 +161,7 @@ def _mode_filtered_groups(gw: dict, mode: str) -> dict:
     if mode == 'continuous':
         invalid = {'comparison', 'logic', 'ternary'}
     elif mode == 'predicate':
-        invalid = {'ts_function', 'cs_function', 'ta_function', 'feature_function',
+        invalid = {'ts_function', 'cs_function', 'ta_function', 'feature_function', 'signal_function',
                    'math_function', 'binary_op', 'unary_op'}
     else:
         return gw
@@ -178,7 +178,7 @@ def _grow_tree(cfg: TreeGenConfig, depth: int, prefer_variable: bool = False) ->
     gweights = [gw[g] for g in groups]
     chosen = rng.choices(groups, weights=gweights, k=1)[0]
 
-    if chosen in ('ts_function', 'cs_function', 'ta_function', 'feature_function'):
+    if chosen in ('ts_function', 'cs_function', 'ta_function', 'feature_function', 'signal_function'):
         return _random_call(cfg, depth, 'ts_weights')
     elif chosen == 'math_function':
         return _random_call(cfg, depth, 'math_weights')
