@@ -206,9 +206,8 @@ def normalize_expression(expr_str: str) -> str:
     """规范化表达式字符串
 
     执行以下变换:
-      1. 统一变量名大小写 (ALL_CAPS)
-      2. 统一空格 (删除多余空格)
-      3. 统一括号风格 (冗余括号移除)
+      1. 统一空格和括号风格 (通过 ast.unparse 重写)
+      2. 统一运算符格式 (如 1.0 → 1, True → True)
 
     Args:
         expr_str: 原始表达式字符串
@@ -218,7 +217,7 @@ def normalize_expression(expr_str: str) -> str:
 
     Note:
         当前实现为字符串级规范化。后续可升级为 AST 级规范化
-        (处理 not (a > b) → a <= b 等逻辑等价变换)。
+        (处理 not (a > b) → a <= b 等逻辑等价变换, 以及变量名大小写统一)。
     """
     # 解析确保语法正确
     from .dsl import parse_expression
@@ -403,7 +402,7 @@ def grammar_spec_compact() -> str:
         "Functions: func(arg1, arg2, kw=val)",
         "Variables: ALL_CAPS, window param: d",
         "",
-        "## Functions (72 total)",
+        f"## Functions ({len(FUNC_REGISTRY)} total)",
     ]
     for cat, names in FUNC_CATEGORIES.items():
         lines.append(f"  {cat}: {', '.join(names)}")

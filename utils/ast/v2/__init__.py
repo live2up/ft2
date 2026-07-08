@@ -58,7 +58,7 @@ from .dsl import (
 # ── 原语层 (functions.py) ──
 from .functions import (
     FUNC_REGISTRY, SAFE_CONSTANTS,
-    FunctionSpec, ParamRange,
+    FunctionSpec, ParamRange, VarSpec,
     register_function, unregister_function,
     FUNC_CATEGORIES, get_func_category,
 )
@@ -108,7 +108,7 @@ __all__ = [
 
     # functions — 原语层
     'FUNC_REGISTRY', 'SAFE_CONSTANTS',
-    'FunctionSpec', 'ParamRange',
+    'FunctionSpec', 'ParamRange', 'VarSpec',
     'register_function', 'unregister_function',
     'FUNC_CATEGORIES', 'get_func_category',
 

@@ -1401,6 +1401,22 @@ def _feature_amt_ratio(amount: np.ndarray, short: int = 5, long: int = 20) -> np
 # param_constraints → param_ranges
 
 @dataclass
+class VarSpec:
+    """变量规格 — 描述变量名、所属类别和匹配模式。
+
+    Args:
+        name: 变量名 (ALL_CAPS, 如 'CLOSE', 'REL')
+        category: 所属类别 (如 '原始OHLCV', '相对基准')
+        is_prefix: True=前缀通配 (REL_CLOSE 通过), False=精确匹配 (只认 CLOSE)
+        description: 描述信息 (仅文档/调试)
+    """
+    name: str
+    category: str = '自定义'
+    is_prefix: bool = False
+    description: str = ''
+
+
+@dataclass
 class ParamRange:
     """参数值域约束 — 描述 param_pool 无法覆盖的带范围参数。
 
@@ -1628,124 +1644,151 @@ SAFE_CONSTANTS = {'True': 1.0, 'False': 0.0, 'None': 0.0, 'pi': np.pi, 'e': np.e
 # 变量层 — 合并自 variables.py
 # [重构] 2026-07-08 将 variables.py 合并到 functions.py,
 # 统一管理"能引用什么"(变量)和"能算什么"(函数)两类元数据。
-# variables.py 保留为兼容层, 仅 re-export。
+# [新增] 2026-07-08 VarSpec + _VAR_REGISTRY, 替代双表分离模式。
 # ============================================================
 
-VALID_VAR_PREFIXES = [
-    # ═══════════════════════════════════════════════════════════
-    # 第1组: 活跃 — 因子表达式高频使用 (由 data_loader 注入)
-    # ═══════════════════════════════════════════════════════════
-    'OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME', 'AMOUNT',     # 原始 OHLCV
-    'VWAP',                                                  # 均价 (WQ065)
-    'RETURNS',                                               # close[t]/close[t-1]-1
+# ── 单一事实来源: _VAR_REGISTRY ──
+# is_prefix=True  → 前缀通配 (REL_CLOSE 通过, 后缀任意 ASCII 字母数字)
+# is_prefix=False → 精确匹配 (只认变量名本身, 拒绝后缀)
+_VAR_REGISTRY: Dict[str, VarSpec] = {
+    # ── 第1组: 原始 OHLCV ──
+    'OPEN':    VarSpec('OPEN', '原始OHLCV', description='开盘价'),
+    'HIGH':    VarSpec('HIGH', '原始OHLCV', description='最高价'),
+    'LOW':     VarSpec('LOW', '原始OHLCV', description='最低价'),
+    'CLOSE':   VarSpec('CLOSE', '原始OHLCV', description='收盘价'),
+    'VOLUME':  VarSpec('VOLUME', '原始OHLCV', description='成交量'),
+    'AMOUNT':  VarSpec('AMOUNT', '原始OHLCV', description='成交额'),
+    'VWAP':    VarSpec('VWAP', '原始OHLCV', description='均价 (WQ065)'),
+    'RETURNS': VarSpec('RETURNS', '原始OHLCV', description='收益率'),
 
-    # ═══════════════════════════════════════════════════════════
-    # 第2组: 活跃 — 派生变量前缀 (匹配 REL_CLOSE, BENCH_RETURNS 等后缀)
-    # ═══════════════════════════════════════════════════════════
-    'REL',          # 前缀: REL_CLOSE / REL_AMOUNT / REL_VOLUME
-    'BENCH',        # 前缀: BENCH_CLOSE / BENCH_RETURNS
-    'SHARE',        # 完整: SHARE = amount / Σamount (跨品种总成交额占比)
-    'DOWNSIDE_VOL', # 完整: DOWNSIDE_VOL = std(returns[returns<0]) (下行风险)
+    # ── 第2组: 派生变量 (前缀通配) ──
+    'REL':   VarSpec('REL', '相对基准', is_prefix=True, description='REL_CLOSE/REL_AMOUNT/REL_VOLUME'),
+    'BENCH': VarSpec('BENCH', '相对基准', is_prefix=True, description='BENCH_CLOSE/BENCH_RETURNS'),
+    'SHARE': VarSpec('SHARE', '市场份额', description='跨品种成交额占比'),
+    'DOWNSIDE_VOL': VarSpec('DOWNSIDE_VOL', '下行风险', description='下行标准差'),
 
-    # ═══════════════════════════════════════════════════════════
-    # 第3组: 活跃 — 基本面变量 (从 parquet 注入)
-    # ═══════════════════════════════════════════════════════════
-    'PE_TTM_INDEX',     # 滚动市盈率
-    'PB_MRQ',           # 市净率
-    'TURNOVERRATIO',    # 换手率
-    'TOTALCAPITAL',     # 总市值
+    # ── 第3组: 基本面 ──
+    'PE_TTM_INDEX':  VarSpec('PE_TTM_INDEX', '基本面', description='滚动市盈率'),
+    'PB_MRQ':        VarSpec('PB_MRQ', '基本面', description='市净率'),
+    'TURNOVERRATIO': VarSpec('TURNOVERRATIO', '基本面', description='换手率'),
+    'TOTALCAPITAL':  VarSpec('TOTALCAPITAL', '基本面', description='总市值'),
 
-    # ═══════════════════════════════════════════════════════════
-    # 第4组: 预留 — talib 指标 (函数通道已覆盖, 变量通道为性能预留)
-    # ═══════════════════════════════════════════════════════════
-    'ATR', 'STDDEV', 'HV', 'NATR',
-    'BBWIDTH',
-    'TRIMA', 'SMA', 'MA', 'EMA', 'TSF', 'WMA', 'DEMA', 'KAMA', 'ADX',
-    'RSI', 'CCI', 'MACD', 'MFI', 'ULTOSC', 'ROC',
-    'LINEARREG', 'VAR', 'CORREL',
-    'VOL_RATIO', 'VOL_CHG', 'OBV', 'UP_RATIO',
-    'AVGPRICE', 'WCLPRICE',
+    # ── 第4组: talib 指标 (变量通道, 为性能预留) ──
+    'ATR':    VarSpec('ATR', '波动率'),
+    'STDDEV': VarSpec('STDDEV', '波动率'),
+    'HV':     VarSpec('HV', '波动率'),
+    'NATR':   VarSpec('NATR', '波动率'),
+    'BBWIDTH': VarSpec('BBWIDTH', '通道指标'),
+    'TRIMA': VarSpec('TRIMA', '趋势指标'), 'SMA': VarSpec('SMA', '趋势指标'),
+    'MA':    VarSpec('MA', '趋势指标'), 'EMA': VarSpec('EMA', '趋势指标'),
+    'TSF':   VarSpec('TSF', '趋势指标'), 'WMA': VarSpec('WMA', '趋势指标'),
+    'DEMA':  VarSpec('DEMA', '趋势指标'), 'KAMA': VarSpec('KAMA', '趋势指标'),
+    'ADX':   VarSpec('ADX', '趋势指标'),
+    'RSI':   VarSpec('RSI', '动量指标'), 'CCI': VarSpec('CCI', '动量指标'),
+    'MACD':  VarSpec('MACD', '动量指标'), 'MFI': VarSpec('MFI', '动量指标'),
+    'ULTOSC': VarSpec('ULTOSC', '动量指标'), 'ROC': VarSpec('ROC', '动量指标'),
+    'LINEARREG': VarSpec('LINEARREG', '统计指标'),
+    'VAR':   VarSpec('VAR', '统计指标'), 'CORREL': VarSpec('CORREL', '统计指标'),
+    'VOL_RATIO': VarSpec('VOL_RATIO', '量价指标'), 'VOL_CHG': VarSpec('VOL_CHG', '量价指标'),
+    'OBV':   VarSpec('OBV', '量价指标'), 'UP_RATIO': VarSpec('UP_RATIO', '量价指标'),
+    'AVGPRICE': VarSpec('AVGPRICE', '价格水平'), 'WCLPRICE': VarSpec('WCLPRICE', '价格水平'),
 
-    # ═══════════════════════════════════════════════════════════
-    # 第5组: 预留 — 行业广度 / 市场级变量 (择时信号用)
-    # ═══════════════════════════════════════════════════════════
-    'SECTOR_UP', 'SECTOR_MOM', 'SECTOR_AD',
-    'BREADTH_S', 'BREADTH_M', 'BREADTH_L', 'BREADTH_AMT',
-    'DISP', 'ROTSPD', 'NHL', 'SKEW',
-    'VMED', 'VDISP', 'VSKEW',
-    'IND_CORR',
-    'TAILUP', 'TAILDOWN', 'TAILNET',
-]
-
-
-VAR_CATEGORIES = {
-    '原始OHLCV': ['OPEN', 'HIGH', 'LOW', 'CLOSE', 'VOLUME', 'AMOUNT', 'VWAP', 'RETURNS'],
-    '相对基准': ['REL', 'BENCH'],
-    '市场份额': ['SHARE'],
-    '下行风险': ['DOWNSIDE_VOL'],
-    '基本面': ['PE_TTM_INDEX', 'PB_MRQ', 'TURNOVERRATIO', 'TOTALCAPITAL'],
-    '波动率': ['ATR', 'STDDEV', 'HV', 'NATR'],
-    '通道指标': ['BBWIDTH'],
-    '趋势指标': ['TRIMA', 'SMA', 'MA', 'EMA', 'TSF', 'WMA', 'DEMA', 'KAMA', 'ADX'],
-    '动量指标': ['RSI', 'CCI', 'MACD', 'MFI', 'ULTOSC', 'ROC'],
-    '统计指标': ['LINEARREG', 'VAR', 'CORREL'],
-    '量价指标': ['VOL_RATIO', 'VOL_CHG', 'OBV', 'UP_RATIO'],
-    '价格水平': ['AVGPRICE', 'WCLPRICE'],
-    '市场宽度': ['SECTOR_UP', 'SECTOR_MOM', 'SECTOR_AD',
-                'BREADTH_S', 'BREADTH_M', 'BREADTH_L', 'BREADTH_AMT'],
-    '市场结构': ['DISP', 'ROTSPD', 'NHL', 'SKEW', 'IND_CORR'],
-    '资金结构': ['VMED', 'VDISP', 'VSKEW'],
-    '尾部风险': ['TAILUP', 'TAILDOWN', 'TAILNET'],
+    # ── 第5组: 行业广度 / 市场级变量 ──
+    'SECTOR_UP': VarSpec('SECTOR_UP', '市场宽度'), 'SECTOR_MOM': VarSpec('SECTOR_MOM', '市场宽度'),
+    'SECTOR_AD': VarSpec('SECTOR_AD', '市场宽度'),
+    'BREADTH_S': VarSpec('BREADTH_S', '市场宽度'), 'BREADTH_M': VarSpec('BREADTH_M', '市场宽度'),
+    'BREADTH_L': VarSpec('BREADTH_L', '市场宽度'), 'BREADTH_AMT': VarSpec('BREADTH_AMT', '市场宽度'),
+    'DISP':   VarSpec('DISP', '市场结构'), 'ROTSPD': VarSpec('ROTSPD', '市场结构'),
+    'NHL':    VarSpec('NHL', '市场结构'), 'SKEW': VarSpec('SKEW', '市场结构'),
+    'IND_CORR': VarSpec('IND_CORR', '市场结构'),
+    'VMED':   VarSpec('VMED', '资金结构'), 'VDISP': VarSpec('VDISP', '资金结构'),
+    'VSKEW':  VarSpec('VSKEW', '资金结构'),
+    'TAILUP': VarSpec('TAILUP', '尾部风险'), 'TAILDOWN': VarSpec('TAILDOWN', '尾部风险'),
+    'TAILNET': VarSpec('TAILNET', '尾部风险'),
 }
 
+# ── 向后兼容导出 (自动从 _VAR_REGISTRY 推导) ──
+VALID_VAR_PREFIXES: List[str] = list(_VAR_REGISTRY.keys())
+VAR_CATEGORIES: Dict[str, list] = {}
+for spec in _VAR_REGISTRY.values():
+    VAR_CATEGORIES.setdefault(spec.category, []).append(spec.name)
 
-def get_var_category(prefix: str) -> str:
-    """查询变量前缀所属分类"""
-    upper = prefix.upper()
-    for cat, prefixes in VAR_CATEGORIES.items():
-        for pfx in prefixes:
-            if upper == pfx or upper.startswith(pfx + '_'):
-                return cat
+
+def get_var_category(name: str) -> str:
+    """查询变量所属分类"""
+    upper = name.upper()
+    spec = _VAR_REGISTRY.get(upper)
+    if spec is not None:
+        return spec.category
+    # 前缀匹配: 查找 is_prefix=True 的注册项
+    for spec in _VAR_REGISTRY.values():
+        if spec.is_prefix and upper.startswith(spec.name + '_'):
+            return spec.category
     return '自定义'
 
 
 def is_valid_variable(name: str) -> bool:
-    """检查变量名是否合法（匹配已注册前缀）
+    """检查变量名是否合法（匹配已注册变量）
 
     规则:
-      1. 精确匹配任一前缀 (如 CLOSE, SECTOR_UP)
-      2. 前缀 + '_' + 后缀 (如 RSI_14, BREADTH_S)
+      1. 精确匹配 _VAR_REGISTRY 中的精确变量 (如 CLOSE, SECTOR_UP)
+      2. 前缀通配: is_prefix=True 的条目 + '_' + 后缀 (如 REL_CLOSE)
          后缀只能含 ASCII 字母数字和下划线
     """
     upper = name.upper()
-    if upper in VALID_VAR_PREFIXES:
+    spec = _VAR_REGISTRY.get(upper)
+    if spec is not None:
         return True
-    for pfx in VALID_VAR_PREFIXES:
-        if upper.startswith(pfx + '_'):
-            rest = upper[len(pfx) + 1:]
+    # 前缀通配匹配: 只查 is_prefix=True 的条目
+    for spec in _VAR_REGISTRY.values():
+        if spec.is_prefix and upper.startswith(spec.name + '_'):
+            rest = upper[len(spec.name) + 1:]
             if rest and all(c.isascii() and (c.isalnum() or c == '_') for c in rest):
                 return True
     return False
 
 
-def register_variable(prefix: str) -> None:
-    """临时注册自定义变量前缀到表达式引擎。
+def register_variable(name: str, category: str = '自定义',
+                      is_prefix: bool = False,
+                      description: str = '') -> None:
+    """临时注册自定义变量到表达式引擎。
+
+    添加 VarSpec 到 _VAR_REGISTRY，同时同步到 VALID_VAR_PREFIXES。
+
+    Args:
+        name: 变量名 (ALL_CAPS)
+        category: 所属类别, 默认 '自定义'
+        is_prefix: True=前缀通配, False=精确匹配
+        description: 描述信息
 
     进程级全局注册, 当前脚本内所有 Expression 生效。
     脚本退出自动销毁, 无泄漏风险。
     """
-    upper = prefix.upper()
-    if upper not in VALID_VAR_PREFIXES:
-        VALID_VAR_PREFIXES.append(upper)
+    upper = name.upper()
+    if upper not in _VAR_REGISTRY:
+        spec = VarSpec(upper, category=category, is_prefix=is_prefix, description=description)
+        _VAR_REGISTRY[upper] = spec
+        _sync_var_backward_compat()
 
 
-def unregister_variable(prefix: str) -> bool:
-    """注销自定义变量前缀，返回是否成功。"""
-    upper = prefix.upper()
-    if upper in VALID_VAR_PREFIXES:
-        VALID_VAR_PREFIXES.remove(upper)
+def unregister_variable(name: str) -> bool:
+    """注销自定义变量，返回是否成功。"""
+    upper = name.upper()
+    if upper in _VAR_REGISTRY:
+        del _VAR_REGISTRY[upper]
+        _sync_var_backward_compat()
         return True
     return False
+
+
+def _sync_var_backward_compat():
+    """同步 VALID_VAR_PREFIXES 和 VAR_CATEGORIES 与 _VAR_REGISTRY 一致"""
+    global VALID_VAR_PREFIXES, VAR_CATEGORIES
+    VALID_VAR_PREFIXES = list(_VAR_REGISTRY.keys())
+    cats = {}
+    for spec in _VAR_REGISTRY.values():
+        cats.setdefault(spec.category, []).append(spec.name)
+    VAR_CATEGORIES = cats
 
 
 # ============================================================
