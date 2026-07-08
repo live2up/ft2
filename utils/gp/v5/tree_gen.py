@@ -9,6 +9,7 @@ import random
 import logging
 
 from utils.ast.dsl import ast_depth
+from utils.ast.spec import make_var, make_const, make_compare, make_boolop, make_ifexp, make_unaryop
 from .config import (
     GP_VARIABLES, GP_CONSTANTS,
     TreeGenConfig, get_full_default_weights,
@@ -39,16 +40,16 @@ def _random_variable(cfg: TreeGenConfig) -> ast.Name:
         else:
             choices = list(cfg.var_allowlist)
         if choices:
-            return ast.Name(id=rng.choice(choices), ctx=ast.Load())
+            return make_var(rng.choice(choices))
     if vw:
         var_names = list(vw.keys())
         var_weights = [vw[v] for v in var_names]
-        return ast.Name(id=rng.choices(var_names, weights=var_weights, k=1)[0], ctx=ast.Load())
-    return ast.Name(id=rng.choice(GP_VARIABLES), ctx=ast.Load())
+        return make_var(rng.choices(var_names, weights=var_weights, k=1)[0])
+    return make_var(rng.choice(GP_VARIABLES))
 
 
 def _random_constant(cfg: TreeGenConfig) -> ast.Constant:
-    return ast.Constant(value=cfg.rng.choice(GP_CONSTANTS))
+    return make_const(cfg.rng.choice(GP_CONSTANTS))
 
 
 def _random_terminal(cfg: TreeGenConfig) -> ast.AST:
@@ -151,8 +152,8 @@ def _sample_param_range(pr, rng) -> float:
 def _random_compare(cfg: TreeGenConfig, left: ast.AST) -> ast.Compare:
     rng = cfg.rng
     threshold = rng.choice([0, 0, 0, 1.0, 1.5, 2.0, -1.0])
-    op = rng.choice([ast.Gt(), ast.Lt(), ast.GtE(), ast.LtE()])
-    return ast.Compare(left=left, ops=[op], comparators=[ast.Constant(value=threshold)])
+    op = rng.choice([ast.Gt, ast.Lt, ast.GtE, ast.LtE])
+    return make_compare(left, op, make_const(threshold))
 
 
 def _mode_filtered_groups(gw: dict, mode: str) -> dict:
@@ -187,8 +188,8 @@ def _grow_tree(cfg: TreeGenConfig, depth: int, prefer_variable: bool = False) ->
     elif chosen == 'logic':
         left = _grow_tree(cfg, depth - 1)
         right = _grow_tree(cfg, depth - 1)
-        op = ast.And() if rng.random() < 0.6 else ast.Or()
-        return ast.BoolOp(op=op, values=[left, right])
+        op = ast.And if rng.random() < 0.6 else ast.Or
+        return make_boolop(op, left, right)
     elif chosen == 'binary_op':
         left = _grow_tree(cfg, depth - 1, prefer_variable=True)
         right = _grow_tree(cfg, depth - 1, prefer_variable=True)
@@ -216,7 +217,7 @@ def _grow_tree(cfg: TreeGenConfig, depth: int, prefer_variable: bool = False) ->
         cond = _grow_tree(cfg, depth - 1)
         a_val = _grow_tree(cfg, depth - 1, prefer_variable=True)
         b_val = _grow_tree(cfg, depth - 1, prefer_variable=True)
-        return ast.IfExp(test=cond, body=a_val, orelse=b_val)
+        return make_ifexp(cond, a_val, b_val)
 
 
 def _random_tree(cfg: TreeGenConfig, max_depth: int = 6) -> ast.Expression:
@@ -360,7 +361,7 @@ def _mutate_logic(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) 
                       if isinstance(n, (ast.Compare, ast.BoolOp))]
         if candidates:
             target = rng.choice(candidates)
-            not_node = ast.UnaryOp(op=ast.Not(), operand=copy.deepcopy(target))
+            not_node = make_unaryop(ast.Not, copy.deepcopy(target))
             _replace_subtree(new_tree, target, not_node)
             ast.fix_missing_locations(new_tree)
 
@@ -379,13 +380,8 @@ def _mutate_insert_condition(cfg: TreeGenConfig, tree: ast.Expression, max_depth
             target = rng.choice(candidates)
             condition = _grow_tree(cfg, max_depth)
             if not isinstance(condition, (ast.Compare, ast.BoolOp)):
-                condition = ast.Compare(
-                    left=condition, ops=[ast.Gt()],
-                    comparators=[ast.Constant(value=0)])
-            ifelse = ast.IfExp(
-                test=condition,
-                body=copy.deepcopy(target),
-                orelse=ast.Constant(value=0))
+                condition = make_compare(condition, ast.Gt, make_const(0))
+            ifelse = make_ifexp(condition, copy.deepcopy(target), make_const(0))
             _replace_subtree(new_tree, target, ifelse)
     else:
         candidates = [n for n in _collect_replaceable(new_tree, mode='bool')
@@ -394,11 +390,9 @@ def _mutate_insert_condition(cfg: TreeGenConfig, tree: ast.Expression, max_depth
             target = rng.choice(candidates)
             extra_cond = _grow_tree(cfg, max_depth)
             if not isinstance(extra_cond, (ast.Compare, ast.BoolOp)):
-                extra_cond = ast.Compare(
-                    left=extra_cond, ops=[ast.Gt()],
-                    comparators=[ast.Constant(value=0)])
-            op = ast.And() if rng.random() < 0.6 else ast.Or()
-            combined = ast.BoolOp(op=op, values=[copy.deepcopy(target), extra_cond])
+                extra_cond = make_compare(extra_cond, ast.Gt, make_const(0))
+            op = ast.And if rng.random() < 0.6 else ast.Or
+            combined = make_boolop(op, copy.deepcopy(target), extra_cond)
             _replace_subtree(new_tree, target, combined)
 
     ast.fix_missing_locations(new_tree)
