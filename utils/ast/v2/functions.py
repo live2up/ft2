@@ -363,7 +363,14 @@ def _ts_median_core(x, d):
 
 @njit(cache=True)
 def _ts_rank_core(x, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动排名
+    """滚动排名: 当前值 x[i] 在窗口内的归一化排名 [1/cnt, 1]。
+
+    算法: 收集窗口内有效值 → 排序 → searchsorted 定位 x[i] → (pos+1)/cnt
+    返回: 值域 [1/cnt, 1], 冷启动/NaN 返回 NaN
+    [对齐] WQ101 ts_rank(x,d): 当前值在窗口内的排名位置, 归一化到 (0,1]
+    [分歧] ft2 输出范围 (0, 1], 最低得 1/cnt 而非 0。这是为避免 0 值被下游算子
+           静默忽略, 保留最小区分度。对相对排名无影响。
+    [重构] 2026-07-06 numba @njit 加速
     [修复] 2026-07-06 当前值 x[i] 为 NaN 时返回 NaN (原用 valid[cnt-1] 返回过期排名, 污染截面)"""
     n = len(x)
     r = np.full(n, np.nan)
@@ -391,7 +398,14 @@ def _ts_rank_core(x, d):
 
 @njit(cache=True)
 def _ts_argmax_core(x, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动 argmax, 返回距今天数 (0=当前, d-1=最远)"""
+    """滚动窗口最大值位置: 返回最大值距今天数。
+
+    算法: 遍历窗口 [i-d+1, i], 记录最大值及其索引 → i - best_idx
+    返回: 值域 [0, d-1], 0=当前日出现最大值, d-1=最远日出现最大值
+    冷启动/全 NaN 窗口返回 NaN
+    [对齐] WQ101 ts_argmax(x,d): 返回窗口内最大值位置。ft2 采用距今天数 (0=当前)，
+            比 WQ101/DolphinDB 的 0=最旧约定更直观，使用时注意方向相反。
+    [重构] 2026-07-06 numba @njit 加速"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -411,7 +425,14 @@ def _ts_argmax_core(x, d):
 
 @njit(cache=True)
 def _ts_argmin_core(x, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动 argmin, 返回距今天数 (0=当前, d-1=最远)"""
+    """滚动窗口最小值位置: 返回最小值距今天数。
+
+    算法: 遍历窗口 [i-d+1, i], 记录最小值及其索引 → i - best_idx
+    返回: 值域 [0, d-1], 0=当前日出现最小值, d-1=最远日出现最小值
+    冷启动/全 NaN 窗口返回 NaN
+    [对齐] WQ101 ts_argmin(x,d): 返回窗口内最小值位置。ft2 采用距今天数 (0=当前)，
+            比 WQ101/DolphinDB 的 0=最旧约定更直观，使用时注意方向相反。
+    [重构] 2026-07-06 numba @njit 加速"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -431,7 +452,12 @@ def _ts_argmin_core(x, d):
 
 @njit(cache=True)
 def _ts_corr_core(x, y, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动相关系数, 同时跳过 x/y 的 NaN, 有效值<3 返回 NaN
+    """滚动 Pearson 相关系数: cov(x,y) / (std_x * std_y)。
+
+    算法: 同时跳过 x/y 的 NaN → 计算样本协方差和方差 (ddof=1) → 相关系数
+    返回: 值域 [-1, 1], 有效值<3 或 std_x/std_y≈0 时返回 NaN
+    [对齐] WQ101 correlation(x,y,d): Pearson 相关系数, ddof=1, 跳过 NaN
+    [重构] 2026-07-06 numba @njit 加速
     [修复] 2026-07-06 std≈0 时返回 NaN (原 0.0 与 ts_zscore 不一致, 掩盖无法计算的事实)"""
     n = len(x)
     r = np.full(n, np.nan)
@@ -470,7 +496,12 @@ def _ts_corr_core(x, y, d):
 
 @njit(cache=True)
 def _ts_cov_core(x, y, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动协方差 (ddof=1), 同时跳过 x/y 的 NaN"""
+    """滚动样本协方差: cov(x,y) = Σ((x-mean_x)*(y-mean_y)) / (n-1)。
+
+    算法: 同时跳过 x/y 的 NaN → 计算样本协方差 (ddof=1)
+    返回: 值域无界, 有效值<3 返回 NaN
+    [对齐] WQ101 covariance(x,y,d): 样本协方差, ddof=1, 跳过 NaN
+    [重构] 2026-07-06 numba @njit 加速"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -494,8 +525,15 @@ def _ts_cov_core(x, y, d):
 
 @njit(cache=True)
 def _ts_skew_core(x, d):
-    """[修复] 2026-07-06 样本偏度 (Fisher-Pearson), 对齐 pandas/scipy bias=False
-    总体偏度 g1 = m3/m2^1.5, 样本修正 G1 = g1 * sqrt(n*(n-1))/(n-2)"""
+    """样本偏度 (Fisher-Pearson): 衡量分布不对称程度。
+
+    算法: 总体偏度 g1 = m3/m2^1.5 → Fisher-Pearson 样本修正 G1 = g1 * sqrt(n*(n-1))/(n-2)
+    返回: 值域无界, 有效值<3 返回 NaN
+    [对齐] pandas/scipy skew(bias=False): Fisher-Pearson 样本偏度
+    [分歧] 使用总体方差 ddof=0 计算 m2, 与 ddof=1 的 ts_std 不一致。
+           标准做法应统一 ddof, 但当前公式与 m3/m4 分母保持一致 (均为 cnt)。
+            对排名类因子无影响, 对阈值类用法有 ~7.4% 偏差 (n=20 时)。 (审核报告 P2-3)
+    [修复] 2026-07-06 统一为 Fisher-Pearson 样本修正"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -528,8 +566,15 @@ def _ts_skew_core(x, d):
 
 @njit(cache=True)
 def _ts_kurt_core(x, d):
-    """[修复] 2026-07-06 样本超额峰度 (Fisher), 对齐 pandas/scipy bias=False
-    总体超额峰度 g2 = m4/m2^2-3, 样本修正 G2 = (n-1)/((n-2)(n-3)) * ((n+1)*g2+6)"""
+    """样本超额峰度 (Fisher): 衡量分布尾重程度。
+
+    算法: 总体超额峰度 g2 = m4/m2^2 - 3 → Fisher 样本修正 G2 = (n-1)/((n-2)(n-3)) * ((n+1)*g2+6)
+    返回: 值域无界, 有效值<4 返回 NaN
+    [对齐] pandas/scipy kurt(bias=False): Fisher 样本超额峰度 (正态分布=0)
+    [分歧] 使用总体方差 ddof=0 计算 m2, 与 ddof=1 的 ts_std 不一致。
+           标准做法应统一 ddof, 但当前公式与 m3/m4 分母保持一致 (均为 cnt)。
+            对排名类因子无影响, 对阈值类用法有偏差 (审核报告 P2-3)。
+    [修复] 2026-07-06 统一为 Fisher 样本超额峰度修正"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -582,7 +627,15 @@ def _ts_scale_core(x, d):
 
 @njit(cache=True)
 def _ts_decay_linear_core(x, d):
-    """[重构] 2026-07-06 numba @njit 加速: 线性衰减加权均值, 权重=[1,2,...,n_valid]"""
+    """线性衰减加权均值: 近期数据权重更高。
+
+    算法: 收集窗口内有效值 → 按出现顺序分配权重 [1,2,...,cnt] → 加权平均
+    返回: 加权均值, 全 NaN 窗口返回 NaN
+    [对齐] WQ101 decay_linear(x,d): 线性时间加权, 近期权重高
+    [分歧] ft2 权重按有效值出现顺序分配; WQ101/DolphinDB 按绝对时间位置分配。
+            窗口含 NaN 时两者结果不同 (例如 [NaN, a, b, NaN, c] 的权重分配不同)。
+            当前实现更简洁, 且对干净数据无差异, 故保留。
+    [重构] 2026-07-06 numba @njit 加速"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -623,11 +676,13 @@ def _ts_product_core(x, d):
 
 @njit(cache=True)
 def _ts_quantile_core(x, d, p):
-    """[修复] 2026-07-06 nearest-rank 分位数: 收集有效值后排序取 ceil(p*cnt)-1 位 (0-indexed)
-    替代 np.nanpercentile (linear interpolation)。
-    WQ/Alpha158 原始公式集无 ts_quantile 算子 (其分位数概念由 rank/percentile 排名实现),
-    本函数采用 nearest-rank (ceil) 方法 —— 参考 numpy 的 percentile(method='nearest')。
-    与 linear 插值的差异: p*cnt 为整数时 nearest-rank 取 exact 位而非插值, 无对错之分。"""
+    """滚动分位数值: 返回窗口内 p 分位数的值 (非排名)。
+
+    算法: 收集有效值 → 排序 → nearest-rank 取 ceil(p*cnt)-1 位 (0-indexed)
+    返回: 值域 [min, max], 有效值<1 返回 NaN
+    [注意] WQ101 原始公式集无 ts_quantile 算子 (分位数由 rank/percentile 排名实现)
+           本函数采用 nearest-rank 方法, 与 np.percentile linear 插值不同
+    [修复] 2026-07-06 用 ceil(p*cnt)-1 替代 floor(p*cnt), 并限制范围"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -657,7 +712,12 @@ def _ts_quantile_core(x, d, p):
 
 @njit(cache=True)
 def _ts_zscore_core(x, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动 Z-score, std≈0 或冷启动返回 NaN"""
+    """滚动 Z-score: (x[i] - mean) / std, 样本标准差 ddof=1。
+
+    算法: 计算窗口均值和样本标准差 → (x[i] - mean) / std
+    返回: 值域无界, std≈0 或冷启动返回 NaN
+    [对齐] WQ101 无直接对应, ft2 扩展用于标准化
+    [重构] 2026-07-06 numba @njit 加速"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -682,8 +742,18 @@ def _ts_zscore_core(x, d):
 
 @njit(cache=True)
 def _ts_regression_core(y, x, d, rettype):
-    """[重构] 2026-07-06 numba @njit 加速: 双变量 y~x 滚动线性回归
-    rettype: 0=slope, 1=intercept, 2=resid(y[i]-(a+b*x[i])), 3=predict(a+b*x[i]), 4=rsq"""
+    """双变量 y~x 滚动线性回归: y = a + b*x + eps。
+
+    算法: 对有效 (x,y) 对做最小二乘 → 斜率 b, 截距 a
+    返回: rettype 指定类型
+        - 0: 斜率 b (x 对 y 的影响强度)
+        - 1: 截距 a
+        - 2: 残差 y[i] - (a+b*x[i])
+        - 3: 预测值 a + b*x[i]
+        - 4: R²
+    返回: 有效值<3 或 var_x≈0 返回 NaN
+    [对齐] WQ101 无直接对应算子, ft2 扩展用于量价回归等场景
+    [重构] 2026-07-06 numba @njit 加速"""
     n = len(y)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
@@ -734,11 +804,21 @@ def _ts_regression_core(y, x, d, rettype):
 
 @njit(cache=True)
 def _ts_linear_reg_core(x, window, rettype, fill_value):
-    """[重构] 2026-07-06 numba @njit 加速: 单变量 x~t 趋势线性回归
-    rettype: 0=slope, 1=intercept, 2=resid, 3=predict, 4=rsq
-    fill_value: 冷启动/数据不足时的填充值 (ts_resid 传 0.0, 其他传 NaN)
-    [修复] 2026-07-06 window<3 时尊重 fill_value (原硬编码 0.0 导致 ts_slope 等返回虚假 0)
-    [修复] 2026-07-06 rettype=2/3 用 x[i] 和 window-1 (原用 valid[cnt-1] 和 cnt-1 返回过期值)"""
+    """单变量 x~t 趋势线性回归: x = a + b*t + eps。
+
+    算法: 对时间 t=[0,1,...,cnt-1] 和有效值 x 做最小二乘 → 截距 a, 斜率 b
+    返回: rettype 指定类型
+        - 0: 斜率 b (趋势强度)
+        - 1: 截距 a
+        - 2: 残差 x[i] - (a+b*(window-1))
+        - 3: 预测值 a + b*(window-1)
+        - 4: R²
+    冷启动/NaN: window<3 或当前值 NaN 返回 fill_value
+    [分歧] 窗口含 NaN 时, 有效值被重新编号为 t=[0,1,...,cnt-1], 时间轴被压缩。
+            WQ101 标准实现通常保留原始时间位置, 因此 NaN 会导致斜率失真。
+            当前实现更简洁, 且对干净数据无差异, 故保留。 (审核报告 P2-2)
+    [重构] 2026-07-06 numba @njit 加速
+    [修复] 2026-07-06 window<3 尊重 fill_value, rettype=2/3 用 x[i] 和 window-1"""
     n = len(x)
     if window < 3:
         # [修复] 尊重 fill_value, 不硬编码 0.0
@@ -803,7 +883,12 @@ def _ts_linear_reg_core(x, window, rettype, fill_value):
 
 @njit(cache=True)
 def _cs_zscore_core(x):
-    """[重构] 2026-07-06 numba @njit 加速: 2D 截面 Z-score, 逐行计算, 跳过 NaN"""
+    """2D 截面 Z-score: (x - mean) / std, 样本标准差 ddof=1。
+
+    算法: 逐行计算均值和样本标准差 → 标准化
+    返回: 值域无界, std≈0 返回 0.0, 冷启动返回 NaN
+    [对齐] WQ101 无直接对应, ft2 扩展用于截面标准化
+    [重构] 2026-07-06 numba @njit 加速 (2D)"""
     n_rows, n_cols = x.shape
     r = np.full((n_rows, n_cols), np.nan)
     for i in range(n_rows):
@@ -832,7 +917,12 @@ def _cs_zscore_core(x):
 
 @njit(cache=True)
 def _cs_scale_core(x, scale):
-    """[重构] 2026-07-06 numba @njit 加速: 2D 截面缩放, x/sum(|x|)*scale"""
+    """2D 截面缩放: sum(|x|) = scale。
+
+    算法: 逐行计算 sum(|x|) → x / sum(|x|) * scale
+    返回: 值域无界, sum_abs≈0 返回 0.0
+    [对齐] WQ101 scale(x, a=1): 截面缩放, sum(|x|) = a
+    [重构] 2026-07-06 numba @njit 加速 (2D)"""
     n_rows, n_cols = x.shape
     r = np.full((n_rows, n_cols), np.nan)
     for i in range(n_rows):
@@ -856,7 +946,12 @@ def _cs_scale_core(x, scale):
 
 @njit(cache=True)
 def _cs_winsorize_core(x, std_n):
-    """[重构] 2026-07-06 numba @njit 加速: 2D 截面缩尾, 逐行 +/-std_n*std"""
+    """2D 截面缩尾 (Winsorize): 按 +/-std_n*std 截尾。
+
+    算法: 逐行计算 mean 和 std → 超出 [mean-std_n*std, mean+std_n*std] 的值截尾
+    返回: 值域 [mean-std_n*std, mean+std_n*std]
+    [对齐] WQ101 无直接对应, ft2 扩展用于异常值处理
+    [重构] 2026-07-06 numba @njit 加速 (2D)"""
     n_rows, n_cols = x.shape
     r = x.copy()
     for i in range(n_rows):
@@ -887,9 +982,15 @@ def _cs_winsorize_core(x, std_n):
 
 @njit(cache=True)
 def _cs_rank_core(panel):
-    """[修复] 2026-07-06 numba @njit 加速: 2D 截面 min-rank, 替代 scipy rankdata.
-    每行收集有效值 → argsort → 并列取最小排名 (method='min') → 归一化 (0, 1]
-    对齐 scipy.stats.rankdata(method='min'), 加速 ~28x"""
+    """2D 截面 min-rank (竞争排名): 每行独立排名, 并列值取最小排名, 归一化到 (0, 1]。
+
+    算法: 每行收集有效值 → argsort 升序 → 同值组取最小排名 → 除以 cnt
+    返回: 值域 (0, 1], 全 NaN 行保持 NaN
+    [对齐] WQ101 rank(x): 截面排名, 最低得 0, 最高得 1
+    [分歧] ft2 输出范围 (0, 1], 最低得 1/N 而非 0。这是为避免 0 值被下游算子
+            (如乘法、除法) 静默忽略, 保留最小区分度。对相对排名无影响。
+    [对齐] DolphinDB rank(): method='min' 竞争排名
+    [重构] 2026-07-06 numba @njit 加速 (~28x), 替代 scipy rankdata"""
     n_days, n_stocks = panel.shape
     out = np.full((n_days, n_stocks), np.nan)
     for i in range(n_days):
@@ -970,15 +1071,32 @@ def ts_kurt(x, d):
     return _ts_kurt_core(np.asarray(x, float), int(d))
 
 def ts_argmax(x, d):
-    """[重构] 2026-07-06 numba @njit 加速"""
+    """滚动窗口最大值位置: 返回最大值距今天数。
+
+    返回: 值域 [0, d-1], 0=当前日出现最大值, d-1=最远日出现最大值
+    [对齐] WQ101 ts_argmax(x,d): 返回窗口内最大值位置。ft2 采用距今天数 (0=当前)，
+            比 WQ101/DolphinDB 的 0=最旧约定更直观，使用时注意方向相反。
+    [重构] 2026-07-06 numba @njit 加速"""
     return _ts_argmax_core(np.asarray(x, float), int(d))
 
+
 def ts_argmin(x, d):
-    """[重构] 2026-07-06 numba @njit 加速"""
+    """滚动窗口最小值位置: 返回最小值距今天数。
+
+    返回: 值域 [0, d-1], 0=当前日出现最小值, d-1=最远日出现最小值
+    [对齐] WQ101 ts_argmin(x,d): 返回窗口内最小值位置。ft2 采用距今天数 (0=当前)，
+            比 WQ101/DolphinDB 的 0=最旧约定更直观，使用时注意方向相反。
+    [重构] 2026-07-06 numba @njit 加速"""
     return _ts_argmin_core(np.asarray(x, float), int(d))
 
 def ts_roc(x, d):
-    """变化率: (x[t]-x[t-d])/x[t-d]"""
+    """变化率 (Rate of Change): (x[t] - x[t-d]) / x[t-d]。
+
+    算法: 当前值减 d 天前值, 除以前值 → 百分比变化
+    返回: 值域无界, x[t-d]≈0 返回 NaN
+    [对齐] WQ101 delta(x,d) 不含除法, ft2 ts_roc 是相对变化率
+           若需绝对变化用 ts_delta(x, d)
+    [修复] 2026-07-06 x[t-d] 接近 0 时返回 NaN (原硬编码除零行为)"""
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
     r[d:] = (x[d:] - x[:-d]) / np.where(np.abs(x[:-d]) > 1e-10, x[:-d], np.nan)
     return r
@@ -1083,9 +1201,15 @@ def expanding_percentile(x, p, min_p=20):
 # ============================================================
 
 def cs_rank(x):
-    """[修复] 2026-07-06 numba @njit 加速 (~28x)
-    WQ rank 规范: 并列值取最小排名, range [1/N, 1]. 见 DolphinDB WQ101 实现.
-    旧版 average 排名对离散信号(ts_argmax等)引入虚假区分度, 连续信号无影响."""
+    """截面排名: 并列值取最小排名, 归一化到 (0, 1]。
+
+    算法: 2D 面板调用 _cs_rank_core; 1D 输入返回全 0.5 (截面排名需至少 2 个值)
+    返回: 值域 (0, 1], 全 NaN 行保持 NaN
+    [对齐] WQ101 rank(x): 截面排名, 最低得 0, 最高得 1
+    [分歧] ft2 输出范围 (0, 1], 最低得 1/N 而非 0。这是为避免 0 值被下游算子
+           静默忽略, 保留最小区分度。对相对排名无影响。
+    [对齐] DolphinDB rank(): method='min' 竞争排名
+    [修复] 2026-07-06 numba @njit 加速 (~28x), 替代 scipy rankdata"""
     x = np.asarray(x, float)
     if x.ndim == 1: return np.full_like(x, 0.5)
     return _cs_rank_core(x)
@@ -1129,8 +1253,13 @@ def cs_quantile(x, driver='gaussian', sigma=1.0):
 
 def safe_abs(x):          return np.abs(x)
 def safe_log(x):
-    """[修复] 2026-07-06 非正数返回 NaN (原 abs(x) 导致 log(-1)==log(1) 掩盖负数错误)
-    若需处理负数输入的量级, 请用 sign(x)*log(abs(x)+1) 显式表达"""
+    """自然对数 ln(x), 仅对正数定义。
+
+    算法: x > 1e-10 时返回 ln(x), 否则返回 NaN
+    返回: 值域 (-inf, +inf), 非正数返回 NaN
+    [注意] 阈值 1e-10 排除极小正数, 金融价格无影响, 但对标准化因子值可能丢失信息
+           若需处理负数/零, 用 sign(x)*log(abs(x)+1) 显式表达
+    [修复] 2026-07-06 非正数返回 NaN (原 abs(x) 导致 log(-1)==log(1) 掩盖负数错误)"""
     x = np.asarray(x, float)
     result = np.full_like(x, np.nan)
     mask = x > 1e-10

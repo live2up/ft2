@@ -188,8 +188,14 @@ DEFAULT_GP_CONFIG = {
     'random_inject_ratio': 0.15,
     # [惩罚] 复杂度惩罚系数 (fitness *= (1 - penalty * node_count))
     'parsimony_penalty': 0.001,
-    # [选择器] True=使用 Lexicase 选择 (保留方向多样性)，False=锦标赛选择
+    # [选择器] True=使用 ε-Lexicase 选择 (保留方向多样性)，False=锦标赛选择
     'lexicase': True,
+    # [ε-lexicase] ε 阈值 (0.05 = 允许 fitness 差距 5% 内的个体同为代表)
+    'epsilon': 0.05,
+    # [年龄] True=启用年龄机制，fitness 随年龄衰减，防止种群老龄化
+    'age_enabled': True,
+    # [年龄] 年龄惩罚系数 (fitness *= 1/(1 + lr*age)，默认 0.05)
+    'age_penalty_lr': 0.05,
     # [变异] 子树替换权重 (30% 变异操作中子树替换)
     'mutate_subtree_weight': 0.30,
     # [变异] 参数变异权重 (40% 变异操作中重新采样参数: 窗口/常数)
@@ -214,6 +220,7 @@ class Individual:
     node_count: int = 0
     generation: int = 0
     is_seed: bool = False
+    age: int = 1  # [新增] 2026-07-08 年龄: 个体存活代数，用于年龄惩罚
 
     @staticmethod
     def from_expr(expr_str: str, generation: int = 0, is_seed: bool = False) -> 'Individual':

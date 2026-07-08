@@ -75,6 +75,10 @@ class GPEngine:
         self._save_random_inject: int = self.random_inject_count
         self.parsimony_penalty = cfg['parsimony_penalty']
 
+        # [新增] 2026-07-08 年龄机制: 防止种群老龄化，保持多样性
+        self._age_enabled: bool = cfg.get('age_enabled', False)
+        self._age_penalty_lr: float = cfg.get('age_penalty_lr', 0.05)
+
         # 变异算子权重
         # [重构] 2026-07-08 _mutate_constant + _mutate_window → _mutate_param
         # [修复] 2026-07-08 mode='continuous' 时自动屏蔽 logic/insert_condition 算子
@@ -143,8 +147,9 @@ class GPEngine:
         # ε-greedy 探索
         self._explore_ratio: float = config.get('explore_ratio', 0.15) if config else 0.15
 
-        # Lexicase 选择
+        # [新增] 2026-07-08 ε-Lexicase: 允许 fitness 差距 ε 内的个体同为代表，保留多样性
         self._use_lexicase: bool = config.get('lexicase', False) if config else False
+        self._epsilon: float = config.get('epsilon', 0.05) if config else 0.05
 
     # ── 配置构建 ──
 
@@ -209,37 +214,43 @@ class GPEngine:
         cached = self.fitness_cache.get(key)
         if cached is not None:
             ind.fitness, ind.depth, ind.node_count = cached
-            return cached[0]
-
-        if not self._quick_filter(ind):
-            return -999.0
-
-        try:
-            if self._evaluator:
-                factor_values = self._evaluator(self.data, ind.tree)
-            else:
+            raw_fitness = cached[0]
+        else:
+            if not self._quick_filter(ind):
                 return -999.0
-        except Exception as e:
-            if ind.is_seed:
-                logger.warning(f"[GP] 种子求值异常: {e}")
-            return -999.0
 
-        if not np.isfinite(factor_values).all():
-            return -999.0
-        if np.allclose(factor_values, factor_values.flat[0], atol=1e-10):
-            return -999.0
+            try:
+                if self._evaluator:
+                    factor_values = self._evaluator(self.data, ind.tree)
+                else:
+                    return -999.0
+            except Exception as e:
+                if ind.is_seed:
+                    logger.warning(f"[GP] 种子求值异常: {e}")
+                return -999.0
 
-        fitness = self.fitness_calc.compute(factor_values)
-        if not np.isfinite(fitness) or fitness < -998.0:
-            return -999.0
+            if not np.isfinite(factor_values).all():
+                return -999.0
+            if np.allclose(factor_values, factor_values.flat[0], atol=1e-10):
+                return -999.0
 
-        ind.depth = ast_depth(ind.tree)
-        ind.node_count = ast_node_count(ind.tree)
-        penalty = self.parsimony_penalty * ind.node_count
-        ind.fitness = fitness * (1.0 - penalty)
+            fitness = self.fitness_calc.compute(factor_values)
+            if not np.isfinite(fitness) or fitness < -998.0:
+                return -999.0
 
-        self.fitness_cache.put(key, (ind.fitness, ind.depth, ind.node_count))
-        return ind.fitness
+            ind.depth = ast_depth(ind.tree)
+            ind.node_count = ast_node_count(ind.tree)
+            penalty = self.parsimony_penalty * ind.node_count
+            raw_fitness = fitness * (1.0 - penalty)
+            self.fitness_cache.put(key, (raw_fitness, ind.depth, ind.node_count))
+
+        # [新增] 2026-07-08 年龄惩罚: 随代数衰减，防止种群老龄化
+        if self._age_enabled and raw_fitness > -999.0:
+            age_penalty = 1.0 / (1.0 + self._age_penalty_lr * ind.age)
+            raw_fitness = raw_fitness * age_penalty
+
+        ind.fitness = raw_fitness
+        return raw_fitness
 
     def _evaluate_population(self):
         unevaluated = [ind for ind in self.population if ind.fitness == -999.0]
@@ -452,12 +463,26 @@ class GPEngine:
         if len(self._direction_best_expr) < 2:
             return self._tournament_select()
 
-        valid_by_expr = {i.expression_str: i for i in valid if i.expression_str}
+        # [新增] 2026-07-08 ε-lexicase: 对每个方向，取 fitness 在 [best*(1-ε), best] 区间内的所有个体
+        # 而非仅取 best 表达式。保留更多方向代表，提升多样性。
         representatives = []
         for sig, (best_fit, best_expr) in self._direction_best_expr.items():
-            ind = valid_by_expr.get(best_expr)
-            if ind is not None:
-                representatives.append(ind)
+            # 计算该方向的 fitness 阈值（允许 ε 差距）
+            threshold = best_fit * (1.0 - self._epsilon)
+            # 收集该方向下所有 fitness >= threshold 的个体
+            for ind in valid:
+                ind_sig = self._expr_signature(ind.expression_str)
+                if ind_sig == sig and ind.fitness >= threshold:
+                    representatives.append(ind)
+
+        # 去重（同一表达式可能出现多次）
+        seen = set()
+        unique_reps = []
+        for ind in representatives:
+            if ind.expression_str not in seen:
+                seen.add(ind.expression_str)
+                unique_reps.append(ind)
+        representatives = unique_reps
 
         if not representatives:
             return self._tournament_select()
@@ -542,6 +567,7 @@ class GPEngine:
         for expr_str in self.seed_expressions[:seed_count]:
             try:
                 ind = Individual.from_expr(expr_str, generation=0, is_seed=True)
+                ind.age = 1  # [新增] 2026-07-08 种子初始年龄=1
                 self.population.append(ind)
             except Exception as e:
                 logger.warning(f"种子解析失败: {expr_str[:60]} ({e})")
@@ -550,7 +576,7 @@ class GPEngine:
         while len(self.population) < seed_count and seed_trees:
             base = rng.choice(seed_trees)
             mutated = _mutate_subtree(cfg, base, max_depth=3)
-            self.population.append(Individual(tree=mutated, generation=0))
+            self.population.append(Individual(tree=mutated, generation=0, age=1))
 
         remaining = self.population_size - len(self.population)
         explore_n = int(remaining * self._explore_ratio)
@@ -559,7 +585,7 @@ class GPEngine:
                 tree = _random_tree_explore(cfg, self.max_depth)
             else:
                 tree = _random_tree(cfg, self.max_depth)
-            self.population.append(Individual(tree=tree, generation=0))
+            self.population.append(Individual(tree=tree, generation=0, age=1))
 
     # ── 进化循环 ──
 
@@ -577,6 +603,7 @@ class GPEngine:
                 expression_str=elite.expression_str,
                 generation=gen + 1,
                 depth=elite.depth, node_count=elite.node_count,
+                age=elite.age + 1,  # [新增] 2026-07-08 精英个体年龄+1
             ))
 
         while len(new_pop) < self.population_size - self.random_inject_count:
@@ -588,6 +615,7 @@ class GPEngine:
             else:
                 parent = self._select_parent()
                 child = Individual(tree=copy.deepcopy(parent.tree), generation=gen + 1)
+            child.age = 1  # [新增] 2026-07-08 新个体初始年龄=1
             new_pop.append(child)
 
         inject_n = self.random_inject_count
@@ -597,7 +625,7 @@ class GPEngine:
                 tree = _random_tree_explore(cfg, self.max_depth)
             else:
                 tree = _random_tree(cfg, self.max_depth)
-            new_pop.append(Individual(tree=tree, generation=gen + 1))
+            new_pop.append(Individual(tree=tree, generation=gen + 1, age=1))
 
         return new_pop[:self.population_size]
 
