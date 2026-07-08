@@ -151,6 +151,15 @@ class GPEngine:
         self._use_lexicase: bool = config.get('lexicase', False) if config else False
         self._epsilon: float = config.get('epsilon', 0.05) if config else 0.05
 
+        # [新增] 2026-07-08 Motif 库: 提取高频子树作为高质量种子
+        self._motif_enabled: bool = cfg.get('motif_enabled', True)
+        self._motif_update_every: int = cfg.get('motif_update_every', 3)
+        self._motif_min_fitness: float = cfg.get('motif_min_fitness', 0.0)
+        self._motif_max_depth: int = max(1, int(self.max_depth * cfg.get('motif_max_depth_ratio', 0.5)))
+        self._motif_inject_count: int = cfg.get('motif_inject_count', 5)
+        # Motif 库结构: {canonical_key: {"count": int, "fitness_sum": float, "expr": str, "depth": int}}
+        self._motif_library: Dict[str, Dict] = {}
+
     # ── 配置构建 ──
 
     def _build_tree_config(self, user_config: TreeGenConfig = None,
@@ -447,6 +456,67 @@ class GPEngine:
                         self.random_inject_count * 2,
                     )
 
+    # ── Motif 库管理 ──
+
+    def _update_motif_library(self):
+        """从当前种群 Top 30% 个体中提取高频子树，更新 Motif 库"""
+        if not self._motif_enabled:
+            return
+
+        valid = [i for i in self.population if i.fitness > self._motif_min_fitness]
+        if not valid:
+            return
+
+        # 取 Top 30%
+        valid.sort(key=lambda x: x.fitness, reverse=True)
+        top_n = max(1, int(len(valid) * 0.3))
+        top_individuals = valid[:top_n]
+
+        for ind in top_individuals:
+            expr_str = ind.expression_str or _expr_str(ind.tree)
+            subtrees = _extract_subtrees(ind.tree, min_depth=1, max_depth=self._motif_max_depth)
+            for subtree in subtrees:
+                try:
+                    subtree_str = _expr_str(subtree)
+                    if not subtree_str or subtree_str == expr_str:
+                        continue
+                    # 用 canonical key 去重
+                    canonical = _canonicalize_key(
+                        subtree, subtree_str,
+                        self._canonicalize_memo, self._canonicalize_lock
+                    )
+                    if canonical in self._motif_library:
+                        entry = self._motif_library[canonical]
+                        entry['count'] += 1
+                        entry['fitness_sum'] += ind.fitness
+                    else:
+                        self._motif_library[canonical] = {
+                            'count': 1,
+                            'fitness_sum': ind.fitness,
+                            'expr': subtree_str,
+                            'depth': ast_depth(subtree),
+                        }
+                except Exception:
+                    continue
+
+    def _get_motif_seeds(self, n: int = 5) -> List[str]:
+        """返回 Top-N Motif 表达式，按 出现次数 × 平均 fitness 排序"""
+        if not self._motif_library:
+            return []
+
+        scored = []
+        for key, entry in self._motif_library.items():
+            avg_fitness = entry['fitness_sum'] / entry['count'] if entry['count'] > 0 else 0
+            score = entry['count'] * max(avg_fitness, 0.01)
+            scored.append((score, entry['expr']))
+
+        scored.sort(key=lambda x: -x[0])
+        return [expr for _, expr in scored[:n]]
+
+    def get_motif_seeds(self, n: int = 10) -> List[str]:
+        """公开 API：获取当前 Motif 库 Top-N 种子表达式（供跨轮次复用）"""
+        return self._get_motif_seeds(n)
+
     # ── 选择 ──
 
     def _tournament_select(self) -> Individual:
@@ -563,8 +633,12 @@ class GPEngine:
         rng = cfg.rng
         self.population = []
 
+        # [新增] 2026-07-08 Motif 种子: 从 Motif 库抽取高质量子树
+        motif_seeds = self._get_motif_seeds(self._motif_inject_count) if self._motif_enabled else []
+        all_seeds = self.seed_expressions + motif_seeds
+
         seed_count = int(self.population_size * self.seed_ratio)
-        for expr_str in self.seed_expressions[:seed_count]:
+        for expr_str in all_seeds[:seed_count]:
             try:
                 ind = Individual.from_expr(expr_str, generation=0, is_seed=True)
                 ind.age = 1  # [新增] 2026-07-08 种子初始年龄=1
@@ -673,6 +747,10 @@ class GPEngine:
             cfg = self.tree_gen_config
             if cfg and cfg.adaptive and gen > 0 and gen % cfg.adaptive_every == 0:
                 self._update_direction_weights()
+
+            # [新增] 2026-07-08 Motif 库更新: 每 N 代从 Top 个体提取子树
+            if self._motif_enabled and gen > 0 and gen % self._motif_update_every == 0:
+                self._update_motif_library()
 
             # 算子自适应
             self._adapt_operators(gen_best.fitness)

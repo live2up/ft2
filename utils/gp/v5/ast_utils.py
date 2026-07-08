@@ -2,12 +2,16 @@
 utils/gp/v5/ast_utils.py — AST 纯函数工具
 =============================================================================
 [抽取] 2026-07-06 从 engine.py 拆分，纯函数无状态，可被 factor/signals 共享。
+[新增] 2026-07-08 新增 _extract_subtrees 用于 Motif 库构建。
 """
 import ast
 import copy
 import logging
+from typing import List
 
 logger = logging.getLogger(__name__)
+
+from utils.ast.dsl import ast_depth, ast_node_count
 
 
 # ============================================================
@@ -267,3 +271,28 @@ def _canonicalize_key(tree: ast.Expression,
         else:
             memo[expr_str] = key
     return key
+
+
+def _extract_subtrees(tree: ast.Expression,
+                       min_depth: int = 1,
+                       max_depth: int = 3) -> List[ast.AST]:
+    """提取所有深度在 [min_depth, max_depth] 范围内的有效子树
+
+    [新增] 2026-07-08 用于 Motif 库构建：从高 fitness 个体中提取有潜力的子结构。
+    排除：纯函数名节点、Load/Store 元节点、单变量/常数节点。
+    """
+    func_names = set()
+    for node in ast.walk(tree.body):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            func_names.add(id(node.func))
+
+    meaningful = (ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
+                  ast.IfExp, ast.Call)
+
+    subtrees = []
+    for node in ast.walk(tree.body):
+        if isinstance(node, meaningful) and id(node) not in func_names:
+            d = ast_depth(node)
+            if min_depth <= d <= max_depth:
+                subtrees.append(node)
+    return subtrees

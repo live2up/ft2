@@ -19,6 +19,7 @@ from .config import (
 )
 from .ast_utils import (
     _expr_str, _collect_replaceable, _replace_subtree, _simplify_ast, _canonicalize_key,
+    _extract_subtrees,
 )
 from .tree_gen import (
     _grow_tree, _random_tree, _random_tree_explore,
@@ -32,7 +33,7 @@ __all__ = [
     'DEFAULT_GP_CONFIG', 'DEFAULT_TREE_GEN_CONFIG',
     'GP_VARIABLES', 'GP_CONSTANTS', '_fill_weights',
     '_expr_str', '_collect_replaceable', '_replace_subtree',
-    '_simplify_ast', '_canonicalize_key',
+    '_simplify_ast', '_canonicalize_key', '_extract_subtrees',
     '_grow_tree', '_random_tree', '_random_tree_explore',
     '_mutate_subtree', '_mutate_param',
     'FitnessCache',

@@ -196,6 +196,16 @@ DEFAULT_GP_CONFIG = {
     'age_enabled': True,
     # [年龄] 年龄惩罚系数 (fitness *= 1/(1 + lr*age)，默认 0.05)
     'age_penalty_lr': 0.05,
+    # [Motif] True=启用 Motif 库，提取高频子树作为种子
+    'motif_enabled': True,
+    # [Motif] 每 N 代更新一次 Motif 库
+    'motif_update_every': 3,
+    # [Motif] 仅提取 fitness >= 此阈值的个体的子树
+    'motif_min_fitness': 0.0,
+    # [Motif] Motif 子树最大深度（默认 max_depth//2）
+    'motif_max_depth_ratio': 0.5,
+    # [Motif] 每次初始化时最多注入多少 motif 种子
+    'motif_inject_count': 5,
     # [变异] 子树替换权重 (30% 变异操作中子树替换)
     'mutate_subtree_weight': 0.30,
     # [变异] 参数变异权重 (40% 变异操作中重新采样参数: 窗口/常数)
