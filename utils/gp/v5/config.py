@@ -117,10 +117,11 @@ def get_full_default_weights() -> dict:
 
     在 DEFAULT_TREE_GEN_CONFIG 基础上，合并通过 register_function 注册的自定义函数。
     自定义函数默认权重 1.0。ts_weights 涵盖 ts/cs/ta/feature_function，
-    math_weights 涵盖 math_function。
+    math_weights 涵盖 math_function，var_weights 涵盖 GP_VARIABLES。
     """
     ts_w = dict(DEFAULT_TREE_GEN_CONFIG.ts_weights)
     math_w = dict(DEFAULT_TREE_GEN_CONFIG.math_weights)
+    var_w = dict(DEFAULT_TREE_GEN_CONFIG.var_weights) if DEFAULT_TREE_GEN_CONFIG.var_weights else {}
 
     for name in _get_funcs_by_group('ts_function'):
         ts_w.setdefault(name, 1.0)
@@ -134,11 +135,14 @@ def get_full_default_weights() -> dict:
         ts_w.setdefault(name, 1.0)
     for name in _get_funcs_by_group('math_function'):
         math_w.setdefault(name, 1.0)
+    for name in GP_VARIABLES:
+        var_w.setdefault(name, 1.0)
 
     return {
         'group_weights': DEFAULT_TREE_GEN_CONFIG.group_weights,
         'ts_weights': ts_w,
         'math_weights': math_w,
+        'var_weights': var_w,
     }
 
 

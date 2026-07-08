@@ -172,6 +172,7 @@ class GPEngine:
                 group_weights=full_defaults['group_weights'],
                 ts_weights=full_defaults['ts_weights'],
                 math_weights=full_defaults['math_weights'],
+                var_weights=full_defaults.get('var_weights', {}),
                 rng=rng or random.Random(),
             )
         filled = {}
@@ -181,7 +182,7 @@ class GPEngine:
                 continue
             user_val = getattr(user_config, field.name)
             if user_val is None:
-                # [新增] 2026-07-07 使用包含自定义函数的完整默认权重
+                # [简化] 2026-07-08 统一回退到 full_defaults
                 default_val = full_defaults.get(field.name)
                 if default_val is not None:
                     filled[field.name] = default_val
