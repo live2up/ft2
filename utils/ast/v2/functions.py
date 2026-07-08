@@ -1410,10 +1410,14 @@ def _feature_ema(x: np.ndarray, period: int = 20) -> np.ndarray:
 
 
 def _feature_bbwidth(close: np.ndarray, period: int = 20) -> np.ndarray:
-    """布林带宽度 = (上轨-下轨)/中轨. talib 对齐."""
+    """布林带宽度 = (上轨-下轨)/中轨. talib 对齐.
+    [修复] 2026-07-09 NaN 透传, 对齐 WQ 规范: talib 在停牌/冷启动返回 NaN, 不应被填 0
+           伪装成"最窄布林带"; middle 为 NaN 或 <=0 时返回 NaN (NaN=缺失, 不参与截面排名)."""
     c = np.asarray(close, float)
     upper, middle, lower = talib.BBANDS(c, timeperiod=period, nbdevup=2, nbdevdn=2, matype=0)
-    return np.where(middle > 0, (upper - lower) / middle, 0)
+    # [修复] 2026-07-09 middle NaN/<=0 → NaN (WQ: 缺失不排名); errstate 抑制 0 除警告
+    with np.errstate(invalid='ignore', divide='ignore'):
+        return np.where(middle > 0, (upper - lower) / middle, np.nan)
 
 
 def _feature_stddev(close: np.ndarray, period: int = 20) -> np.ndarray:
@@ -1472,11 +1476,21 @@ def _feature_dema(close: np.ndarray, period: int = 20) -> np.ndarray:
 
 
 def _feature_hv(close: np.ndarray, period: int = 20) -> np.ndarray:
-    """历史波动率: 日收益率年化标准差 x100."""
+    """历史波动率: 日收益率年化标准差 x100.
+    [修复] 2026-07-09 np.std→nanstd, 对齐 WQ 规范: 窗口内 NaN(停牌)应跳过, 用剩余有效值计算;
+           与 ts_std(numba nan-aware core) 行为一致, 不再因单日停牌丢弃整段波动率."""
     c = np.asarray(close, float)
     rets = np.diff(c) / np.where(c[:-1] > 0, c[:-1], 1)
     rets = np.insert(rets, 0, 0)
-    return _rolling(rets, period, lambda a: np.std(a, ddof=1) * np.sqrt(252) * 100)
+
+    def _hv_std(a: np.ndarray) -> float:
+        # [修复] 2026-07-09 仅取有效值, 全 NaN/有效值<=1 时返回 NaN (WQ: 窗口全缺失→缺失)
+        valid = a[~np.isnan(a)]
+        if valid.size <= 1:
+            return np.nan
+        return np.nanstd(valid, ddof=1) * np.sqrt(252) * 100
+
+    return _rolling(rets, period, _hv_std)
 
 
 def _feature_natr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
@@ -1504,7 +1518,10 @@ def _feature_vol_ratio(close: np.ndarray, volume: np.ndarray, short: int = 5, lo
     # [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)
     vs = ts_mean(v, short)
     vl = ts_mean(v, long)
-    return np.where(vl > 0, vs / vl, 0)
+    # [修复] 2026-07-09 NaN 透传, 对齐 WQ 规范: 长期均量 NaN(停牌)或 <=0 时返回 NaN,
+    #        不填 0 伪装"地量"; ts_mean 已 nan-aware, 此处仅放行 NaN
+    with np.errstate(invalid='ignore', divide='ignore'):
+        return np.where(vl > 0, vs / vl, np.nan)
 
 
 def _feature_amt_ratio(amount: np.ndarray, short: int = 5, long: int = 20) -> np.ndarray:
@@ -1512,8 +1529,12 @@ def _feature_amt_ratio(amount: np.ndarray, short: int = 5, long: int = 20) -> np
     [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)"""
     a = np.asarray(amount, float)
     # [重构] 2026-07-06 改用 ts_mean (numba @njit 加速)
-    return np.where(ts_mean(a, long) > 0,
-                    ts_mean(a, short) / ts_mean(a, long), 0)
+    ms = ts_mean(a, short)
+    ml = ts_mean(a, long)
+    # [修复] 2026-07-09 NaN 透传, 对齐 WQ 规范: 长期均值 NaN(停牌)或 <=0 时返回 NaN,
+    #        不填 0 伪装"低额比"; 顺带消除 ts_mean(a,long) 重复调用
+    with np.errstate(invalid='ignore', divide='ignore'):
+        return np.where(ml > 0, ms / ml, np.nan)
 
 
 # ============================================================

@@ -9,6 +9,7 @@ import copy
 import random
 import logging
 import threading
+import itertools
 import numpy as np
 import os
 from typing import Dict, List, Optional, Callable
@@ -163,6 +164,13 @@ class GPEngine:
 
         # [新增] 2026-07-08 每代快照（替代零散 _sig_index 等）
         self._snap: Optional[GenerationSnapshot] = None
+
+        # [新增] 2026-07-09 岛屿模型参数
+        self._num_islands: int = max(1, cfg.get('num_islands', 1))
+        self._migrate_every: int = cfg.get('migrate_every', 5)
+        self._migrate_count: int = cfg.get('migrate_count', 2)
+        self._islands: List[List[Individual]] = []
+        self._island_size: int = max(1, self.population_size // self._num_islands)
 
     # ── 配置构建 ──
 
@@ -676,6 +684,34 @@ class GPEngine:
 
     # ── 初始化 ──
 
+    def _fill_one_population(self, seeds: List[str], pop_size: int, cfg: TreeGenConfig, rng) -> List[Individual]:
+        """填充一个独立的子种群（被单模式和岛屿模式共用）"""
+        pop: List[Individual] = []
+        seed_count = int(pop_size * self.seed_ratio)
+        for expr_str in seeds[:seed_count]:
+            try:
+                ind = Individual.from_expr(expr_str, generation=0, is_seed=True)
+                ind.age = 1
+                pop.append(ind)
+            except Exception as e:
+                logger.warning(f"种子解析失败: {expr_str[:60]} ({e})")
+
+        seed_trees = [ind.tree for ind in pop if ind.is_seed]
+        while len(pop) < seed_count and seed_trees:
+            base = rng.choice(seed_trees)
+            mutated = _mutate_subtree(cfg, base, max_depth=3)
+            pop.append(Individual(tree=mutated, generation=0, age=1))
+
+        remaining = pop_size - len(pop)
+        explore_n = int(remaining * self._explore_ratio)
+        while len(pop) < pop_size:
+            if len(pop) < seed_count + explore_n:
+                tree = _random_tree_explore(cfg, self.max_depth)
+            else:
+                tree = _random_tree(cfg, self.max_depth)
+            pop.append(Individual(tree=tree, generation=0, age=1))
+        return pop
+
     def _initialize_population(self):
         cfg = self.tree_gen_config
         rng = cfg.rng
@@ -685,29 +721,19 @@ class GPEngine:
         motif_seeds = self._get_motif_seeds(self._motif_inject_count) if self._motif_enabled else []
         all_seeds = self.seed_expressions + motif_seeds
 
-        seed_count = int(self.population_size * self.seed_ratio)
-        for expr_str in all_seeds[:seed_count]:
-            try:
-                ind = Individual.from_expr(expr_str, generation=0, is_seed=True)
-                ind.age = 1  # [新增] 2026-07-08 种子初始年龄=1
-                self.population.append(ind)
-            except Exception as e:
-                logger.warning(f"种子解析失败: {expr_str[:60]} ({e})")
+        # [新增] 2026-07-09 岛屿模式: 分 N 个独立子种群，种子 round-robin 分配
+        if self._num_islands > 1:
+            self._islands = []
+            for i in range(self._num_islands):
+                island_seeds = all_seeds[i::self._num_islands]
+                self._islands.append(
+                    self._fill_one_population(island_seeds, self._island_size, cfg, rng)
+                )
+            self.population = self._islands[0]
+            return
 
-        seed_trees = [ind.tree for ind in self.population if ind.is_seed]
-        while len(self.population) < seed_count and seed_trees:
-            base = rng.choice(seed_trees)
-            mutated = _mutate_subtree(cfg, base, max_depth=3)
-            self.population.append(Individual(tree=mutated, generation=0, age=1))
-
-        remaining = self.population_size - len(self.population)
-        explore_n = int(remaining * self._explore_ratio)
-        while len(self.population) < self.population_size:
-            if len(self.population) < seed_count + explore_n:
-                tree = _random_tree_explore(cfg, self.max_depth)
-            else:
-                tree = _random_tree(cfg, self.max_depth)
-            self.population.append(Individual(tree=tree, generation=0, age=1))
+        # 单模式
+        self.population = self._fill_one_population(all_seeds, self.population_size, cfg, rng)
 
     # ── 进化循环 ──
 
@@ -769,6 +795,25 @@ class GPEngine:
 
         return new_pop[:self.population_size]
 
+    # [新增] 2026-07-09 岛屿迁移: 环形拓扑，每岛迁出 Top-k 到下一个岛
+    def _migrate(self):
+        """环形拓扑迁移: Island i → Island (i+1) % N
+
+        每岛取 Top-k (fitness 最高), 替换接收岛 Bottom-k (fitness 最低).
+        """
+        n = self._num_islands
+        k = min(self._migrate_count, max(1, self._island_size // 5))
+        for i in range(n):
+            src = self._islands[i]
+            dst = self._islands[(i + 1) % n]
+            src_sorted = sorted(src, key=lambda x: x.fitness, reverse=True)
+            migrants = [copy.deepcopy(ind) for ind in src_sorted[:k]]
+            dst_sorted_idx = sorted(range(len(dst)), key=lambda j: dst[j].fitness)
+            for j, migrant in enumerate(migrants[:k]):
+                replace_idx = dst_sorted_idx[-(j + 1)]
+                migrant.generation = max(migrant.generation, dst[replace_idx].generation)
+                dst[replace_idx] = migrant
+
     # ── 主循环 ──
 
     def run(self, verbose: bool = True, callback: Callable[[int, Individual, Dict], None] = None) -> 'GPEngine':
@@ -784,7 +829,18 @@ class GPEngine:
 
         self._initialize_population()
         for gen in range(self.generations):
-            self._evaluate_population()
+
+            # ── 评估 ──
+            if self._num_islands > 1:
+                for i in range(self._num_islands):
+                    self.population = self._islands[i]
+                    self._evaluate_population()
+                    self._islands[i] = self.population
+                # 合并所有岛用于统计/追踪
+                self.population = list(itertools.chain.from_iterable(self._islands))
+            else:
+                self._evaluate_population()
+
             gen_best = max(self.population, key=lambda x: x.fitness)
 
             valid = [i for i in self.population if i.fitness > -999]
@@ -863,8 +919,34 @@ class GPEngine:
             if self.best_individual is None or gen_best.fitness > self.best_individual.fitness:
                 self.best_individual = gen_best
 
+            # ── 下一代 ──
             if gen < self.generations - 1:
-                self.population = self._next_generation(gen)
+                if self._num_islands > 1:
+                    # 迁移
+                    if gen > 0 and gen % self._migrate_every == 0:
+                        self._migrate()
+                    # 各岛独立进化下一代
+                    for i in range(self._num_islands):
+                        self.population = self._islands[i]
+                        saved_size = self.population_size
+                        saved_inject = self.random_inject_count
+                        saved_elite = self.elite_count
+                        saved_explore = self._explore_ratio
+                        self.population_size = self._island_size
+                        # [修复] 2026-07-09 岛内保留适量随机注入+探索，不硬编码0（否则岛内无新鲜血液）
+                        self.random_inject_count = max(0, int(self._island_size * 0.03))
+                        self.elite_count = max(1, int(self._island_size * (saved_elite / saved_size)))
+                        self._explore_ratio = max(0.03, saved_explore * 0.25)
+
+                        self._islands[i] = self._next_generation(gen)
+
+                        self.population_size = saved_size
+                        self.random_inject_count = saved_inject
+                        self.elite_count = saved_elite
+                        self._explore_ratio = saved_explore
+                    self.population = self._islands[0]
+                else:
+                    self.population = self._next_generation(gen)
 
         self.fitness_cache.save()
         return self
@@ -875,7 +957,11 @@ class GPEngine:
         return self.best_individual
 
     def top(self, n: int = 10) -> List[Individual]:
-        return sorted([i for i in self.population if i.fitness > -999],
+        # [新增] 2026-07-09 岛屿模式: 从所有岛合并收集
+        pool = self.population
+        if self._num_islands > 1 and self._islands:
+            pool = list(itertools.chain.from_iterable(self._islands))
+        return sorted([i for i in pool if i.fitness > -999],
                       key=lambda x: x.fitness, reverse=True)[:n]
 
     def report(self) -> str:

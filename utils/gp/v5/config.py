@@ -218,6 +218,11 @@ DEFAULT_GP_CONFIG = {
     'mutate_logic_weight': 0.15,
     # [变异] 条件插入权重 (15% 变异操作中用 if-else/and/or 包装子树)
     'mutate_insert_cond_weight': 0.15,
+
+    # [岛屿] 岛屿模式参数
+    'num_islands': 1,          # 岛屿数量 (1=禁用岛屿模式)
+    'migrate_every': 5,        # 每 N 代迁移一次
+    'migrate_count': 2,        # 每岛每次迁出 Top-k
 }
 
 # ============================================================

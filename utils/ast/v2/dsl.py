@@ -506,26 +506,21 @@ def eval_colwise(tree: ast.Expression, data: Dict[str, np.ndarray],
 
 
 def cross_sectional_rank(vals: np.ndarray) -> np.ndarray:
-    """每日截面排名 → (0, 1] (与 signals/v4 cs_rank 逻辑一致)
+    """每日截面排名 → (0, 1] (min 竞争排名, 与 signals/v4 cs_rank 逻辑一致)
 
+    全 NaN 行保持 NaN (不参与排名), 对齐 WQ 规范: NaN=缺失, 截面算子应跳过.
+    [修复] 2026-07-09 改为直接调用 functions._cs_rank_core (numba @njit):
+           ① 统一与 cs_rank() 的语义, 消除 scipy/numba 双实现分歧 (P3-B);
+           ② 全 NaN 行由 0.0 改为 NaN, 对齐 WQ "NaN 不排名" 规范 (P1-D);
+           ③ ~28x 加速.
     [修正] 2026-06-25 改为 method='min', 对齐 WQ/DolphinDB 行业标准.
-    [修复] 2026-07-06 修正范围注释: method='min' 排名为 1-based, /N 后范围为 (0, 1] 非 [0, 1]
     [重构] 2026-06-22 从 resolver.py 移动到 dsl.py (通用工具)
     """
-    from scipy.stats import rankdata
     vals = np.asarray(vals, dtype=float)
     if vals.ndim != 2:
         return vals
-    T, N = vals.shape
-    ranked = np.full((T, N), 0.0)
-    for t in range(T):
-        row = vals[t]
-        valid = ~np.isnan(row)
-        if valid.sum() > 0:
-            rk = rankdata(row[valid], method='min')
-            ranked[t, valid] = np.nan_to_num(
-                rk / valid.sum(), nan=0.5, posinf=0.5, neginf=0.5)
-    return ranked
+    from .functions import _cs_rank_core
+    return _cs_rank_core(vals)
 
 
 # ============================================================
