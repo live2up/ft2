@@ -15,13 +15,13 @@ from utils.ast.dsl import parse_expression, ast_depth, ast_node_count
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# 配置
+# 基础池
 # ============================================================
 
 # [重构] 2026-07-08 GP 默认变量/常数池
-# GP_VARIABLES: fallback 变量池 — 仅当用户未设 var_weights 且未设 var_allowlist 时使用.
-#   自定义变量不经此池: 通过 ast.register_variable() 注册合法性 + var_weights 指定生成偏置.
-#   ast 是单一事实来源 (变量合法性 + 函数元数据), GP 仅消费 ast 注册表.
+# GP_VARIABLES: fallback 变量池 — 仅当用户未设 var_weights 且未设 var_allowlist 时使用。
+#   自定义变量不经此池: 通过 ast.register_variable() 注册合法性 + var_weights 指定生成偏置。
+#   ast 是单一事实来源 (变量合法性 + 函数元数据), GP 仅消费 ast 注册表。
 # GP_CONSTANTS: GP 随机生成常数节点的数值池 (与 ast SAFE_CONSTANTS 不同:
 #   SAFE_CONSTANTS 是解析时的命名常量 True/pi/e, GP_CONSTANTS 是生成时的数值候选)
 GP_VARIABLES = ['CLOSE', 'OPEN', 'HIGH', 'LOW', 'VOLUME', 'AMOUNT']
@@ -51,19 +51,32 @@ class TreeGenConfig:
         cfg = TreeGenConfig(mode='continuous')
         cfg = TreeGenConfig(rng=random.Random(42))  # 可复现
     """
+    # [新增] 2026-07-05 模式过滤: continuous=纯数值, predicate=条件信号, hybrid=全空间
     mode: Optional[str] = None
+    # [权重] 结构组权重: 控制 ts/math/comparison/logic/binary/unary/ternary 的出现概率
     group_weights: Optional[Dict[str, float]] = None
+    # [权重] 时序函数池: key=函数名, value=生成偏置。未声明的函数默认屏蔽 (fill_value=0)
     ts_weights: Optional[Dict[str, float]] = None
+    # [权重] 数学函数池: key=函数名, value=生成偏置。未声明的函数默认屏蔽
     math_weights: Optional[Dict[str, float]] = None
+    # [权重] 变量池: key=变量名, value=生成偏置。未声明的变量默认屏蔽
     var_weights: Optional[Dict[str, float]] = None
+    # [白名单] 变量白名单: 仅从该集合采样，与 var_weights 取交集
     var_allowlist: Optional[set] = None
+    # [白名单] 函数白名单: 仅从该集合采样，与 ts_weights/math_weights 取交集
     func_allowlist: Optional[set] = None
+    # [自适应] 是否启用方向追踪 + EMA 权重更新
     adaptive: bool = False
+    # [自适应] EMA 学习率: 越大权重更新越快 (默认 0.3)
     adaptive_lr: float = 0.3
+    # [自适应] 每 N 代触发一次 EMA 更新 (默认 3)
     adaptive_every: int = 3
+    # [复现] 每个实例独立 RNG，支持多线程并行和结果复现
     rng: random.Random = field(default_factory=random.Random)
 
 DEFAULT_TREE_GEN_CONFIG = TreeGenConfig(
+    # [权重] 结构组默认权重: 控制 7 类 AST 结构的生成概率
+    # ts_function 最高(30) → 优先生成函数调用; ternary 最低(5) → 最少出现
     group_weights={'ts_function':30, 'math_function':15,
                    'comparison':15, 'logic':13, 'binary_op':13,
                    'unary_op':9, 'ternary':5},
@@ -150,13 +163,40 @@ def _get_fill_keys(field_name: str) -> list:
     return []
 
 
+# ============================================================
+# GP 默认配置
+# ============================================================
+
 DEFAULT_GP_CONFIG = {
-    'population_size': 200, 'generations': 20, 'max_depth': 10,
-    'tournament_size': 5, 'crossover_prob': 0.6, 'mutation_prob': 0.25,
-    'elite_ratio': 0.05, 'seed_ratio': 0.4, 'random_inject_ratio': 0.05,
+    # [种群] 每代个体数 (默认 200，kb03 使用 500 提升探索)
+    'population_size': 500,
+    # [迭代] 进化代数 (默认 20，kb03 使用 40 确保收敛)
+    'generations': 40,
+    # [深度] 树最大深度 (默认 10，kb03 使用 5 防止过拟合、保持可解释)
+    'max_depth': 5,
+    # [选择] 锦标赛大小 (每次随机抽取 6 个，选 fitness 最高)
+    'tournament_size': 6,
+    # [交叉] 交叉概率 (60% 后代来自交叉)
+    'crossover_prob': 0.6,
+    # [变异] 变异概率 (25% 后代来自变异)
+    'mutation_prob': 0.25,
+    # [精英] 精英比例 (前 5% 直接进入下一代，不变化)
+    'elite_ratio': 0.05,
+    # [种子] 种子个体比例 (15% 来自用户提供的 seed_expressions)
+    'seed_ratio': 0.15,
+    # [注入] 随机注入比例 (15% 完全随机生成，维持多样性)
+    'random_inject_ratio': 0.15,
+    # [惩罚] 复杂度惩罚系数 (fitness *= (1 - penalty * node_count))
     'parsimony_penalty': 0.001,
-    'mutate_subtree_weight': 0.30, 'mutate_param_weight': 0.40,
+    # [选择器] True=使用 Lexicase 选择 (保留方向多样性)，False=锦标赛选择
+    'lexicase': True,
+    # [变异] 子树替换权重 (30% 变异操作中子树替换)
+    'mutate_subtree_weight': 0.30,
+    # [变异] 参数变异权重 (40% 变异操作中重新采样参数: 窗口/常数)
+    'mutate_param_weight': 0.40,
+    # [变异] 逻辑变异权重 (15% 变异操作中 and↔or / 加/删 not)
     'mutate_logic_weight': 0.15,
+    # [变异] 条件插入权重 (15% 变异操作中用 if-else/and/or 包装子树)
     'mutate_insert_cond_weight': 0.15,
 }
 
