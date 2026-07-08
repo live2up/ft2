@@ -8,7 +8,7 @@ import ast
 import random
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 from utils.ast.dsl import parse_expression, ast_depth, ast_node_count
 
@@ -235,6 +235,7 @@ class Individual:
     generation: int = 0
     is_seed: bool = False
     age: int = 1  # [新增] 2026-07-08 年龄: 个体存活代数，用于年龄惩罚
+    signature: str = ''  # [新增] 2026-07-08 缓存 _expr_signature 结果，避免重复 regex
 
     @staticmethod
     def from_expr(expr_str: str, generation: int = 0, is_seed: bool = False) -> 'Individual':
@@ -245,3 +246,23 @@ class Individual:
             depth=ast_depth(tree), node_count=ast_node_count(tree),
             generation=generation, is_seed=is_seed,
         )
+
+
+# ============================================================
+# GenerationSnapshot — 每代预计算快照
+# ============================================================
+
+@dataclass
+class GenerationSnapshot:
+    """每代评价完成后预计算的快照，后代选择只读。
+
+    [新增] 2026-07-08 替代零散的 _sig_index / lexicase 暴力计算。
+    run() 中一代只构造一次，后代 _lexicase_select / motif / 方向更新
+    直接读快照，避免每代 ~425 次重复遍历。
+    """
+    generation: int
+    valid: List[Individual]                             # 有效个体
+    sorted_valid: List[Individual]                      # 按 fitness 降序
+    by_signature: Dict[str, List[Individual]]           # 方向→个体索引
+    sig_best: Dict[str, Tuple[float, str]]              # 方向→(best_fitness, best_expr)
+    lexicase_pool: List[Individual]                     # ε-lexicase 代表池（预去重）

@@ -17,7 +17,7 @@ from dataclasses import fields as dataclass_fields
 from utils.ast.dsl import parse_expression, ast_depth, ast_node_count
 from .config import (
     GP_VARIABLES,
-    TreeGenConfig, Individual,
+    TreeGenConfig, Individual, GenerationSnapshot,
     DEFAULT_TREE_GEN_CONFIG, DEFAULT_GP_CONFIG,
     _fill_weights,
     get_full_default_weights, _get_funcs_by_group, _get_fill_keys,
@@ -160,6 +160,9 @@ class GPEngine:
         self._motif_inject_count: int = cfg.get('motif_inject_count', 5)
         # Motif 库结构: {canonical_key: {"count": int, "fitness_sum": float, "expr": str, "depth": int}}
         self._motif_library: Dict[str, Dict] = {}
+
+        # [新增] 2026-07-08 每代快照（替代零散 _sig_index 等）
+        self._snap: Optional[GenerationSnapshot] = None
 
     # ── 配置构建 ──
 
@@ -520,15 +523,14 @@ class GPEngine:
 
     def _update_motif_library(self):
         """从当前种群 Top 30% 个体中提取高频子树，更新 Motif 库"""
-        if not self._motif_enabled:
+        if not self._motif_enabled or not self._snap:
             return
 
-        valid = [i for i in self.population if i.fitness > self._motif_min_fitness]
+        # [优化] 2026-07-08 从快照 sorted_valid 取，避免重新排序
+        valid = [i for i in self._snap.sorted_valid if i.fitness > self._motif_min_fitness]
         if not valid:
             return
 
-        # 取 Top 30%
-        valid.sort(key=lambda x: x.fitness, reverse=True)
         top_n = max(1, int(len(valid) * 0.3))
         top_individuals = valid[:top_n]
 
@@ -587,42 +589,18 @@ class GPEngine:
 
     def _lexicase_select(self) -> Individual:
         rng = self.tree_gen_config.rng
-        valid = [i for i in self.population if i.fitness > -999 and i.expression_str]
-        if len(valid) < self.tournament_size:
-            return self._tournament_select()
-        if len(self._direction_best_expr) < 2:
-            return self._tournament_select()
 
-        # [新增] 2026-07-08 ε-lexicase: 对每个方向，取 fitness 在 [best*(1-ε), best] 区间内的所有个体
-        # 而非仅取 best 表达式。保留更多方向代表，提升多样性。
-        representatives = []
-        for sig, (best_fit, best_expr) in self._direction_best_expr.items():
-            # 计算该方向的 fitness 阈值（允许 ε 差距）
-            threshold = best_fit * (1.0 - self._epsilon)
-            # 收集该方向下所有 fitness >= threshold 的个体
-            for ind in valid:
-                ind_sig = self._expr_signature(ind.expression_str)
-                if ind_sig == sig and ind.fitness >= threshold:
-                    representatives.append(ind)
-
-        # 去重（同一表达式可能出现多次）
-        seen = set()
-        unique_reps = []
-        for ind in representatives:
-            if ind.expression_str not in seen:
-                seen.add(ind.expression_str)
-                unique_reps.append(ind)
-        representatives = unique_reps
-
-        if not representatives:
+        # [重构] 2026-07-08 从快照 lexicase_pool 直接 O(1) 抽样
+        if not self._snap or len(self._snap.lexicase_pool) < 2:
             return self._tournament_select()
 
-        weights = [max(ind.fitness, 0.01) for ind in representatives]
+        pool = self._snap.lexicase_pool
+        weights = [max(ind.fitness, 0.01) for ind in pool]
         total_w = sum(weights)
         if total_w <= 0:
-            return rng.choice(representatives)
+            return rng.choice(pool)
         probs = [w / total_w for w in weights]
-        return rng.choices(representatives, weights=probs, k=1)[0]
+        return rng.choices(pool, weights=probs, k=1)[0]
 
     def _select_parent(self) -> Individual:
         if self._use_lexicase:
@@ -792,16 +770,42 @@ class GPEngine:
             }
             self.history.append(gen_stats)
 
-            # 方向追踪
+            # 方向追踪 — 同时缓存 signature 到个体
             for ind in valid:
                 if ind.fitness > -999:
                     sig = self._expr_signature(ind.expression_str or _expr_str(ind.tree))
+                    ind.signature = sig  # [新增] 2026-07-08 缓存避免 lexicase 重复计算
                     if sig not in self.direction_log:
                         self.direction_log[sig] = []
                     self.direction_log[sig].append(ind.fitness)
                     prev = self._direction_best_expr.get(sig, (-999, ''))
                     if ind.fitness > prev[0]:
                         self._direction_best_expr[sig] = (ind.fitness, ind.expression_str or _expr_str(ind.tree))
+
+            # [重构] 2026-07-08 构建每代快照（替代零散 _sig_index，含 lexicase_pool 预计算）
+            valid_inds = [i for i in self.population if i.fitness > -999 and i.expression_str]
+            sorted_valid = sorted(valid_inds, key=lambda x: x.fitness, reverse=True)
+            by_sig: Dict[str, List[Individual]] = {}
+            for ind in valid_inds:
+                if ind.signature:
+                    by_sig.setdefault(ind.signature, []).append(ind)
+            # 预计算 lexicase_pool（一代一次，避免后代 425 次重复构建）
+            lexicase_pool: List[Individual] = []
+            seen_expr: set = set()
+            for sig, (best_fit, _) in self._direction_best_expr.items():
+                threshold = best_fit * (1.0 - self._epsilon)
+                for ind in by_sig.get(sig, []):
+                    if ind.fitness >= threshold and ind.expression_str not in seen_expr:
+                        seen_expr.add(ind.expression_str)
+                        lexicase_pool.append(ind)
+            self._snap = GenerationSnapshot(
+                generation=gen,
+                valid=valid_inds,
+                sorted_valid=sorted_valid,
+                by_signature=by_sig,
+                sig_best=dict(self._direction_best_expr),
+                lexicase_pool=lexicase_pool,
+            )
 
             # 方向权重 EMA 更新
             cfg = self.tree_gen_config

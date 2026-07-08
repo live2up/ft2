@@ -60,17 +60,20 @@ class FitnessCache:
         return len(rows)
 
     def save(self):
-        """将内存缓存增量写入 SQLite (INSERT OR REPLACE)"""
+        """将内存缓存增量写入 SQLite (INSERT OR REPLACE 批量事务)"""
         if not self._db:
             return
+        # [优化] 2026-07-08 改用 executemany + 显式事务，避免逐条 INSERT 的 SQLite 事务开销
         conn = sqlite3.connect(self._db)
+        data = []
         for expr, (fit, dep, nod) in self._mem.items():
             eh = hashlib.md5(expr.encode()).hexdigest()[:16]
-            conn.execute(
-                'INSERT OR REPLACE INTO expressions'
-                '(expr_hash, expression, fitness, depth, nodes, fitness_hash)'
-                'VALUES(?,?,?,?,?,?)',
-                (eh, expr, fit, dep, nod, self._hash),
-            )
+            data.append((eh, expr, fit, dep, nod, self._hash))
+        conn.executemany(
+            'INSERT OR REPLACE INTO expressions'
+            '(expr_hash, expression, fitness, depth, nodes, fitness_hash)'
+            'VALUES(?,?,?,?,?,?)',
+            data,
+        )
         conn.commit()
         conn.close()
