@@ -345,6 +345,64 @@ class GPEngine:
         lines.append("=" * 50)
         return '\n'.join(lines)
 
+    def summary(self, title: str = '') -> str:
+        """输出 GP 启动配置摘要，供调用方在 run() 前打印。
+
+        [新增] 2026-07-08 标准化启动参数输出，替代各脚本手写 print。
+        """
+        cfg = self.tree_gen_config
+        mode = cfg.mode if cfg and cfg.mode else 'hybrid'
+
+        # 变量
+        var_names = list(self.data.keys())
+        # 启用的函数
+        ts_funcs = [k for k, v in (cfg.ts_weights or {}).items() if v > 0]
+        math_funcs = [k for k, v in (cfg.math_weights or {}).items() if v > 0]
+
+        lines = []
+        if title:
+            lines.append(f"{'='*60}")
+            lines.append(f"{title}")
+        lines.append(f"{'='*60}")
+        lines.append(f"[GP v5 启动配置]")
+        lines.append(f"  变量({len(var_names)}): {', '.join(var_names)}")
+        lines.append(f"  数据形状: {self._shape}")
+        lines.append(f"  种子表达式: {len(self.seed_expressions)} 个")
+        if self.seed_expressions:
+            show_n = min(5, len(self.seed_expressions))
+            for s in self.seed_expressions[:show_n]:
+                lines.append(f"    {s}")
+            if len(self.seed_expressions) > show_n:
+                lines.append(f"    ... 共 {len(self.seed_expressions)} 个")
+        lines.append(f"  原语 — TS({len(ts_funcs)}): {', '.join(ts_funcs[:20])}")
+        if len(ts_funcs) > 20:
+            lines.append(f"         ... 共 {len(ts_funcs)} 个")
+        lines.append(f"  原语 — MATH({len(math_funcs)}): {', '.join(math_funcs[:20])}")
+        if len(math_funcs) > 20:
+            lines.append(f"           ... 共 {len(math_funcs)} 个")
+        lines.append(f"{'─'*60}")
+        lines.append(f"[GP 参数]")
+        lines.append(f"  population_size={self.population_size}, generations={self.generations}, max_depth={self.max_depth}")
+        lines.append(f"  tournament_size={self.tournament_size}, elite_count={self.elite_count}")
+        lines.append(f"  crossover_prob={self.crossover_prob}, mutation_prob={self.mutation_prob}")
+        lines.append(f"  seed_ratio={self.seed_ratio}, random_inject_ratio={self.random_inject_count/self.population_size:.2f}")
+        lines.append(f"  explore_ratio={self._explore_ratio:.2f}, mode='{mode}'")
+        lines.append(f"  parsimony_penalty={self.parsimony_penalty}")
+        lines.append(f"  变异权重: subtree={self._mutate_weights[0][0]:.2f}, param={self._mutate_weights[1][0]:.2f}")
+        if len(self._mutate_weights) > 2:
+            lines.append(f"            logic={self._mutate_weights[2][0]:.2f}, insert_cond={self._mutate_weights[3][0]:.2f}")
+        lines.append(f"{'─'*60}")
+        lines.append(f"[高级特性]")
+        lines.append(f"  lexicase={'ON' if self._use_lexicase else 'OFF'}, epsilon={self._epsilon:.3f}")
+        lines.append(f"  年龄机制: {'ON' if self._age_enabled else 'OFF'}, penalty_lr={self._age_penalty_lr}")
+        lines.append(f"  Motif库: {'ON' if self._motif_enabled else 'OFF'}, update_every={self._motif_update_every}, "
+                     f"inject={self._motif_inject_count}, max_depth={self._motif_max_depth}")
+        lines.append(f"  停滞检测: threshold={self._stagnation_threshold}")
+        lines.append(f"  自适应权重: {'ON' if (cfg and cfg.adaptive) else 'OFF'}, "
+                     f"lr={cfg.adaptive_lr if cfg else 0.3}, every={cfg.adaptive_every if cfg else 3}")
+        lines.append(f"{'='*60}")
+        return '\n'.join(lines)
+
     def _update_direction_weights(self):
         """EMA 闭环方向权重更新"""
         cfg = self.tree_gen_config
