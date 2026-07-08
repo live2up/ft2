@@ -13,8 +13,8 @@ utils/ast — 公共 AST 基础设施 (signals 和 factor 模块共享)
 
   2. 原语+变量层  (functions.py)  → 定义"能算什么"+"能引用什么"
      FUNC_REGISTRY          — 87 时序/截面/数学/特征函数
-     FunctionSpec           — 函数元数据 (category/data_arity/param_pool/param_constraints)
-     ParamConstraint        — 参数值域约束 (dtype/min/max/pool)
+     FunctionSpec           — 函数元数据 (category/data_args/param_pool/param_ranges)
+     ParamRange             — 参数值域约束 (dtype/min/max/pool)
      FUNC_CATEGORIES        — 按类别索引
      VALID_VAR_PREFIXES     — 70+ 合法变量前缀
      VAR_CATEGORIES         — 按类别索引
@@ -58,7 +58,7 @@ from .dsl import (
 # ── 原语层 (functions.py) ──
 from .functions import (
     FUNC_REGISTRY, SAFE_CONSTANTS,
-    FunctionSpec, ParamConstraint,
+    FunctionSpec, ParamRange,
     register_function, unregister_function,
     FUNC_CATEGORIES, get_func_category,
 )
@@ -108,7 +108,7 @@ __all__ = [
 
     # functions — 原语层
     'FUNC_REGISTRY', 'SAFE_CONSTANTS',
-    'FunctionSpec', 'ParamConstraint',
+    'FunctionSpec', 'ParamRange',
     'register_function', 'unregister_function',
     'FUNC_CATEGORIES', 'get_func_category',
 

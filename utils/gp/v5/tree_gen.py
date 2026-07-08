@@ -67,7 +67,7 @@ def _random_call(cfg: TreeGenConfig, depth: int, weight_key: str) -> ast.Call:
     """统一函数调用生成器：从 ast FunctionSpec 读取全部参数元数据。
 
     [重构] 2026-07-08 合并 _random_data_call + _random_math_call。
-    所有函数元数据 (data_arity / data_vars / param_pool / param_constraints)
+    所有函数元数据 (data_args / data_vars / param_pool / param_ranges)
     统一从 FUNC_REGISTRY 读取，GP 不再维护参数知识。
 
     Args:
@@ -103,17 +103,17 @@ def _build_call_args(cfg: TreeGenConfig, spec, depth: int) -> list:
     """根据 FunctionSpec 构建函数参数列表。
 
     [重构] 2026-07-08 提取公共逻辑，供生成和变异复用。
-    顺序: data_vars/子树 → param_pool → param_constraints
+    顺序: data_vars/子树 → param_pool → param_ranges
     """
     rng = cfg.rng
     args = []
 
-    # 1. 数据参数: data_vars 优先 (固定变量), 否则按 data_arity 生成子树
+    # 1. 数据参数: data_vars 优先 (固定变量), 否则按 data_args 生成子树
     if spec and spec.data_vars:
         for v in spec.data_vars:
             args.append(ast.Name(id=v, ctx=ast.Load()))
     elif spec:
-        for _ in range(spec.data_arity):
+        for _ in range(spec.data_args):
             args.append(_grow_tree(cfg, depth - 1, prefer_variable=True))
     else:
         args.append(_grow_tree(cfg, depth - 1, prefer_variable=True))
@@ -127,24 +127,24 @@ def _build_call_args(cfg: TreeGenConfig, spec, depth: int) -> list:
         else:
             args.append(ast.Constant(value=chosen))
 
-    # 3. 连续范围参数: 从 param_constraints 采样
-    if spec and spec.param_constraints:
-        for pc in spec.param_constraints:
-            args.append(ast.Constant(value=_sample_param_constraint(pc, rng)))
+    # 3. 连续范围参数: 从 param_ranges 采样
+    if spec and spec.param_ranges:
+        for pr in spec.param_ranges:
+            args.append(ast.Constant(value=_sample_param_range(pr, rng)))
 
     return args
 
 
-def _sample_param_constraint(pc, rng) -> float:
-    """从 ParamConstraint 采样一个值。"""
-    if pc.pool is not None:
-        return rng.choice(pc.pool)
-    if pc.dtype == 'int':
-        lo = int(pc.min_val) if pc.min_val is not None else 1
-        hi = int(pc.max_val) if pc.max_val is not None else 100
+def _sample_param_range(pr, rng) -> float:
+    """从 ParamRange 采样一个值。"""
+    if pr.pool is not None:
+        return rng.choice(pr.pool)
+    if pr.dtype == 'int':
+        lo = int(pr.min_val) if pr.min_val is not None else 1
+        hi = int(pr.max_val) if pr.max_val is not None else 100
         return rng.randint(lo, hi)
-    lo = pc.min_val if pc.min_val is not None else 0.0
-    hi = pc.max_val if pc.max_val is not None else 1.0
+    lo = pr.min_val if pr.min_val is not None else 0.0
+    hi = pr.max_val if pr.max_val is not None else 1.0
     return rng.uniform(lo, hi)
 
 
@@ -269,9 +269,9 @@ def _mutate_param(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) 
     """参数变异: spec 感知，从 FunctionSpec 重新采样参数。
 
     [重构] 2026-07-08 合并 _mutate_constant + _mutate_window。
-    读取 param_pool / param_constraints，在合法范围内重新采样:
+    读取 param_pool / param_ranges，在合法范围内重新采样:
     - 窗口参数 (int): 从 param_pool 重新采样，无 pool 则 ±delta
-    - 范围参数 (float): 从 param_constraints 范围内重新采样
+    - 范围参数 (float): 从 param_ranges 范围内重新采样
     - 通用常数: 高斯扰动
     """
     rng = cfg.rng
@@ -299,8 +299,8 @@ def _mutate_param(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) 
     if call_node is not None:
         spec = _get_func_spec(call_node.func.id)
         if spec:
-            # 计算参数布局: [data_args...] [param_pool_args...] [param_constraints_args...]
-            n_data = len(spec.data_vars) if spec.data_vars else spec.data_arity
+            # 计算参数布局: [data_args...] [param_pool_args...] [param_ranges_args...]
+            n_data = len(spec.data_vars) if spec.data_vars else spec.data_args
             n_pool = 0
             if spec.param_pool:
                 sample = spec.param_pool[0]
@@ -320,11 +320,11 @@ def _mutate_param(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) 
                         target.value = chosen
                     return new_tree
 
-            # 范围参数: 从 param_constraints 重新采样
-            if arg_idx >= constraint_start and spec.param_constraints:
+            # 范围参数: 从 param_ranges 重新采样
+            if arg_idx >= constraint_start and spec.param_ranges:
                 ci = arg_idx - constraint_start
-                if 0 <= ci < len(spec.param_constraints):
-                    target.value = _sample_param_constraint(spec.param_constraints[ci], rng)
+                if 0 <= ci < len(spec.param_ranges):
+                    target.value = _sample_param_range(spec.param_ranges[ci], rng)
                     return new_tree
 
     # fallback: 通用常数扰动

@@ -5,7 +5,7 @@ utils.ast — 公共 AST 基础设施
 保持 from utils.ast import X / from utils.ast.dsl import Y 等旧路径兼容。
 
 v2 内部结构 (5 个实质文件):
-  functions.py  — 原语层 + 变量层 (函数/变量注册表, FunctionSpec, ParamConstraint)
+  functions.py  — 原语层 + 变量层 (函数/变量注册表, FunctionSpec, ParamRange)
   dsl.py        — 语法层 (解析/求值/安全校验)
   spec.py       — 规格层 + AstExpression 基类 (AST 构建/规范化/语法规格)
   resolver.py   — 编排层 (截面函数嵌套解算)

@@ -1392,15 +1392,17 @@ def _feature_amt_ratio(amount: np.ndarray, short: int = 5, long: int = 20) -> np
 # ============================================================
 
 # [重构] 2026-07-07 引入 FunctionSpec: 把函数实现、GP 分类、数据参数个数、
-# 参数候选池封装到一个 dataclass 中。GP 生成器可直接读取 data_arity/param_pool
+# 参数候选池封装到一个 dataclass 中。GP 生成器可直接读取 data_args/param_pool
 # 生成合法表达式，不再依赖 TS_FUNCTIONS/TS_FUNCTIONS_2ARG 等硬编码分池。
-# [重构] 2026-07-08 新增 ParamConstraint: 描述带值域约束的配置参数 (如浮点比例、
-# 正整数窗口等)。param_pool 描述离散候选, param_constraints 描述连续范围约束,
-# 两者互补。GP 生成器优先用 param_pool, 其次用 param_constraints 采样。
+# [新增] 2026-07-08 ParamRange: 描述带值域约束的配置参数 (如浮点比例、
+# 正整数窗口等)。param_pool 描述离散候选, param_ranges 描述连续范围约束,
+# 两者互补。GP 生成器优先用 param_pool, 其次用 param_ranges 采样。
+# [调整] 2026-07-08 ParamConstraint → ParamRange, data_arity → data_args,
+# param_constraints → param_ranges
 
 @dataclass
-class ParamConstraint:
-    """配置参数约束 — 描述 param_pool 无法覆盖的带约束参数。
+class ParamRange:
+    """参数值域约束 — 描述 param_pool 无法覆盖的带范围参数。
 
     用于函数签名中 param_pool 之外的额外参数 (如 ts_quantile 的 p, cs_scale 的 scale)。
 
@@ -1425,23 +1427,23 @@ class FunctionSpec:
     Args:
         func: 函数实现，签名为 (*np.ndarray) -> np.ndarray。
         category: GP 大类，对齐 group_weights 的 key。
-        data_arity: 需要由 GP 生成子树填充的数据序列参数个数。
+        data_args: 需要由 GP 生成子树填充的数据序列参数个数。
             例如 ts_mean(x, d) 为 1，ts_corr(x, y, d) 为 2。
             data_vars 非空时自动取 len(data_vars)，无需手动指定。
         param_pool: 第一组配置参数候选列表。元素为标量时生成一个常数参数；
             为 tuple 时生成多个常数参数；为 None 时不附加配置参数。
-        param_constraints: 额外配置参数约束列表 (带值域/类型)。
+        param_ranges: 额外配置参数值域约束列表 (带类型/范围)。
             用于 param_pool 无法覆盖的参数 (如浮点比例、连续范围)。
             GP 生成器在 param_pool 之后按顺序追加这些参数。
         data_vars: 固定变量名列表。非 None 时 GP 直接填入这些变量名，
             而非生成随机子树。用于指标计算类函数 (如 natr 固定需要 H/L/C)。
-            设置时 data_arity 自动取 len(data_vars)。
+            设置时 data_args 自动取 len(data_vars)。
     """
     func: Callable
     category: str
-    data_arity: int = 1
+    data_args: int = 1
     param_pool: Optional[List[Any]] = None
-    param_constraints: Optional[List[ParamConstraint]] = None
+    param_ranges: Optional[List[ParamRange]] = None
     data_vars: Optional[List[str]] = None
 
     def __call__(self, *args, **kwargs):
@@ -1471,25 +1473,26 @@ def get_func_category(name: str) -> str:
 
 
 def _register(name: str, func: Callable, category: str,
-              data_arity: Optional[int] = None,
+              data_args: Optional[int] = None,
               param_pool: Optional[List[Any]] = None,
-              param_constraints: Optional[List[ParamConstraint]] = None,
+              param_ranges: Optional[List[ParamRange]] = None,
               data_vars: Optional[List[str]] = None) -> None:
     """统一注册内置/自定义函数，同时维护 FUNC_REGISTRY 与 FUNC_CATEGORIES。
 
-    [规范] 2026-07-08 data_vars 非空时, data_arity 自动取 len(data_vars),
-    无需手动指定。消除 data_arity 与 data_vars 的冗余。
+    [规范] 2026-07-08 data_vars 非空时, data_args 自动取 len(data_vars),
+    无需手动指定。消除 data_args 与 data_vars 的冗余。
+    [调整] 2026-07-08 data_arity → data_args, param_constraints → param_ranges
     """
     name_lower = name.lower()
-    # data_vars 优先: 有固定变量时, data_arity 自动推导
+    # data_vars 优先: 有固定变量时, data_args 自动推导
     if data_vars is not None:
-        data_arity = len(data_vars)
-    elif data_arity is None:
-        data_arity = 1
+        data_args = len(data_vars)
+    elif data_args is None:
+        data_args = 1
     FUNC_REGISTRY[name_lower] = FunctionSpec(
         func=func, category=category,
-        data_arity=data_arity, param_pool=param_pool,
-        param_constraints=param_constraints,
+        data_args=data_args, param_pool=param_pool,
+        param_ranges=param_ranges,
         data_vars=data_vars,
     )
     if category not in FUNC_CATEGORIES:
@@ -1512,28 +1515,28 @@ _register('ts_median', ts_median, 'ts_function', param_pool=[10, 20])
 _register('ts_delta', ts_delta, 'ts_function', param_pool=[1, 5, 10, 20])
 _register('ts_delay', ts_delay, 'ts_function', param_pool=[1, 5, 10, 20])
 _register('ts_rank', ts_rank, 'ts_function', param_pool=[5, 10, 20, 60])
-_register('ts_corr', ts_corr, 'ts_function', data_arity=2, param_pool=[10, 20, 60])
+_register('ts_corr', ts_corr, 'ts_function', data_args=2, param_pool=[10, 20, 60])
 _register('ts_skew', ts_skew, 'ts_function', param_pool=[20, 60])
 _register('ts_kurt', ts_kurt, 'ts_function', param_pool=[20, 60])
 _register('ts_argmax', ts_argmax, 'ts_function', param_pool=[10, 20])
 _register('ts_argmin', ts_argmin, 'ts_function', param_pool=[10, 20])
 _register('ts_roc', ts_roc, 'ts_function', param_pool=[5, 10, 20])
-_register('ts_cov', ts_cov, 'ts_function', data_arity=2, param_pool=[5, 10, 20])
+_register('ts_cov', ts_cov, 'ts_function', data_args=2, param_pool=[5, 10, 20])
 _register('ts_var', lambda x, d: ts_std(x, d) ** 2, 'ts_function', param_pool=[10, 20])
 _register('ts_logret', lambda x: safe_log(x / ts_delay(x, 1)), 'ts_function')
 _register('ts_zscore', ts_zscore, 'ts_function', param_pool=[10, 20, 60])
 _register('ts_scale', ts_scale, 'ts_function', param_pool=[10, 20])
 _register('ts_quantile', ts_quantile, 'ts_function', param_pool=[5, 10, 20],
-          param_constraints=[ParamConstraint('p', 'float', 0.0, 1.0)])
+          param_ranges=[ParamRange('p', 'float', 0.0, 1.0)])
 _register('ts_av_diff', ts_av_diff, 'ts_function', param_pool=[10, 20])
 _register('ts_decay_linear', ts_decay_linear, 'ts_function', param_pool=[5, 10, 20])
 _register('ts_product', ts_product, 'ts_function', param_pool=[10, 20])
 # ── 双变量回归 reg_ (y~x, 3 参数: y, x, d) ──
-_register('reg_slope', lambda y, x, d: regression(y, x, d, 0), 'ts_function', data_arity=2, param_pool=[5, 10])
-_register('reg_intercept', lambda y, x, d: regression(y, x, d, 1), 'ts_function', data_arity=2, param_pool=[5, 10])
-_register('reg_resid', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_arity=2, param_pool=[5, 10])
-_register('reg_predict', lambda y, x, d: regression(y, x, d, 3), 'ts_function', data_arity=2, param_pool=[5, 10])
-_register('reg_rsq', lambda y, x, d: regression(y, x, d, 4), 'ts_function', data_arity=2, param_pool=[5, 10])
+_register('reg_slope', lambda y, x, d: regression(y, x, d, 0), 'ts_function', data_args=2, param_pool=[5, 10])
+_register('reg_intercept', lambda y, x, d: regression(y, x, d, 1), 'ts_function', data_args=2, param_pool=[5, 10])
+_register('reg_resid', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_args=2, param_pool=[5, 10])
+_register('reg_predict', lambda y, x, d: regression(y, x, d, 3), 'ts_function', data_args=2, param_pool=[5, 10])
+_register('reg_rsq', lambda y, x, d: regression(y, x, d, 4), 'ts_function', data_args=2, param_pool=[5, 10])
 _register('ts_slope', ts_slope, 'ts_function', param_pool=[10, 20])
 _register('ts_intercept', ts_intercept, 'ts_function', param_pool=[10, 20])
 _register('ts_resid', ts_resid, 'ts_function', param_pool=[10, 20])
@@ -1550,9 +1553,9 @@ _register('expanding_percentile', expanding_percentile, 'ts_function', param_poo
 _register('cs_rank', cs_rank, 'cs_function')
 _register('cs_zscore', cs_zscore, 'cs_function')
 _register('cs_scale', cs_scale, 'cs_function',
-          param_constraints=[ParamConstraint('scale', 'float', 0.5, 2.0)])
+          param_ranges=[ParamRange('scale', 'float', 0.5, 2.0)])
 _register('cs_winsorize', cs_winsorize, 'cs_function',
-          param_constraints=[ParamConstraint('std', 'float', 2.0, 5.0)])
+          param_ranges=[ParamRange('std', 'float', 2.0, 5.0)])
 _register('cs_quantile', cs_quantile, 'cs_function')
 # [修复] 2026-07-07 补上 cs_normalize 注册（旧硬编码列表中有但从未注册）
 _register('cs_normalize', cs_normalize, 'cs_function')
@@ -1574,24 +1577,24 @@ _register('p4', safe_p4, 'math_function')
 _register('neg', safe_neg, 'math_function')
 _register('square_sigmoid', safe_square_sigmoid, 'math_function')
 _register('signed_power', signed_power, 'math_function',
-          param_constraints=[ParamConstraint('exponent', 'float', 0.5, 4.0)])
-_register('safe_max', safe_max, 'math_function', data_arity=2)
-_register('safe_min', safe_min, 'math_function', data_arity=2)
+          param_ranges=[ParamRange('exponent', 'float', 0.5, 4.0)])
+_register('safe_max', safe_max, 'math_function', data_args=2)
+_register('safe_min', safe_min, 'math_function', data_args=2)
 
 # ── 信号 ──
 _register('persist', persist, 'ts_function', param_pool=[3, 5, 10])
 
 # ── 特征计算 (从 OHLCV 实时算, 无需 FeatureSpace) ──
 _register('rsi', _feature_rsi, 'ta_function', param_pool=[14, 20])
-_register('atr', _feature_atr, 'ta_function', data_arity=3, param_pool=[14],
+_register('atr', _feature_atr, 'ta_function', data_args=3, param_pool=[14],
            data_vars=['HIGH', 'LOW', 'CLOSE'])
-_register('atr_sma', _feature_atr_sma, 'ta_function', data_arity=3, param_pool=[14],
+_register('atr_sma', _feature_atr_sma, 'ta_function', data_args=3, param_pool=[14],
            data_vars=['HIGH', 'LOW', 'CLOSE'])
 _register('bb_width', _feature_bbwidth, 'ta_function', param_pool=[20])
 _register('stddev', _feature_stddev, 'ta_function', param_pool=[10, 20])
-_register('adx', _feature_adx, 'ta_function', data_arity=3, param_pool=[14, 20],
+_register('adx', _feature_adx, 'ta_function', data_args=3, param_pool=[14, 20],
            data_vars=['HIGH', 'LOW', 'CLOSE'])
-_register('cci', _feature_cci, 'ta_function', data_arity=3, param_pool=[14, 20],
+_register('cci', _feature_cci, 'ta_function', data_args=3, param_pool=[14, 20],
            data_vars=['HIGH', 'LOW', 'CLOSE'])
 _register('macd', _feature_macd, 'ta_function', param_pool=[(12, 26, 9)])
 _register('trima', _feature_trima, 'ta_function', param_pool=[40])
@@ -1602,7 +1605,7 @@ _register('kama', _feature_kama, 'ta_function', param_pool=[30])
 _register('wma', _feature_wma, 'ta_function', param_pool=[5, 10, 20, 60])
 _register('dema', _feature_dema, 'ta_function', param_pool=[10, 20])
 _register('hv', _feature_hv, 'ta_function', param_pool=[20, 60])
-_register('natr', _feature_natr, 'ta_function', data_arity=3, param_pool=[5, 14],
+_register('natr', _feature_natr, 'ta_function', data_args=3, param_pool=[5, 14],
            data_vars=['HIGH', 'LOW', 'CLOSE'])
 _register('var', _feature_var, 'ta_function', param_pool=[10, 20])
 _register('linearreg', _feature_linearreg, 'ta_function', param_pool=[10, 20])
@@ -1614,7 +1617,7 @@ _register('amt_ratio', _feature_amt_ratio, 'feature_function', param_pool=[(5, 2
 
 # ── 旧名别名 — [2026-07-03] 已停止生产使用, 后续删除 ──
 _register('ts_resi', ts_resid, 'ts_function', param_pool=[10, 20])
-_register('ts_regression_residual', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_arity=2, param_pool=[5, 10])
+_register('ts_regression_residual', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_args=2, param_pool=[5, 10])
 _register('ts_rsquare', ts_rsq, 'ts_function', param_pool=[10, 20])
 
 # 安全常量 (表达式中的 True/False/None/pi/e)
@@ -1765,9 +1768,9 @@ def register_function(
     name: str,
     func: Callable,
     category: str = 'math_function',
-    data_arity: Optional[int] = None,
+    data_args: Optional[int] = None,
     param_pool: Optional[List[Any]] = None,
-    param_constraints: Optional[List[ParamConstraint]] = None,
+    param_ranges: Optional[List[ParamRange]] = None,
     data_vars: Optional[List[str]] = None,
 ) -> None:
     """临时注册自定义函数到表达式引擎，并加入 GP 权重池。
@@ -1781,12 +1784,12 @@ def register_function(
         category: GP 大类，直接对齐 group_weights 的函数类 key。
                   默认 'math_function'。可选: 'ts_function' / 'ta_function' /
                   'math_function' / 'feature_function'。
-        data_arity: 数据序列参数个数。GP 生成器据此生成正确数量的子树。
+        data_args: 数据序列参数个数。GP 生成器据此生成正确数量的子树。
                   例如 ts_mean 为 1，ts_corr 为 2，natr 为 3。
                   默认 1。
         param_pool: 配置参数候选列表。元素为标量时生成一个常数参数；
                   为 tuple 时生成多个常数参数；为 None 时不附加配置参数。
-        param_constraints: 额外配置参数约束列表 (带值域/类型)。
+        param_ranges: 额外配置参数值域约束列表 (带类型/范围)。
                   用于 param_pool 无法覆盖的参数 (如浮点比例、连续范围)。
         data_vars: 固定变量名列表。非 None 时 GP 直接填入这些变量名，
                   而非生成随机子树。例如 natr 的 data_vars=['HIGH','LOW','CLOSE']。
@@ -1799,8 +1802,8 @@ def register_function(
             f"原函数: {FUNC_REGISTRY[name_lower].__name__}"
         )
     # [重构] 2026-07-07 统一走 _register，保证 FUNC_REGISTRY 与 FUNC_CATEGORIES 同步
-    _register(name_lower, func, category, data_arity=data_arity,
-              param_pool=param_pool, param_constraints=param_constraints,
+    _register(name_lower, func, category, data_args=data_args,
+              param_pool=param_pool, param_ranges=param_ranges,
               data_vars=data_vars)
 
 
