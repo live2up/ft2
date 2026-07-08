@@ -73,7 +73,6 @@ DEFAULT_TREE_GEN_CONFIG = TreeGenConfig(
     math_weights={},
 )
 
-_FILL_VAR_KEYS = GP_VARIABLES[:]
 _FILL_GROUP_KEYS = list(DEFAULT_TREE_GEN_CONFIG.group_weights.keys())
 
 def _fill_weights(user_weights, default_keys, fill_value=0):
@@ -92,19 +91,6 @@ def _fill_weights(user_weights, default_keys, fill_value=0):
     if not nonzero and filled:
         nonzero = {k: 1.0 for k in filled}
     return nonzero
-
-
-# [重构] 2026-07-07 从 FUNC_CATEGORIES 动态读取函数分类，自动适配 group_weights
-# feature_function/signal_function 合并到 ts_weights（ta_function 同类处理）
-_FUNCTION_GROUP_MAP = {
-    'ts_function': ('ts_weights', [10, 20]),
-    'cs_function': ('ts_weights', [10, 20]),
-    'ta_function': ('ts_weights', [10, 20]),
-    'feature_function': ('ts_weights', [10, 20]),
-    'signal_function': ('ts_weights', [10, 20]),
-    'math_function': ('math_weights', None),
-    # comparison / logic / binary_op / unary_op / ternary 无子权重池
-}
 
 
 def _get_funcs_by_group(group_name: str) -> list:

@@ -112,7 +112,7 @@ def _build_call_args(cfg: TreeGenConfig, spec, depth: int) -> list:
     # 1. 数据参数: data_vars 优先 (固定变量), 否则按 data_args 生成子树
     if spec and spec.data_vars:
         for v in spec.data_vars:
-            args.append(ast.Name(id=v, ctx=ast.Load()))
+            args.append(make_var(v))
     elif spec:
         for _ in range(spec.data_args):
             args.append(_grow_tree(cfg, depth - 1, prefer_variable=True))
@@ -124,14 +124,14 @@ def _build_call_args(cfg: TreeGenConfig, spec, depth: int) -> list:
         chosen = rng.choice(spec.param_pool)
         if isinstance(chosen, tuple):
             for p in chosen:
-                args.append(ast.Constant(value=p))
+                args.append(make_const(p))
         else:
-            args.append(ast.Constant(value=chosen))
+            args.append(make_const(chosen))
 
     # 3. 连续范围参数: 从 param_ranges 采样
     if spec and spec.param_ranges:
         for pr in spec.param_ranges:
-            args.append(ast.Constant(value=_sample_param_range(pr, rng)))
+            args.append(make_const(_sample_param_range(pr, rng)))
 
     return args
 
@@ -200,19 +200,19 @@ def _grow_tree(cfg: TreeGenConfig, depth: int, prefer_variable: bool = False) ->
         if cfg.mode == 'continuous':
             if isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.USub):
                 return operand.operand
-            return ast.UnaryOp(op=ast.USub(), operand=operand)
+            return make_unaryop(ast.USub, operand)
         elif cfg.mode == 'predicate':
             if isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.Not):
                 return operand.operand
-            return ast.UnaryOp(op=ast.Not(), operand=operand)
+            return make_unaryop(ast.Not, operand)
         else:
             if rng.random() < 0.5:
                 if isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.USub):
                     return operand.operand
-                return ast.UnaryOp(op=ast.USub(), operand=operand)
+                return make_unaryop(ast.USub, operand)
             if isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.Not):
                 return operand.operand
-            return ast.UnaryOp(op=ast.Not(), operand=operand)
+            return make_unaryop(ast.Not, operand)
     else:
         cond = _grow_tree(cfg, depth - 1)
         a_val = _grow_tree(cfg, depth - 1, prefer_variable=True)

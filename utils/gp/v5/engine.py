@@ -310,7 +310,9 @@ class GPEngine:
                 'signal_function')
         )) or 'none'
         var_counts = Counter(re.findall(r'\b([A-Z][A-Z_0-9]+)\b', expr_str))
-        vars_sig = '+'.join(v for v, _ in var_counts.most_common(4)) or 'none'
+        # [优化] 2026-07-08 保留变量频次编码 v:count，提升方向追踪精度。
+        # 旧: "CLOSE+OPEN" 丢失频次; 新: "CLOSE:3+OPEN:1" 用于加权。
+        vars_sig = '+'.join(f'{v}:{c}' for v, c in var_counts.most_common(4)) or 'none'
         return f"m:{math_sig}|t:{ts_sig}|v:{vars_sig}"
 
     def direction_report(self, min_fitness: float = 0.3) -> str:
@@ -377,8 +379,14 @@ class GPEngine:
                 if ':' in p:
                     k, v = p.split(':', 1)
                     parts[k] = v.split('+') if v != 'none' else []
-            for v in parts.get('v', []):
-                var_scores[v] = var_scores.get(v, 0) + norm_score
+            # [优化] 2026-07-08 解析 v:count 编码，按频次加权。
+            for item in parts.get('v', []):
+                if ':' in item:
+                    v, cnt = item.split(':')
+                    var_scores[v] = var_scores.get(v, 0) + norm_score * float(cnt)
+                else:
+                    var_scores[item] = var_scores.get(item, 0) + norm_score
+            # ts_scores / math_scores 仍按原始逻辑（无频次编码）
             for f in parts.get('t', []):
                 ts_scores[f] = ts_scores.get(f, 0) + norm_score
             for f in parts.get('m', []):
