@@ -121,6 +121,32 @@ def _replace_subtree(tree: ast.Expression, old_node: ast.AST, new_node: ast.AST)
 # AST 轻量简化
 # ============================================================
 
+def _nodes_equal(a: ast.AST, b: ast.AST) -> bool:
+    """快速判断两个 AST 子树是否结构相同（比 ast.unparse 字符串化快很多）
+
+    [新增] 2026-07-08 用于 _simplify_ast 中的 x-x / x/x 恒等式检查。
+    """
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, ast.Constant):
+        return a.value == b.value
+    if isinstance(a, ast.Name):
+        return a.id == b.id
+    if isinstance(a, ast.BinOp):
+        return type(a.op) is type(b.op) and _nodes_equal(a.left, b.left) and _nodes_equal(a.right, b.right)
+    if isinstance(a, ast.UnaryOp):
+        return type(a.op) is type(b.op) and _nodes_equal(a.operand, b.operand)
+    if isinstance(a, ast.BoolOp):
+        return type(a.op) is type(b.op) and all(_nodes_equal(x, y) for x, y in zip(a.values, b.values))
+    if isinstance(a, ast.Compare):
+        if len(a.ops) != len(b.ops) or len(a.comparators) != len(b.comparators):
+            return False
+        return (type(a.ops[0]) is type(b.ops[0]) and
+                _nodes_equal(a.left, b.left) and
+                all(_nodes_equal(x, y) for x, y in zip(a.comparators, b.comparators)))
+    # fallback: 用 ast.dump 兜底（比 unparse 快但比结构比较慢）
+    return ast.dump(a) == ast.dump(b)
+
 def _simplify_ast(tree: ast.Expression) -> ast.Expression:
     """后处理简化 AST，消除双重否定和恒等运算。
 
@@ -174,21 +200,14 @@ def _simplify_ast(tree: ast.Expression) -> ast.Expression:
                 return node.left
         # x - x → 0
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Sub):
-            try:
-                if ast.unparse(node.left) == ast.unparse(node.right):
-                    return ast.Constant(value=0.0)
-            except Exception:
-                pass
+            if _nodes_equal(node.left, node.right):
+                return ast.Constant(value=0.0)
         # x / x → 1
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-            try:
-                if ast.unparse(node.left) == ast.unparse(node.right):
-                    return ast.Constant(value=1.0)
-            except Exception:
-                pass
+            if _nodes_equal(node.left, node.right):
+                return ast.Constant(value=1.0)
         return node
 
-    tree = copy.deepcopy(tree)
     tree.body = _walk(tree.body)
     ast.fix_missing_locations(tree)
     return tree
