@@ -10,6 +10,7 @@ import random
 import logging
 import threading
 import numpy as np
+import os
 from typing import Dict, List, Optional, Callable
 from dataclasses import fields as dataclass_fields
 
@@ -50,7 +51,8 @@ class GPEngine:
                  random_seed: int = None,
                  tree_gen_config: TreeGenConfig = None,
                  evaluator: Optional[Callable] = None,
-                 future_returns=None, returns=None):
+                 future_returns=None, returns=None,
+                 cache_db: str = ''):
         self.data = data
         self.future_returns = future_returns
         self.returns = returns
@@ -112,23 +114,11 @@ class GPEngine:
         self._parallel_workers = config.get('parallel_workers', 0) if config else 0
         self._canonicalize_memo: Dict[str, str] = {}
         self._canonicalize_lock = threading.Lock()
-        # [优化] 2026-07-07 栈搜索: 取最后一个非ft2帧, 支持多层外部封装
-        import os
-        cache_db = config.get('cache_db', '') if config else ''
+        # [重构] 2026-07-08 缓存路径独立参数，不再从 config 读取，避免与算法参数混淆。
+        # 优先级: cache_db 显式参数 > config['cache_db'] > 默认工作目录/output/.gp_cache.db
+        cache_db = cache_db or (config.get('cache_db', '') if config else '')
         if not cache_db:
-            import inspect
-            # [修复] 2026-07-07 按目录结构: engine.py 固定位于 ft2/utils/gp/v5/, 上溯3级得 ft2 根
-            _FT2_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-            caller_file = ''
-            for frame_info in inspect.stack():
-                fname = frame_info.frame.f_globals.get('__file__', '')
-                if fname and not fname.replace('\\', '/').startswith(_FT2_ROOT):
-                    caller_file = fname  # 不break, 继续遍历至栈底, 取最外层用户脚本
-            if caller_file:
-                cache_db = os.path.join(os.path.dirname(os.path.abspath(caller_file)), 'output', '.gp_cache.db')
-            else:
-                cache_db = 'output/.gp_cache.db'
+            cache_db = os.path.join(os.getcwd(), 'output', '.gp_cache.db')
         cache_dir = os.path.dirname(cache_db)
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
