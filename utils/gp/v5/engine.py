@@ -152,6 +152,9 @@ class GPEngine:
         # [新增] 2026-07-08 ε-Lexicase: 允许 fitness 差距 ε 内的个体同为代表，保留多样性
         self._use_lexicase: bool = config.get('lexicase', False) if config else False
         self._epsilon: float = config.get('epsilon', 0.05) if config else 0.05
+        # [新增] 2026-07-09 方向配额精英参数: 每个方向最多保留 N 个代表
+        # None = 不限制（纯 fitness 排序，等同原始 lexicase）
+        self._elite_max_per_sig: Optional[int] = config.get('elite_max_per_sig', 1) if config else 1
 
         # [新增] 2026-07-08 Motif 库: 提取高频子树作为高质量种子
         self._motif_enabled: bool = cfg.get('motif_enabled', True)
@@ -413,7 +416,8 @@ class GPEngine:
             lines.append(f"            logic={self._mutate_weights[2][0]:.2f}, insert_cond={self._mutate_weights[3][0]:.2f}")
         lines.append(f"{'─'*60}")
         lines.append(f"[高级特性]")
-        lines.append(f"  lexicase={'ON' if self._use_lexicase else 'OFF'}, epsilon={self._epsilon:.3f}")
+        lines.append(f"  lexicase={'ON' if self._use_lexicase else 'OFF'}, epsilon={self._epsilon:.3f}"
+                     f", elite_max_per_sig={self._elite_max_per_sig}")
         lines.append(f"  年龄机制: {'ON' if self._age_enabled else 'OFF'}, penalty_lr={self._age_penalty_lr}")
         lines.append(f"  Motif库: {'ON' if self._motif_enabled else 'OFF'}, update_every={self._motif_update_every}, "
                      f"inject={self._motif_inject_count}, max_depth={self._motif_max_depth}")
@@ -771,22 +775,31 @@ class GPEngine:
         # [新增] 2026-07-09 岛屿模式: 精英走方向配额, 每方向最多1个代表
         # 原问题: 纯 fitness 排序让冠军及其常数微调变体全数占据精英席, 岛内多样性被压制
         # 修复: 按 signature 分组取各方向最佳代表, 再按 fitness 降序填满 elite_count
-        # 单模式保持原行为 (纯 fitness 排序), 仅岛屿模式启用方向配额
-        if self._num_islands > 1 and _elite > 0:
-            sig_best: Dict[str, Individual] = {}
-            no_sig: List[Individual] = []
-            for ind in sorted_pop:
-                sig = ind.signature
-                if not sig and ind.expression_str:
-                    sig = self._expr_signature(ind.expression_str)
-                if sig:
-                    if sig not in sig_best or ind.fitness > sig_best[sig].fitness:
-                        sig_best[sig] = ind
-                else:
-                    no_sig.append(ind)
-            elite_candidates = sorted(sig_best.values(), key=lambda x: x.fitness, reverse=True)
-            elite_candidates.extend(no_sig)  # 无签名个体兜底补齐
-            elites = elite_candidates[:min(_elite, len(elite_candidates))]
+        # 单模式保持原行为 (纯 fitness 排序), 仅岛屿/lexicase 模式启用方向配额
+        if (self._num_islands > 1 or self._use_lexicase) and _elite > 0:
+            # [重构] 2026-07-09 方向配额精英: 每方向最多 elite_max_per_sig 个代表
+            # None = 不限制 → 等同于原始 lexicase 的纯 fitness 排序
+            if self._elite_max_per_sig is None:
+                elites = sorted_pop[:min(_elite, len(sorted_pop))]
+            else:
+                sig_top: Dict[str, List[Individual]] = {}
+                no_sig: List[Individual] = []
+                for ind in sorted_pop:
+                    sig = ind.signature
+                    if not sig and ind.expression_str:
+                        sig = self._expr_signature(ind.expression_str)
+                    if sig:
+                        lst = sig_top.setdefault(sig, [])
+                        if len(lst) < self._elite_max_per_sig:
+                            lst.append(ind)
+                    else:
+                        no_sig.append(ind)
+                elite_candidates = []
+                for lst in sig_top.values():
+                    elite_candidates.extend(lst)
+                elite_candidates.sort(key=lambda x: x.fitness, reverse=True)
+                elite_candidates.extend(no_sig)
+                elites = elite_candidates[:min(_elite, len(elite_candidates))]
         else:
             elites = sorted_pop[:min(_elite, len(sorted_pop))]
 

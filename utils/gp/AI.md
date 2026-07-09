@@ -4,6 +4,8 @@
 > 当前实现为 **v5**，核心代码在 `v5/` 子目录（`engine.py` / `config.py` / `tree_gen.py` / `ast_utils.py` / `cache.py`）。
 > 本文只讲「怎么用」，行为一律以 `v5/` 当前代码为准。
 
+> **版本 v5 | 更新 2026-07-09** — 同步引擎最新默认配置与新增能力：ε-Lexicase 选择（默认开）、年龄机制（默认开）、Motif 种子库（默认开）、岛屿模型、4 算子变异（subtree/param/logic/insert_cond）；`DEFAULT_GP_CONFIG` 默认种群/代数/深度已调为 500/40/5。
+
 ---
 
 ## 1. 定位与能力
@@ -20,13 +22,10 @@
 
 ### v5 的核心特征：权重聚焦探索
 
-v5 相对旧版最关键的升级，是**搜索空间可被参数「聚焦」**，而非全程等概率随机：
+v5 最关键的升级，是**搜索空间可被参数「聚焦」**，而非全程等概率随机：
 
-- 通过 `TreeGenConfig` 的 `var_weights` / `ts_weights` / `math_weights` / `feature_weights`，
-  可以**给变量和函数分配选择权重**，把搜索流量导向你认为有效的方向（例如偏置 `AMOUNT:3` 让量能类因子出现概率更高）。
+- 通过 `TreeGenConfig` 的 `var_weights` / `ts_weights` / `math_weights` 给变量和函数分配选择权重，把搜索流量导向你认定的有效方向（详见 §5）。
 - 配合 `var_allowlist` / `func_allowlist` 可**硬白名单锁定**搜索范围。
-- 开启 `adaptive=True` 后，引擎会**根据每代方向表现用 EMA 自动回调节点权重**（权重聚焦的闭环版）。
-- ε-greedy 探索通道（默认 15%）保证即便你聚焦了权重，仍有约 15% 个体在**全默认空间**探索，避免过早收敛。
 
 **这种「权重聚焦」是 v5 的招牌能力**：它让 GP 从「盲搜」变成「在你指定的方向上精搜」，
 大幅减少无效表达式、提高找到有效因子的效率。使用 v5 时应**有意识地设计权重与白名单**，而非放任默认等概率。
@@ -43,7 +42,7 @@ utils/gp/
     ├── __init__.py        # 统一导出 GPEngine / TreeGenConfig / Individual / FitnessCache / 工具函数
     ├── engine.py          # GPEngine 主类：进化循环、选择、交叉、变异、方向追踪
     ├── config.py          # TreeGenConfig + Individual + DEFAULT_GP_CONFIG / DEFAULT_TREE_GEN_CONFIG + 原语表
-    ├── tree_gen.py        # 随机树生成 + 5 种变异算子
+    ├── tree_gen.py        # 随机树生成 + 4 种变异算子（subtree/param/logic/insert_cond）
     ├── ast_utils.py       # AST 纯函数：_simplify_ast / _canonicalize_key / _collect_replaceable / _replace_subtree
     └── cache.py           # FitnessCache：内存 + SQLite 双级缓存
 ```
@@ -131,6 +130,7 @@ engine = GPEngine(
 | `seed_expressions` | `List[str]` | `None` | 种子表达式字符串列表，按比例注入初始种群 |
 | `random_seed` | `int` | `None` | 传入后种群可复现（内置独立 `random.Random`） |
 | `tree_gen_config` | `TreeGenConfig` | `None` | 树生成偏置（见 §5） |
+| `cache_db` | `str` | `''` | 缓存 DB 路径；优先级：`cache_db` 参数 > `config['cache_db']` > `./output/.gp_cache.db` |
 | `future_returns` / `returns` | — | `None` | 透传字段，引擎本身不消费，供 `fitness_calculator` 使用 |
 
 ---
@@ -139,7 +139,7 @@ engine = GPEngine(
 
 `TreeGenConfig` 是 v5「权重聚焦探索」的**唯一控制入口**。它决定随机生树时
 **变量 / 函数 / 运算**各自被选择的概率，从而把搜索流量导向你指定的方向。
-默认值 `None` = 等概率（兼容旧行为，但会浪费大量搜索在无效组合上）。
+默认值 `None` = 等概率（但会浪费大量搜索在无效组合上）。
 
 ```python
 cfg = TreeGenConfig(
@@ -159,10 +159,9 @@ cfg = TreeGenConfig(
 | 字段 | 类型 | 聚焦对象 | 行为要点 |
 |------|------|----------|----------|
 | `var_weights` | `Dict[str, float]` | 变量 | **部分传入 = 未列出的变量被填 0 即禁用**；权重越高该变量被选中概率越大 |
-| `ts_weights` | `Dict[str, float]` | 时序函数 | 同上，**未列即禁**；键必须是 `TS_FUNCTIONS` / `TS_FUNCTIONS_2ARG` 中的名称 |
-| `math_weights` | `Dict[str, float]` | 数学函数 | 同上，键必须是 `MATH_FUNCTIONS` 中的名称 |
-| `feature_weights` | `Dict[str, float]` | 特征函数组 | 三组：`feature_1arg` / `feature_3arg` / `ratio`，控制 `linearreg/tsf`、`natr/atr`、`amt_ratio/vol_ratio` 的相对概率 |
-| `group_weights` | `Dict[str, float]` | 运算大类 | 控制 ts/feature/math/comparison/logic/binary_op/unary_op/ternary 八大类的相对概率（一般不改） |
+| `ts_weights` | `Dict[str, float]` | 时序/截面/特征函数 | 控制 `ts_*` / `cs_*` / `linearreg` / `natr` / `amt_ratio` 等**全部非数学函数**；**未列即禁**（键来自 `FUNC_REGISTRY` 动态填充，不再有独立 `feature_weights`） |
+| `math_weights` | `Dict[str, float]` | 数学函数 | 控制 `sin/cos/exp/...` 等，键来自 `FUNC_REGISTRY` 的 `math_function` 分类 |
+| `group_weights` | `Dict[str, float]` | 运算大类 | 控制 ts/math/comparison/logic/binary_op/unary_op/ternary **七大类**的相对概率（一般不改） |
 
 > **权重聚焦的本质**：权重不是「附加偏好」，而是**选择概率分布**。引擎用
 > `random.choices(keys, weights=...)` 按权重抽样，所以 `var_weights={'AMOUNT':3}`
@@ -186,36 +185,48 @@ cfg = TreeGenConfig(
 
 ### 5.4 内置原语（权重键的来源）
 
-权重字段的合法键来自 `config.py` 的原语表：
-- 变量 `GP_VARIABLES = ['CLOSE','OPEN','HIGH','LOW','VOLUME','AMOUNT']`
-- 时序函数 `TS_FUNCTIONS`（`ts_rank/ts_zscore/ts_mean/ts_std/ts_sum/ts_delta/ts_delay/ts_roc/ts_decay_linear/ts_skew/ts_kurt/ts_resid/ts_slope/ts_rsq/ts_intercept/ts_predict`）+ 双参 `TS_FUNCTIONS_2ARG`（`ts_corr/ts_cov/ts_reg_slope/ts_reg_resid/ts_reg_rsq`）
-- 特征函数 `FEATURE_FUNCTIONS_1ARG`（`linearreg/tsf`）+ `FEATURE_FUNCTIONS_3ARG`（`natr/atr`）+ `RATIO_FUNCTIONS`（`amt_ratio/vol_ratio`）
-- 数学函数 `MATH_FUNCTIONS = ['sin','cos','exp','log','sqrt','abs','tanh','gauss','p4','neg']`
+权重字段的合法键**不再是手写常量表**，而是运行时从 `utils.ast.functions.FUNC_REGISTRY` 动态读取（见 `config.get_full_default_weights()`）：
+- 变量 `var_weights` 的键：`GP_VARIABLES = ['CLOSE','OPEN','HIGH','LOW','VOLUME','AMOUNT']`（仅 fallback 池；自定义变量经 `ast.register_variable()` 注册后由 `var_weights` 指定偏置，不在此列）
+- `ts_weights` 的键：**所有非数学函数** —— `ts_function` / `cs_function` / `ta_function` / `feature_function` / `signal_function` 分类下的全部函数（如 `ts_rank/ts_roc/ts_cov/linearreg/natr/amt_ratio/...`）
+- `math_weights` 的键：`math_function` 分类（如 `sin/cos/exp/log/sqrt/abs/tanh/gauss/p4/neg`）
 
-> **坑**：`var_weights` 是**黑名单式**的——只写你想要的变量，其余会被 `0` 填充即禁用，
-> 不是「附加」到你没写的变量上。权重键拼错（如 `'Ts_Rank'`）会被忽略、该键退化为禁用。
+> **坑**：权重键拼错（如 `'Ts_Rank'`）会被忽略、该键退化为禁用（变量黑名单语义见 §5.1 表）。
 
 ---
 
 ## 6. 引擎级参数（config）
 
-`DEFAULT_GP_CONFIG` 默认值如下，可通过构造 `config=` 字典覆盖：
+`DEFAULT_GP_CONFIG` 默认值如下，可通过构造 `config=` 字典覆盖（**当前默认已为强探索配置**，kb03 等实战脚本即直接复用此默认）：
 
 | 参数 | 默认 | 说明 |
 |------|------|------|
-| `population_size` | 200 | 种群规模 |
-| `generations` | 20 | 进化代数 |
-| `max_depth` | 10 | 树最大深度（变异子树深度上限取 `min(max_depth, 4)`） |
-| `tournament_size` | 5 | 锦标赛选择规模 |
+| `population_size` | 500 | 种群规模（kb03 用 500 提升探索广度） |
+| `generations` | 40 | 进化代数（kb03 用 40 确保收敛） |
+| `max_depth` | 5 | 树最大深度（浅树防过拟合、保可解释；变异子树深度上限取 `min(max_depth, 4)`） |
+| `tournament_size` | 6 | 锦标赛选择规模 |
 | `crossover_prob` | 0.6 | 交叉概率（与 `mutation_prob` 共用一个 r 区间） |
 | `mutation_prob` | 0.25 | 变异概率 |
 | `elite_ratio` | 0.05 | 精英保留比例（至少 1 个） |
-| `seed_ratio` | 0.4 | 初始种群中种子表达式占比 |
-| `random_inject_ratio` | 0.05 | 每代随机注入个体占比（探索多样性） |
+| `seed_ratio` | 0.15 | 初始种群中种子表达式占比 |
+| `random_inject_ratio` | 0.15 | 每代随机注入个体占比（探索多样性） |
 | `parsimony_penalty` | 0.001 | 简洁度惩罚：`fitness *= (1 - penalty * node_count)` |
-| `mutate_*_weight` | 见下 | 5 种变异算子权重 |
+| `lexicase` | True | **ε-Lexicase 选择默认开**（见 §7） |
+| `epsilon` | 0.05 | ε-Lexicase 容差：fitness 差距 ≤5% 的个体同为代表，保留方向多样性 |
+| `age_enabled` | True | **年龄机制默认开**：fitness 随个体年龄衰减，防种群老龄化（见 §7） |
+| `age_penalty_lr` | 0.05 | 年龄惩罚系数：`fitness *= 1/(1 + lr*age)` |
+| `motif_enabled` | True | **Motif 种子库默认开**（见 §7） |
+| `motif_update_every` | 3 | 每 N 代从 Top 30% 个体提取高频子树更新 Motif 库 |
+| `motif_min_fitness` | 0.0 | 仅提取 fitness ≥ 此阈值的个体子树 |
+| `motif_max_depth_ratio` | 0.5 | Motif 子树最大深度（= `max_depth * ratio`） |
+| `motif_inject_count` | 5 | 每次初始化/注入最多掺入的 Motif 种子数 |
+| `num_islands` | 1 | 岛屿数量（>1 启用岛屿模型，见 §7） |
+| `migrate_every` | 5 | 岛屿模式：每 N 代迁移一次 |
+| `migrate_count` | 2 | 岛屿模式：每岛每次迁出/替换个体数 |
+| `elite_max_per_sig` | 1 | 方向配额精英：每「方向签名」最多保留 N 个代表（`None`=不限制）；岛屿/lexicase 模式下生效 |
+| `mutate_*_weight` | 见下 | 4 种变异算子权重 |
 
-变异算子权重默认：`subtree=0.30, constant=0.20, window=0.20, logic=0.15, insert_cond=0.15`。
+变异算子权重默认：`subtree=0.30, param=0.40, logic=0.15, insert_cond=0.15`。
+> `param` 算子统一负责常数与窗口的重新采样：spec 从 `param_pool`/`param_ranges` 感知式选取（排除 bool 节点）。
 
 ---
 
@@ -224,18 +235,21 @@ cfg = TreeGenConfig(
 | 算法 | 默认 | 行为 / 开启方式 |
 |------|------|------|
 | **AW-MEP 停滞检测** | **开** | 连续 3 代无提升 → 变异率 ×1.3（上限 0.5）、交叉率 ×0.85（下限 0.2）；连续 5 代 → 随机注入数翻倍（上限 30%） |
-| **ε-greedy 探索** | **开（15%）** | 约 15% 个体无视用户权重、用全默认空间生成（`_random_tree_explore`），保持探索广度。由 `config={'explore_ratio': 0.15}` 控制 |
-| **Lexicase 选择** | **关** | 保护小众方向。开：`config={'lexicase': True}`。需积累 ≥2 个方向代表才生效，否则退化成锦标赛 |
+| **ε-greedy 探索** | **开（explore_ratio=0.15）** | 约 15% 个体无视用户权重、用全默认空间生成（`_random_tree_explore`，仍遵守 `var_allowlist`/`func_allowlist`），保持探索广度。由 `config={'explore_ratio': 0.15}` 控制 |
+| **ε-Lexicase 选择** | **开（epsilon=0.05）** | 按「方向签名」分组，每组取 fitness 最高代表 + 均匀随机选，使小众方向也能被选中。fitness 差距 ≤`epsilon`(5%) 的个体同为代表。由 `config={'lexicase': True, 'epsilon': 0.05}` 控制；**岛屿模式会强制开启** |
+| **年龄机制（age）** | **开（age_enabled=True）** | 个体 fitness 随存活代数衰减 `fitness *= 1/(1 + lr*age)`，淘汰长期占席的老个体，维持多样性。由 `config={'age_enabled': True, 'age_penalty_lr': 0.05}` 控制 |
+| **Motif 种子库** | **开（motif_enabled=True）** | 每 `motif_update_every` 代从当前种群 Top 30% 提取高频子树，作为高质量种子掺入初始化与每代注入，加速收敛。由 `config={'motif_enabled': ..., 'motif_inject_count': 5}` 控制 |
+| **岛屿模型（islands）** | **关（num_islands=1）** | 分 N 个独立子种群隔离演化 + 环形拓扑多样性迁移（迁出接收岛缺失方向、替换冗余个体）。开：`config={'num_islands': 4, 'migrate_every': 5, 'migrate_count': 2}`，会自动开启 Lexicase |
 | **EMA 方向权重** | **关** | 闭环自适应权重。开：`TreeGenConfig(adaptive=True)`。需累计 ≥10 条方向记录才更新 |
 | **AST 简化 `_simplify_ast`** | **开** | 每次生成/变异/交叉后调用，消除 `neg(neg(x))`、`cos(neg(x))→cos(x)`、`x*1→x`、`x+0→x`、`x-x→0` 等恒等/冗余 |
 | **预筛 `_quick_filter`** | **开** | 拒绝无效表达式：窗口=1 的时序函数、`ts_func(负数, ...)`、无变量、仅常量+≤2 变量 |
-| **FitnessCache（SQLite）** | **开** | 默认缓存到 `output/.gp_cache.db`，按数据形状+惩罚生成指纹，跨运行复用 |
+| **FitnessCache（SQLite）** | **开** | 默认缓存到 `output/.gp_cache.db`，按数据形状+惩罚生成指纹，跨运行复用（懒加载） |
 
-> 不要被旧文档误导：ε-greedy 默认 **15%**（非 25%）；EMA 与 Lexicase **默认都是关闭的**，需显式开启。
+> **默认开关**：v5 当前默认 **Lexicase / 年龄机制 / Motif 库 均为开启**，EMA 自适应权重仍为关闭（需 `adaptive=True` 显式开启）。放任全部默认即可获得较稳健的多样性保护，但仍建议按任务主动设计 `TreeGenConfig` 权重。
 
-**v5 的设计主线是「权重聚焦」**：`TreeGenConfig` 的权重/白名单把你先验认为有效的方向「点亮」，
-ε-greedy 留出 15% 全空间探索防过拟合，AW-MEP 在停滞时加大变异/注入保多样性，
-`adaptive=True` 再把「点亮」变成自动迭代收敛。**用 v5 时务必主动设计这些参数**，
+**v5 的设计主线是「权重聚焦 + 多样性保障」**：`TreeGenConfig` 的权重/白名单把先验有效方向「点亮」，
+上述多样性机制（ε-greedy / AW-MEP / 年龄机制 / Motif 库 / ε-Lexicase）协同防止过早收敛与过拟合，
+`adaptive=True` 进一步把「点亮」变成自动迭代收敛。**用 v5 时务必主动设计这些参数**，
 放任默认等概率会退化成低效率的盲搜。
 
 ---
@@ -253,23 +267,25 @@ engine.run(callback=lambda gen, best, stats: print(gen, best.fitness))
 | 方法 / 属性 | 返回 | 说明 |
 |-------------|------|------|
 | `engine.best()` | `Individual` | 全局最优个体 |
-| `engine.top(n=10)` | `List[Individual]` | 当前种群 fitness 前 n |
+| `engine.top(n=10)` | `List[Individual]` | 当前种群 fitness 前 n（岛屿模式自动合并所有岛） |
 | `engine.report()` | `str` | 文本版搜索报告（每 5 代 best_fitness / depth / valid） |
 | `engine.direction_report()` | `str` | 方向探索报告（按语义签名聚合各方向最佳 fitness，★=≥0.8） |
+| `engine.summary(title='')` | `str` | 启动配置摘要（变量/原语/参数/高级特性开关一览），建议 `run()` 前打印 |
+| `engine.get_motif_seeds(n=10)` | `List[str]` | 当前 Motif 库 Top-N 种子表达式（跨轮次复用高质量子树） |
 | `engine.history` | `List[Dict]` | 每代统计：`generation/best_fitness/best_depth/best_expression/avg_fitness/valid_count` |
 
-`Individual` 字段：`tree`(ast.Expression) / `fitness` / `expression_str` / `depth` / `node_count` / `generation` / `is_seed`。
+`Individual` 字段：`tree`(ast.Expression) / `fitness` / `expression_str` / `depth` / `node_count` / `generation` / `is_seed` / `age`（存活代数，年龄惩罚用） / `signature`（方向签名缓存）。
 
 ---
 
 ## 9. 缓存机制
 
-`FitnessCache` 为内存 + SQLite 双级：
+`FitnessCache` 为内存 + SQLite 双级（**懒加载**）：
 
 - 构造时按 `数据形状 + parsimony_penalty` 生成 12 位 `fitness_hash`，隔离不同实验。
-- `run()` 开头 `load()` 从 SQLite 载入已有缓存；结尾 `save()` 增量写回。
+- `get()` 先查内存，未命中再按 `expr_hash` 从 SQLite **单条懒加载**（避免一次性把 10 万+ 历史缓存载入内存）；`save()` 结尾批量写回。
 - 同一表达式（经 `_canonicalize_key` 规范化，含加乘交换律排序、常数折叠）只评估一次。
-- 换 `cache_db` 路径即可隔离不同项目：`config={'cache_db': 'my_run/.gp_cache.db'}`。
+- 换缓存路径即可隔离不同项目：`cache_db='my_run/.gp_cache.db'`（构造参数，优先级高于 `config['cache_db']`）或 `config={'cache_db': ...}`。
 
 ---
 
@@ -287,6 +303,6 @@ engine.run(callback=lambda gen, best, stats: print(gen, best.fitness))
 1. **直用核心忘了传 `evaluator`** → 所有个体 fitness = -999。经 `factor.v5.gp_engine` 则自动注入，无此问题。
 2. **`var_weights` 是黑名单式** → 只写想要的变量，其余自动禁用；想要"附加偏置"得把全部 6 个变量都写上。
 3. **适应度函数必须返回有限标量** → 返回 NaN / 常数面板 / `< -998` 会被判 -999 并计入缓存（浪费搜索）。
-4. **`max_depth=10` 但变异子树只到 4 层** → 深树主要靠交叉和初始随机树，变异是小步调整。
-5. **Lexicase / adaptive 默认关闭** → 需要小众方向保护或权重闭环时显式开启，且 Lexicase 需先积累 ≥2 个方向代表。
+4. **变异子树深度上限 = min(max_depth, 4)** → 深树主要靠交叉和初始随机树，变异是小步调整（max_depth 默认 5）。
+5. **adaptive 默认关闭** → 需权重闭环时显式 `TreeGenConfig(adaptive=True)`，且需累计 ≥10 条方向记录才首次更新。**Lexicase 默认已开（ε-Lexicase）**，岛屿模式会自动强制开启；若想退化为锦标赛选择用 `config={'lexicase': False}`。
 6. **缓存跨运行复用** → 改了 `fitness_calculator` 逻辑但未换 `cache_db`，可能读到旧适应度。换 DB 或清文件可强制重算。

@@ -1,6 +1,13 @@
 # utils/ast 模块 AI 助手指南
 
-> **版本：v2 | 更新日期：2026-07-08**
+> **🚀 重点提示：本文档即 v2 权威规范**
+> `utils/ast` 当前为 **v2**（numba @njit 加速 + 缺失值 NaN 语义 + 函数补全），代码持续演进中。
+> 本文件描述 v2 **当前实现**，是与该模块交互的唯一事实来源。涉及表达式求值、截面排名、缺失值处理时，务必遵守文末「关键语义（必读）」一节。
+> 修改任何行为（尤其 NaN/排名语义）前，先读 `functions.py` / `dsl.py` 真实实现与同目录 `审核报告.md`，勿依赖记忆或历史文档。
+
+> **版本：v2 | 更新日期：2026-07-09**
+>
+> [更新] 2026-07-09 同步 v2 代码现状：numba @njit 加速；cs_rank / cross_sectional_rank / 特征函数对缺失值返回 NaN；新增函数 reg_*/ts_var/ts_logret/signed_power/safe_max/safe_min/cs_quantile/cs_normalize/atr_sma/stddev/var/linearreg；3 个旧名别名（ts_resi/ts_regression_residual/ts_rsquare）标记待删除。
 
 ## 模块定位
 
@@ -16,11 +23,12 @@
 | 规格层 | `spec.py` | AST构建器/规范化/LLM语法规格/表达式基类 |
 
 > 变量层已合并入 functions.py（`_VAR_REGISTRY`），不再有独立 variables.py。
+> [重构] 2026-07-08 `expr_base.py` 并入 `spec.py`（AstExpression 基类移入），`registry.py` 已删除；`variables.py` 仅保留 re-export 兼容。
 
 ## 核心元数据
 
 ```python
-# 函数规格 — 87 个注册函数
+# 函数规格 — 87 个 FUNC_REGISTRY 条目 (84 函数定义 + 3 旧名别名 ts_resi/ts_regression_residual/ts_rsquare, 后续删除)
 FunctionSpec(func, category, data_args, param_pool, param_ranges, data_vars)
 
 # 变量规格 — 63 个注册变量
@@ -38,7 +46,7 @@ from utils.ast import (
     parse_expression, evaluate, validate_expression,
     get_variables, get_functions,
     eval_colwise, cross_sectional_rank,
-    normalize_data_keys,
+    normalize_data_keys, ast_depth, ast_node_count, SAFE_CONSTANTS,
 
     # 基类
     AstExpression,
@@ -58,7 +66,7 @@ from utils.ast import (
     # 规格层
     make_var, make_call, make_compare, make_binop, make_const, make_unaryop,
     make_boolop, make_ifexp,
-    normalize_expression, describe_expression,
+    normalize_expression, normalize_ast, describe_expression,
     grammar_spec_for_llm, grammar_spec_compact,
 )
 ```
@@ -179,15 +187,15 @@ cs_winsorize(x, std)  cs_quantile(x)  cs_normalize(x)
 abs(x)  log(x)  sqrt(x)  sign(x)  exp(x)  tanh(x)
 sigmoid(x)  relu(x)  softsign(x)  sin(x)  cos(x)
 gauss(x)  p4(x)  neg(x)  square_sigmoid(x)
-signed_power(x, exponent)
+signed_power(x, exponent)  safe_max(x,y)  safe_min(x,y)
 
 # 特征计算
-rsi(CLOSE, 14)    atr(H,L,C,14)     macd(CLOSE)
+rsi(CLOSE, 14)    atr(H,L,C,14)     atr_sma(H,L,C,14)  macd(CLOSE)
 ema(CLOSE, 20)    adx(H,L,C,14)     vol_ratio(C,V,5,20)
 amt_ratio(A,5,20)  hv(CLOSE, 20)    bb_width(CLOSE, 20)
 cci(H,L,C,14)     natr(H,L,C,14)    tsf(CLOSE, 10)
 kama(CLOSE, 30)   wma(CLOSE, 10)    dema(CLOSE, 10)
-trima(CLOSE, 40)  wilder_smooth(x, 10)
+trima(CLOSE, 40)  wilder_smooth(x, 10)  stddev(C,20)  var(C,20)  linearreg(C,20)
 
 # 信号确认
 persist(expr, n)  — 连续 n 日同向才触发
@@ -215,3 +223,26 @@ persist(expr, n)  — 连续 n 日同向才触发
 - `eval_colwise(strict=True)` 仅在调试时使用
 - `register_function` 的 `category` 参数必须属于 `VALID_FUNC_CATEGORIES`（5 个有效分类）
 - `register_variable` 新增 `category`/`is_prefix`/`description` 参数，旧式单参数调用仍兼容
+
+## 关键语义（必读）
+
+> 以下为 v2 numba 重构后的最终语义，是与该模块交互的唯一事实来源。修改任何行为（尤其 NaN/排名语义）前，务必先读 `functions.py` / `dsl.py` 真实实现与同目录 `审核报告.md`。
+
+### 性能：numba @njit 加速
+- ts_*/cs_* 的计算核心（`_ts_*_core` / `_cs_rank_core` 等）用 `@njit(cache=True)` 重写，cs_rank 约 28x 加速。
+- `_rolling` 保留为 Python fallback（用于 `_feature_hv` 等少数路径），仅作兼容；新代码应优先走 numba core。
+- 截面函数 cs_rank/cs_zscore/cs_scale/cs_winsorize 的 2D 路径走 numba core；1D 输入为兼容回退（cs_rank→0.5, cs_zscore→0 等），截面语义需 2D 面板。
+
+### NaN / 缺失值语义（对齐 WQ 规范：NaN=缺失，不参与排名，不填充极值）
+- `cs_rank(x)` 与 `cross_sectional_rank(vals)`：值域 (0,1]，整行全 NaN 时返回 NaN。
+- `ts_rank(x, d)`：当前值 x[i] 为 NaN 时返回 NaN。
+- `ts_roc(x, d)`：x[t-d]≈0 时返回 NaN（不伪造变化率）。
+- 特征函数 `_feature_hv` / `_feature_bbwidth` / `_feature_vol_ratio` / `_feature_amt_ratio`：停牌/缺失导致的 NaN 透传返回 NaN。
+- `ts_corr` / `ts_skew` / `ts_kurt`：std≈0 时返回 NaN（与 ts_zscore 一致）。
+- `ts_resid`/`ts_slope`/`ts_rsq`/`ts_intercept`/`ts_predict`：window<3 或当前值 NaN 时返回 NaN，不返回 0.0。
+
+### 已废弃的别名（不要再使用）
+- `ts_resi` → 用 `ts_resid`；`ts_regression_residual` → 用 `reg_resid`；`ts_rsquare` → 用 `ts_rsq`。
+
+### 审核报告状态
+- 同目录 `审核报告.md`（2026-07-06）第一轮 P0/P1 已全部修复；第二轮发现的 P1-A/B/C/D（特征函数缺失值处理）已在 2026-07-09 修复。剩余待处理项：P2-1/2/3（窗口含 NaN 时语义偏差，对干净数据无影响）、P2-7/8（性能，不影响正确性）、P3（文档/边界）。
