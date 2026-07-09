@@ -172,6 +172,13 @@ class GPEngine:
         self._islands: List[List[Individual]] = []
         self._island_size: int = max(1, self.population_size // self._num_islands)
 
+        # [新增] 2026-07-09 岛屿模式强制开启 lexicase 选择
+        # 理由: 岛屿模式目的是隔离演化维持多样性, lexicase 是方向多样性转化为选择多样性的核心保障,
+        #       两者必须搭配; 用户在岛屿模式下设 lexicase=False 属于误用, 自动纠正.
+        if self._num_islands > 1 and not self._use_lexicase:
+            self._use_lexicase = True
+            logger.info("[GP] 岛屿模式自动开启 lexicase 选择（多样性保障）")
+
     # ── 配置构建 ──
 
     def _build_tree_config(self, user_config: TreeGenConfig = None,
@@ -743,8 +750,29 @@ class GPEngine:
         sorted_pop = sorted(self.population, key=lambda x: x.fitness, reverse=True)
         new_pop = []
 
-        for i in range(min(self.elite_count, len(sorted_pop))):
-            elite = sorted_pop[i]
+        # [新增] 2026-07-09 岛屿模式: 精英走方向配额, 每方向最多1个代表
+        # 原问题: 纯 fitness 排序让冠军及其常数微调变体全数占据精英席, 岛内多样性被压制
+        # 修复: 按 signature 分组取各方向最佳代表, 再按 fitness 降序填满 elite_count
+        # 单模式保持原行为 (纯 fitness 排序), 仅岛屿模式启用方向配额
+        if self._num_islands > 1 and self.elite_count > 0:
+            sig_best: Dict[str, Individual] = {}
+            no_sig: List[Individual] = []
+            for ind in sorted_pop:
+                sig = ind.signature
+                if not sig and ind.expression_str:
+                    sig = self._expr_signature(ind.expression_str)
+                if sig:
+                    if sig not in sig_best or ind.fitness > sig_best[sig].fitness:
+                        sig_best[sig] = ind
+                else:
+                    no_sig.append(ind)
+            elite_candidates = sorted(sig_best.values(), key=lambda x: x.fitness, reverse=True)
+            elite_candidates.extend(no_sig)  # 无签名个体兜底补齐
+            elites = elite_candidates[:min(self.elite_count, len(elite_candidates))]
+        else:
+            elites = sorted_pop[:min(self.elite_count, len(sorted_pop))]
+
+        for elite in elites:
             new_pop.append(Individual(
                 tree=copy.deepcopy(elite.tree),
                 fitness=elite.fitness,
@@ -795,24 +823,100 @@ class GPEngine:
 
         return new_pop[:self.population_size]
 
-    # [新增] 2026-07-09 岛屿迁移: 环形拓扑，每岛迁出 Top-k 到下一个岛
+    # [重构] 2026-07-09 岛屿迁移: 从"精英迁移"改为"多样性迁移"
     def _migrate(self):
-        """环形拓扑迁移: Island i → Island (i+1) % N
+        """环形拓扑多样性迁移: Island i → Island (i+1) % N
 
-        每岛取 Top-k (fitness 最高), 替换接收岛 Bottom-k (fitness 最低).
+        [原问题] 纯 Top-k 迁移让冠军骨架扩散到所有岛, 各岛同质化塌陷.
+        [新策略]
+          - 迁出: 源岛各方向最佳代表中, 接收岛缺失的方向优先 (Top-k 兜底)
+          - 替换: 接收岛"方向冗余"个体优先 (同方向保留最佳, 其余按 fitness 升序替换),
+                 避免替换掉接收岛稀少方向的唯一代表
         """
         n = self._num_islands
         k = min(self._migrate_count, max(1, self._island_size // 5))
+
         for i in range(n):
             src = self._islands[i]
             dst = self._islands[(i + 1) % n]
-            src_sorted = sorted(src, key=lambda x: x.fitness, reverse=True)
-            migrants = [copy.deepcopy(ind) for ind in src_sorted[:k]]
-            dst_sorted_idx = sorted(range(len(dst)), key=lambda j: dst[j].fitness)
+
+            # ── 选迁出个体: 接收岛缺失的方向优先, Top-k 兜底 ──
+            src_sig_best: Dict[str, Individual] = {}
+            for ind in src:
+                sig = ind.signature
+                if not sig and ind.expression_str:
+                    sig = self._expr_signature(ind.expression_str)
+                if sig:
+                    if sig not in src_sig_best or ind.fitness > src_sig_best[sig].fitness:
+                        src_sig_best[sig] = ind
+
+            dst_sigs: set = set()
+            for ind in dst:
+                sig = ind.signature
+                if not sig and ind.expression_str:
+                    sig = self._expr_signature(ind.expression_str)
+                if sig:
+                    dst_sigs.add(sig)
+
+            # 优先迁出缺失方向代表 (按 fitness 降序), 不足时用源岛 Top-k 补齐
+            missing_reps = [ind for sig, ind in src_sig_best.items() if sig not in dst_sigs]
+            missing_reps.sort(key=lambda x: x.fitness, reverse=True)
+            migrants = missing_reps[:k]
+
+            if len(migrants) < k:
+                src_sorted = sorted(src, key=lambda x: x.fitness, reverse=True)
+                existing_ids = {id(m) for m in migrants}
+                for ind in src_sorted:
+                    if len(migrants) >= k:
+                        break
+                    if id(ind) not in existing_ids:
+                        migrants.append(ind)
+                        existing_ids.add(id(ind))
+
+            if not migrants:
+                continue
+
+            # ── 选替换位置: 接收岛方向冗余个体优先 (同方向保留最佳) ──
+            dst_by_sig: Dict[str, List[int]] = {}
+            no_sig_idx: List[int] = []
+            for idx, ind in enumerate(dst):
+                sig = ind.signature
+                if not sig and ind.expression_str:
+                    sig = self._expr_signature(ind.expression_str)
+                if sig:
+                    dst_by_sig.setdefault(sig, []).append(idx)
+                else:
+                    no_sig_idx.append(idx)
+
+            # 冗余索引: 每方向除 fitness 最高外其余加入冗余池, 无签名个体也加入
+            redundant_idx: List[int] = []
+            for sig, idxs in dst_by_sig.items():
+                if len(idxs) > 1:
+                    idxs_sorted = sorted(idxs, key=lambda j: dst[j].fitness)  # 升序, 最差在前
+                    redundant_idx.extend(idxs_sorted[:-1])  # 排除该方向最佳
+            redundant_idx.extend(no_sig_idx)
+            redundant_idx.sort(key=lambda j: dst[j].fitness)  # 冗余池按 fitness 升序
+
+            # 冗余不足时用全局 Bottom-k 补齐 (兜底)
+            if len(redundant_idx) < k:
+                all_idx_sorted = sorted(range(len(dst)), key=lambda j: dst[j].fitness)
+                existing = set(redundant_idx)
+                for idx in all_idx_sorted:
+                    if len(redundant_idx) >= k:
+                        break
+                    if idx not in existing:
+                        redundant_idx.append(idx)
+                        existing.add(idx)
+
+            # 执行替换
+            replace_indices = redundant_idx[:k]
             for j, migrant in enumerate(migrants[:k]):
-                replace_idx = dst_sorted_idx[-(j + 1)]
-                migrant.generation = max(migrant.generation, dst[replace_idx].generation)
-                dst[replace_idx] = migrant
+                if j >= len(replace_indices):
+                    break
+                replace_idx = replace_indices[j]
+                migrant_copy = copy.deepcopy(migrant)
+                migrant_copy.generation = max(migrant_copy.generation, dst[replace_idx].generation)
+                dst[replace_idx] = migrant_copy
 
     # ── 主循环 ──
 
