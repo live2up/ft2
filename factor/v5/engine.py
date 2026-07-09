@@ -28,10 +28,6 @@ from core.storage import context
 from core.analyzer import AccountAnalyzer
 
 
-
-
-
-
 class FacEngine:
     """因子轮动回测引擎 — ft2.core 驱动, full/fast/vector 三模式
 

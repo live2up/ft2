@@ -1,7 +1,7 @@
 """
-因子检验器模块（V2 自包含版本）
+因子检验器模块（V5 自包含版本）
 
-[重构] 2026-05-20 从 factor/validator.py 移植，使 V2 模块完全独立不依赖 V1。
+[重构] 2026-05-20 从 factor/validator.py 移植，使 V5 模块完全独立不依赖 V1。
 保留核心验证方法：IC/IR/换手率/衰减率/分组收益/命中率/稳定性。
 
 设计思路：
@@ -12,7 +12,7 @@
 
 使用方式：
 ---------
->>> from factor.v2.validator import FactorValidator
+>>> from factor.v5.validator import FactorValidator
 >>> validator = FactorValidator(factor_values, future_returns)
 >>> ic = validator.information_coefficient()
 >>> ir = validator.information_ratio()

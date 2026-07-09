@@ -1,7 +1,7 @@
 """
-factor/v5/base.py — 因子基类与因子库 (v4 独立版)
+factor/v5/base.py — 因子基类与因子库 (v5 独立版)
 
-[重构] 2026-06-22 从 v3/base.py 复制为 v4 独立版，与 v3 解耦。
+[重构] 2026-06-22 从 v3/base.py 复制为 v5 独立版，与 v3 解耦。
 
 内容:
   FactorCategory      — 因子分类枚举 (11种)

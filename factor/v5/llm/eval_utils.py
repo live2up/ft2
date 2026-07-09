@@ -2,7 +2,7 @@
 factor/v5/llm/eval_utils.py — 快速评估工具
 
 用于人在回路的快速验证：生成表达式 → 一行求 IC/IR → 观察 → 反馈 LLM。
-依赖 signals/v4 (Expression) + factor/v4 (FactorExpression/Validator/Backtest)。
+依赖 signals/v4 (Expression) + factor/v5 (FactorExpression/Validator/Backtest)。
 
 """
 

@@ -1,6 +1,6 @@
 # factor 模块 AI 助手指南
 
-> **版本：v4 | 更新日期：2026-06-22**
+> **版本：v5 | 更新日期：2026-07-09**
 
 ## 项目定位
 
@@ -10,10 +10,11 @@
 
 | 版本 | 状态 | 说明 |
 |------|------|------|
-| **v4** | **主力** | signals.v4 AST DSL + ft2.core Engine + 72 原语, 探索灵活, `from factor.v4 import ...` |
-| v3 | 保留 | 仅供历史测试对照，自研 Parser + 23 原语，回测已统一到 ft2.core (FactorFacEngine) |
+| **v5** | **主力** | signals.v4 AST DSL + ft2.core Engine + 72 原语, 权重聚焦 GP, `from factor.v5 import ...` |
+| v4 | 保留 | 与 v5 接口一致，仍兼容，新探索统一用 v5 |
+| v3 | 保留 | 仅供历史测试对照，自研 Parser + 23 原语，回测已统一到 ft2.core |
 
-## v4 核心变革
+## v5 核心架构
 
 ```
 v3:  自研Parser → 23原语 → FactorFacEngine (ft2.core) → FactorExpression
@@ -21,6 +22,9 @@ v3:  自研Parser → 23原语 → FactorFacEngine (ft2.core) → FactorExpressi
 
 v4:  signals.v4 AST DSL → 72原语实时计算 → ft2.core Engine回测 → FactorExpression
      优势: 原生Python语法, 原语3倍, 回测引擎统一, 探索灵活
+
+v5:  signals.v4 AST DSL → 72原语 → ft2.core Engine → GP引擎独立抽取到utils/gp/v5
+     优势: GP核心算法独立迭代, factor层轻量, 权重聚焦+岛屿模型+Motif库
 ```
 
 ## 架构总览
@@ -30,24 +34,23 @@ v4:  signals.v4 AST DSL → 72原语实时计算 → ft2.core Engine回测 → F
                                   │
                    ┌──────────────┼──────────────────┐
                    ▼              ▼                    ▼
-           factor/v4/      signals/v4/          factor/v4/
+           factor/v5/      signals/v4/          factor/v5/
            expression.py    Expression           engine.py
            FactorExpression + rank_panel         FacEngine
-           (薄包装层)       (AST DSL)            fast/full 双模式
+           (薄包装层)       (AST DSL)            fast/full/vector 三模式
                    │              │                    │
                    └──────┬───────┘                    │
                           ▼                            │
-                  factor/v4/                           │
+                  factor/v5/                           │
                   gp_engine.py                         │
-                  GPEngine (种子驱动组合优化)           │
+                  GPEngine (注入因子evaluator)          │
                           │                            │
                           └──────────┬─────────────────┘
                                      ▼
                             ┌──────────────┐
-                            │   ft2.core    │
-                            │ Engine/Account │
-                            │ Analyzer/      │
-                            │ Notebook       │
+                            │  utils/gp/v5 │
+                            │  GP核心算法   │
+                            │  (独立迭代)   │
                             └──────────────┘
 ```
 
@@ -55,55 +58,57 @@ v4:  signals.v4 AST DSL → 72原语实时计算 → ft2.core Engine回测 → F
 
 ```
 factor/
-├── v4/                     # 主力 ←
+├── v5/                     # 主力 ←
 │   ├── __init__.py         # 统一导出
-│   ├── expression.py       # FactorExpression (基于 signals.v4 AST DSL)
-│   ├── engine.py           # FacEngine (fast/full 双模式, ft2.core 驱动)
-│   ├── gp_engine.py       # GP 因子组合优化引擎 (Python AST 原生, 种子驱动)
-│   ├── validator.py        # IC/IR/Bootstrap 检验
-│   ├── search.py           # 网格搜索 + 贝叶斯优化
-│   ├── cache.py            # 因子值缓存
 │   ├── base.py             # FactorLibrary + FactorMetadata
+│   ├── engine.py           # FacEngine (fast/full/vector 三模式, ft2.core 驱动)
+│   ├── expression.py       # FactorExpression (基于 signals.v4 AST DSL)
+│   ├── gp_engine.py       # GP 因子引擎包装层 (注入因子evaluator, 核心在utils/gp/v5)
+│   ├── validator.py        # IC/IR/Bootstrap 检验
+│   ├── cache.py            # 因子值缓存
 │   ├── industry_fitness.py # 行业适应度 + FitnessCalculator 基类
+│   ├── knowledge.py        # 因子知识树 (FactorKnowledgeBase)
 │   ├── llm/                # LLM 因子生成器
 │   │   ├── generator.py
 │   │   ├── prompts.py
 │   │   └── eval_utils.py
-│   ├── formulas/           # 公式库 (V4 语法)
+│   ├── formulas/           # 公式库 (V5 语法)
 │   │   ├── wq101.py        # WorldQuant 101 Alpha
 │   │   ├── gt191.py        # 国泰安 191 Alpha
 │   │   ├── industry.py     # 行业因子
-│   │   └── basic.py        # 因子原子基元
-│   └── discovered/         # GP 发现因子存档
-├── v3/                     # 保留 (仅供历史测试对照)
+│   │   ├── basic.py        # 因子原子基元
+│   │   └── alpha158.py     # Qlib Alpha158
+│   ├── discovered/         # GP 发现因子存档
+│   └── 设计文档.md
+├── v4/                     # 保留 (与v5接口一致)
+└── v3/                     # 保留 (仅供历史测试对照)
 ```
 
 ---
 
-## 核心 API (v4)
+## 核心 API (v5)
 
 ### 0. 导入规范
 
 ```python
-from factor.v4 import FactorExpression, FacEngine, FactorLibrary
+from factor.v5 import FactorExpression, FacEngine, FactorLibrary, GPEngine
 
 # 表达式 → 因子面板 → 回测 → 报告 (一站式)
-from signals.v4 import Expression
-expr = Expression("cs_rank(ts_roc(CLOSE, 20))")
-panel = expr.rank_panel(assets)                              # 因子排名面板
+expr = FactorExpression("cs_rank(ts_roc(CLOSE, 20))")
+panel = expr.evaluate_ranked(data_dict)      # 因子排名面板
 result = FacEngine.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
 # result.sharpe_ratio(), result.annualized_return(), result.max_drawdown()
 
 # full 模式: 验证 + 报告
 analyzer = FacEngine.backtest(panel, assets, mode='full', top_n=3,
-                               rebalance='W', bench_label='000300.SH')
+                               rebalance='W', bench_label='399317.SZ')
 analyzer.to_notebook("因子轮动回测")
 ```
 
 ### 1. FactorExpression — 因子表达式
 
 ```python
-from factor.v4 import FactorExpression
+from factor.v5 import FactorExpression
 
 # 字符串 → 因子值面板
 expr = FactorExpression("cs_rank(ts_roc(CLOSE, 20))")
@@ -127,17 +132,20 @@ expr.complexity   # AST 节点数
 ### 2. FacEngine — 因子轮动回测
 
 ```python
-from factor.v4 import FacEngine
+from factor.v5 import FacEngine
 
-# fast 模式: 搜索 (~400ms/次, 1566天5品种) — 引擎内部走 Engine.run_fast() + FastAccount
+# fast 模式: 搜索 (~400ms/次, 1566天5品种)
 analyzer = FacEngine.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
-# → AccountAnalyzer (sharpe_ratio()=1.16, annualized_return()=0.148, max_drawdown()=(-0.10,...))
+# → AccountAnalyzer
 
-# full 模式: 验证 + 报告 — 引擎内部走 Engine.run() + AccountManager, 完整快照+交易记录
+# full 模式: 验证 + 报告 — 完整快照+交易记录
 analyzer = FacEngine.backtest(panel, assets, mode='full', top_n=3,
-                               rebalance='W', bench_label='000300.SH',
-                               buffer=2)                        # 缓冲区: 持仓滑出 top_n+2 名才卖
+                               rebalance='W', bench_label='399317.SZ',
+                               buffer=2)                        # 缓冲区
 analyzer.to_notebook("因子轮动")
+
+# vector 模式: 纯矩阵向量化 (~50-100x 快于 full)
+analyzer = FacEngine.backtest(panel, assets, mode='vector', top_n=3, rebalance='W')
 ```
 
 **FacEngine.backtest() 参数说明：**
@@ -148,20 +156,21 @@ analyzer.to_notebook("因子轮动")
 | `assets` | `{品种代码: OHLCV DataFrame}` | — |
 | `returns` | 日收益率 DataFrame (自动合成 OHLCV，二选一) | None |
 | `top_n` | 持仓品种数 | 3 |
-| `rebalance` | 调仓频率 'D'/'W'/'M'/'ME'/'5D' 或 Scheduler 对象 | 'W' |
-| `mode` | 'fast' → AccountAnalyzer(仅资产指标), 'full' → AccountAnalyzer(全部指标) | 'fast' |
+| `rebalance` | 调仓频率 'D'/'W'/'M'/'ME'/'5D' | 'W' |
+| `mode` | 'fast'/'full'/'vector' | 'fast' |
 | `initial_capital` | 初始资金 | 1_000_000 |
 | `start_date` | 回测起始日 | None=数据首位 |
-| `bench_label` | full 模式基准标签 (自动跑 BenchHolder) | None |
-| `buffer` | 排名缓冲数: 持仓滑出 top_n+buffer 名才剔除, 0=严格Top-N | 0 |
-| `fee_config` | 费率配置 dict, None=零费率。例: `{'commission_rate': 0.0003, ...}` | None |
+| `bench_label` | full 模式基准标签 | None |
+| `buffer` | 排名缓冲数 | 0 |
+| `fee_config` | 费率配置 dict | None |
 
-> fast/full 均返回 AccountAnalyzer，接口一致。fast 不生成 TradeRecord，交易指标返回 None。两者共用 core.Engine._drive_timeline() 时间线循环，fast 模式下 ctx.account 指向 FastAccount。
+> fast/full/vector 均返回 AccountAnalyzer，接口一致。vector 模式为纯矩阵运算，不生成 TradeRecord。
 
-### 3. GP 因子组合优化引擎
+### 3. GP 因子引擎 (v5)
 
 ```python
-from factor.v4 import GPEngine
+from factor.v5 import GPEngine
+from factor.v5.gp_engine import TreeGenConfig
 
 gp = GPEngine(
     data=panel_dict,            # {col: ndarray(T,N)}
@@ -170,19 +179,34 @@ gp = GPEngine(
         'ts_zscore(CLOSE, 20) > 0 and amt_ratio(AMOUNT, 5, 20) > 1',
         'persist(ts_roc(CLOSE, 5) > 0, 2)',
     ],
-    config={'population_size': 200, 'generations': 20},
+    tree_gen_config=TreeGenConfig(
+        var_weights={'CLOSE': 1, 'VOLUME': 2, 'AMOUNT': 3},
+        mode='continuous',  # 纯数值模式，适合单因子发现
+    ),
+    config={
+        'population_size': 300,
+        'generations': 30,
+        'max_depth': 4,
+        'seed_ratio': 0.35,
+        'random_inject_ratio': 0.10,
+        'lexicase': True,  # ε-Lexicase 选择
+        'num_islands': 3,  # 岛屿模型
+    },
+    random_seed=42,
 )
 gp.run()
 best = gp.best()
 # best.expression_str, best.fitness, best.depth
 ```
 
+> GP 核心算法已抽取到 `utils/gp/v5/`，factor/v5/gp_engine.py 仅为包装层，注入因子端 evaluator。
+
 ### 4. 行业适应度
 
 ```python
-from factor.v4.industry_fitness import IndustryFitness, FitnessCalculator
+from factor.v5.industry_fitness import IndustryFitness
 
-# 行业轮动自适应适应度
+# 行业轮动自适应适应度 (N≥100严格, N50~100宽松, N<50仅Sharpe)
 fitness = IndustryFitness(
     data=panel_dict,
     future_returns=returns_df,
@@ -201,28 +225,25 @@ gp = GPEngine(
 ### 5. 因子检验
 
 ```python
-from factor.v4 import FactorValidator, ValidationResult
+from factor.v5 import FactorValidator
 
 validator = FactorValidator(factor_values, future_returns)
 ic = validator.information_coefficient()
-# ic['ic_mean'], ic['ic_std'], ic['ir']
+# ic['ic_mean'], ic['ic_std'], ic['ir'], ic['positive_ratio']
 decay = validator.decay_rate(max_lookforward=20)
-groups = validator.group_return(n_groups=10)
 ```
 
 ### 6. 因子库 + 持久化
 
 ```python
-from factor.v4 import FactorLibrary
-from factor.v4.base import LibraryEntry
+from factor.v5 import FactorLibrary
+from factor.v5.base import LibraryEntry
 
 lib = FactorLibrary()
 lib.register(LibraryEntry('alpha001', formula, fitness=1.5, source='gp'))
 lib.register_batch(entries)
 
 # 查询
-lib.by_source('gp')
-lib.seed_expressions(50)
 lib.top(10, sort_by='sharpe')
 lib.to_dataframe()
 
@@ -234,25 +255,37 @@ lib2 = FactorLibrary.load('./discovered/gp_round_001.json')
 ### 7. 公式库
 
 ```python
-from factor.v4.formulas import ALPHA101, ALPHA191, BASIC_FACTORS
+from factor.v5.formulas import ALPHA101, ALPHA191, BASIC_FACTORS
 
 len(ALPHA101)       # 101   WorldQuant 101 Alpha
 len(ALPHA191)       # 171   国泰安 191 Alpha
 len(BASIC_FACTORS)  # 20    因子原子基元
 ```
 
+### 8. LLM 因子生成
+
+```python
+from factor.v5.llm import LLMGenerator, quick_ic_batch
+
+gen = LLMGenerator(provider="deepseek")
+exprs = gen.generate("量价背离反转", n=10)
+results = quick_ic_batch(exprs, panel_data, returns)
+```
+
 ---
 
-## v4 vs v3 关键差异
+## v5 vs v4 vs v3 关键差异
 
-| 项目 | v3 | v4 |
-|------|----|----|
-| 表达式语法 | 自研 `add/sub/mul` | **Python 原生 `+ - * /`** |
-| 原语数 | 23 | **72 (与 signals 共享)** |
-| 回测引擎 | FactorFacEngine (ft2.core) | **FacEngine (ft2.core, 同 signals)** |
-| 因子面板回测 | FactorFacEngine (fast/full) | **FacEngine (fast/full + buffer)** |
-| 截面排名 | cs_zscore(window) | **cs_rank / evaluate_ranked()** |
-| LLM 友好度 | 需学自定义语法 | **原生 Python，即学即用** |
+| 项目 | v3 | v4 | **v5** |
+|------|----|----|-------|
+| 表达式语法 | 自研 `add/sub/mul` | Python 原生 `+ - * /` | 同 v4 |
+| 原语数 | 23 | 72 (与 signals 共享) | 同 v4 |
+| 回测引擎 | FactorFacEngine | FacEngine (fast/full) | **FacEngine (fast/full/vector)** |
+| GP 引擎位置 | 内嵌 | 内嵌 | **独立抽取到 utils/gp/v5** |
+| GP 特性 | 基础 | 基础 | **权重聚焦 + 岛屿模型 + Motif库 + ε-Lexicase** |
+| 参数搜索 | 内置 search.py | 内置 search.py | **移除，GP 内部 _mutate_param 覆盖** |
+| 向量化回测 | 无 | 无 | **vector 模式 (~50-100x)** |
+| 翻译器 | 无 | translate_v3.py | **移除（ast.v2 更严谨）** |
 
 ---
 
@@ -275,15 +308,19 @@ len(BASIC_FACTORS)  # 20    因子原子基元
 
 ## 注意事项
 
-- **v4 主力**：`from factor.v4 import FactorExpression, FacEngine, FactorLibrary`
-- v3 保留，回测已统一到 ft2.core，语法仍为自研 Parser
+- **v5 主力**：`from factor.v5 import FactorExpression, FacEngine, FactorLibrary, GPEngine`
+- v4 保留，接口与 v5 一致，仍兼容
 - FactorExpression 是 signals.v4 Expression 的薄包装层，语法完全一致
-- FacEngine 与 signals.v4 FacEngine 架构对齐，fast/full 双模式，均返回 AccountAnalyzer
-- fast 模式内部走 `core.Engine.run_fast()` + `FastAccount`，不生成快照/交易记录；ctx.account 接口与 full 统一
+- FacEngine 与 signals.v4 FacEngine 架构对齐，新增 vector 纯矩阵模式
+- fast 模式内部走 `core.Engine.run_fast()` + `FastAccount`，不生成快照/交易记录
+- full 模式走 `core.Engine.run()` + `AccountManager`，完整快照+交易记录
 - 截面排名推荐使用 `evaluate_ranked()` 或 `Expression.rank_panel()`
 - 72 原语覆盖 WorldQuant 时序算子的 96%，截面 100%
 - 扩展新原语：`signals.v4.register_function()` 注册 → 因子模块即用
 - 知识库指标键频率后缀：`sharpe_ratio_d`（日度）、`sharpe_ratio_w`（周度）、`sharpe_ratio_m`（月度）
+- GP 引擎核心算法在 `utils/gp/v5/`，factor/v5/gp_engine.py 仅为包装层
+- GP 内部参数调优：`_mutate_param` 权重 40%，自动探索窗口/常数最优值，无需外部网格
+- 向量化模式用于 GP 初筛/批量评估，速度比 full 快 50-100 倍
 
 ### 变量命名规范（因子探索）
 

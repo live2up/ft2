@@ -17,7 +17,7 @@ factor/v5/discovered/ — GP/ML 发现的因子存档
 import os
 import json
 
-from factor.v5.base import FactorLibrary, LibraryEntry, FactorCategory
+from factor.v5.base import FactorLibrary, LibraryEntry
 
 
 def load_discovered(discovered_dir: str = None) -> FactorLibrary:

@@ -9,14 +9,14 @@ factor/v5 — 因子发现引擎 (基于 signals.v4 AST DSL + ft2.core Engine + 
 
 模块结构:
   base.py          — FactorLibrary + FactorMetadata
-  engine.py        — FacEngine (ft2.core Engine 驱动, fast/full 双模式, 统一返回 AccountAnalyzer)
+  engine.py        — FacEngine (ft2.core Engine 驱动, fast/full/vector 三模式, 统一返回 AccountAnalyzer)
   expression.py    — FactorExpression (基于 signals.v4 AST DSL)
   gp_engine.py     — GP 因子组合优化引擎 (Python AST 原生, 种子驱动)
   validator.py     — IC/IR/Bootstrap 检验
-  cache.py         — 因子值缓存
   industry_fitness.py — 行业适应度 + FitnessCalculator 基类
+  knowledge.py     — 因子知识库 (FactorKnowledgeBase)
   llm/             — LLM 因子生成器
-  formulas/        — 公式库 (WQ101/GT191，语法适配 V4)
+  formulas/        — 公式库 (WQ101/GT191，语法适配 V5)
 
 Quick Start:
   >>> from factor.v5 import FactorExpression, FacEngine, FactorLibrary, GPEngine
@@ -25,7 +25,7 @@ Quick Start:
   >>> result = FacEngine.backtest(panel, assets, mode='fast', top_n=3, rebalance='W')
 """
 
-# ── base (v4 独立版) ──
+# ── base ──
 from .base import (
     FactorCategory, FactorFrequency, FactorMetadata,
     Factor, FactorRegistry, factor,
@@ -41,20 +41,23 @@ from .expression import FactorExpression
 # ── validator ──
 from .validator import FactorValidator, ValidationResult
 
-# ── cache ──
-from .cache import FactorCacheStore
-
 # ── gp_engine ──
 from .gp_engine import GPEngine, Individual
 
 # ── knowledge 因子知识树 ──
 from .knowledge import FactorKnowledgeBase, ExplorationRecord, ExplorationStatus, ALPHA_SOURCES
 
+# ── industry_fitness ──
+from .industry_fitness import IndustryFitness
+
 __all__ = [
     'FacEngine',
     'FactorExpression',
     'GPEngine', 'Individual',
-    'FactorCategory', 'FactorMetadata', 'FactorLibrary',
-    'FactorValidator', 'ValidationResult', 'FactorCacheStore',
+    'FactorCategory', 'FactorFrequency', 'FactorMetadata',
+    'Factor', 'FactorRegistry', 'factor',
+    'LibraryEntry', 'FactorLibrary',
+    'FactorValidator', 'ValidationResult',
     'FactorKnowledgeBase', 'ExplorationRecord', 'ExplorationStatus', 'ALPHA_SOURCES',
+    'IndustryFitness',
 ]
