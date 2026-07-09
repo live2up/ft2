@@ -1,5 +1,5 @@
 """
-factor/v4/llm/prompts.py — Prompt 模板系统
+factor/v5/llm/prompts.py — Prompt 模板系统
 
 为 LLM 生成因子表达式提供结构化 Prompt。
 三种场景: GENERATE(按想法生成) / MUTATE(变异) / EXPLAIN(解释)

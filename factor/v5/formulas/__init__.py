@@ -1,5 +1,5 @@
 """
-factor/v5/formulas/ — V4 AST 语法公式库
+factor/v5/formulas/ — V5 AST 语法公式库
 
 子模块：
   wq101.py     — WorldQuant 101 Alpha (101 公式)

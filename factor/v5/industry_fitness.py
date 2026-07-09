@@ -1,5 +1,5 @@
 """
-factor/v4/industry_fitness.py — 行业轮动自适应适应度
+factor/v5/industry_fitness.py — 行业轮动自适应适应度
 
 核心设计:
   N < 50:   Pipeline Sharpe做fitness (IC不可信, 跳过IC门控)

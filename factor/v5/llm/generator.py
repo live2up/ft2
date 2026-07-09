@@ -1,5 +1,5 @@
 """
-factor/v4/llm/generator.py — LLM 因子生成器
+factor/v5/llm/generator.py — LLM 因子生成器
 
 提供四个核心能力:
   generate(idea, n)           → 按自然语言想法生成因子表达式

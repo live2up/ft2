@@ -1,5 +1,5 @@
 """
-factor/v4/knowledge.py — 因子知识库 (薄封装)
+factor/v5/knowledge.py — 因子知识库 (薄封装)
 
 继承自 utils.kb 通用核心，传入因子专有分类。
 """
