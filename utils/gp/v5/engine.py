@@ -744,7 +744,25 @@ class GPEngine:
 
     # ── 进化循环 ──
 
-    def _next_generation(self, gen: int) -> List[Individual]:
+    def _next_generation(self, gen: int, *,
+                         pop_size: int = None,
+                         elite_count: int = None,
+                         inject_count: int = None,
+                         explore_ratio: float = None) -> List[Individual]:
+        """生成下一代种群。
+
+        Args:
+            gen: 当前代数
+            pop_size: 种群大小（None=使用 self.population_size）
+            elite_count: 精英数量（None=使用 self.elite_count）
+            inject_count: 随机注入数量（None=使用 self.random_inject_count）
+            explore_ratio: 探索比例（None=使用 self._explore_ratio）
+        """
+        _pop_size = pop_size if pop_size is not None else self.population_size
+        _elite = elite_count if elite_count is not None else self.elite_count
+        _inject = inject_count if inject_count is not None else self.random_inject_count
+        _explore = explore_ratio if explore_ratio is not None else self._explore_ratio
+
         cfg = self.tree_gen_config
         rng = cfg.rng
         sorted_pop = sorted(self.population, key=lambda x: x.fitness, reverse=True)
@@ -754,7 +772,7 @@ class GPEngine:
         # 原问题: 纯 fitness 排序让冠军及其常数微调变体全数占据精英席, 岛内多样性被压制
         # 修复: 按 signature 分组取各方向最佳代表, 再按 fitness 降序填满 elite_count
         # 单模式保持原行为 (纯 fitness 排序), 仅岛屿模式启用方向配额
-        if self._num_islands > 1 and self.elite_count > 0:
+        if self._num_islands > 1 and _elite > 0:
             sig_best: Dict[str, Individual] = {}
             no_sig: List[Individual] = []
             for ind in sorted_pop:
@@ -768,9 +786,9 @@ class GPEngine:
                     no_sig.append(ind)
             elite_candidates = sorted(sig_best.values(), key=lambda x: x.fitness, reverse=True)
             elite_candidates.extend(no_sig)  # 无签名个体兜底补齐
-            elites = elite_candidates[:min(self.elite_count, len(elite_candidates))]
+            elites = elite_candidates[:min(_elite, len(elite_candidates))]
         else:
-            elites = sorted_pop[:min(self.elite_count, len(sorted_pop))]
+            elites = sorted_pop[:min(_elite, len(sorted_pop))]
 
         for elite in elites:
             new_pop.append(Individual(
@@ -782,7 +800,7 @@ class GPEngine:
                 age=elite.age + 1,  # [新增] 2026-07-08 精英个体年龄+1
             ))
 
-        while len(new_pop) < self.population_size - self.random_inject_count:
+        while len(new_pop) < _pop_size - _inject:
             r = rng.random()
             if r < self.crossover_prob:
                 child = self._crossover(self._select_parent(), self._select_parent())
@@ -794,16 +812,16 @@ class GPEngine:
             child.age = 1  # [新增] 2026-07-08 新个体初始年龄=1
             new_pop.append(child)
 
-        inject_n = self.random_inject_count
+        inject_n = _inject
         # [修复] 2026-07-09 按总人口算探索数，保持每代 15% 探索强度不衰减
-        explore_n = min(inject_n, int(self.population_size * self._explore_ratio))
+        explore_n = min(inject_n, int(_pop_size * _explore))
 
         # [新增] 2026-07-09 注入 motif 种子（取代部分纯随机注入，保持多样性）
         motif_injected = 0
         if self._motif_enabled:
             motif_seeds = self._get_motif_seeds(self._motif_inject_count)
             for expr in motif_seeds:
-                if len(new_pop) >= self.population_size:
+                if len(new_pop) >= _pop_size:
                     break
                 try:
                     ind = Individual.from_expr(expr, generation=gen + 1)
@@ -821,7 +839,7 @@ class GPEngine:
                 tree = _random_tree(cfg, self.max_depth)
             new_pop.append(Individual(tree=tree, generation=gen + 1, age=1))
 
-        return new_pop[:self.population_size]
+        return new_pop[:_pop_size]
 
     # [重构] 2026-07-09 岛屿迁移: 从"精英迁移"改为"多样性迁移"
     def _migrate(self):
@@ -918,6 +936,55 @@ class GPEngine:
                 migrant_copy.generation = max(migrant_copy.generation, dst[replace_idx].generation)
                 dst[replace_idx] = migrant_copy
 
+    # ── 快照 ──
+
+    def _build_snapshot(self, gen: int) -> GenerationSnapshot:
+        """构建每代快照：方向追踪 + signature 缓存 + lexicase_pool 预计算。
+
+        合并原来分散在 run() 中的三个遍历为一趟，减少重复计算。
+        """
+        valid = [i for i in self.population if i.fitness > -999]
+        by_sig: Dict[str, List[Individual]] = {}
+
+        for ind in valid:
+            sig = self._expr_signature(ind.expression_str or _expr_str(ind.tree))
+            ind.signature = sig  # 缓存避免 lexicase 重复计算
+
+            # 方向追踪
+            if sig not in self.direction_log:
+                self.direction_log[sig] = []
+            self.direction_log[sig].append(ind.fitness)
+            prev = self._direction_best_expr.get(sig, (-999, ''))
+            if ind.fitness > prev[0]:
+                self._direction_best_expr[sig] = (ind.fitness, ind.expression_str or _expr_str(ind.tree))
+
+            # 按 sig 分组
+            if ind.expression_str:
+                by_sig.setdefault(sig, []).append(ind)
+
+        # lexicase_pool 预计算
+        lex_pool: List[Individual] = []
+        seen_expr: set = set()
+        for sig, inds in by_sig.items():
+            best_this_gen = max(ind.fitness for ind in inds)
+            threshold = best_this_gen - abs(best_this_gen) * self._epsilon
+            for ind in inds:
+                if ind.fitness >= threshold and ind.expression_str not in seen_expr:
+                    seen_expr.add(ind.expression_str)
+                    lex_pool.append(ind)
+
+        return GenerationSnapshot(
+            generation=gen,
+            valid=[i for i in valid if i.expression_str],
+            sorted_valid=sorted(
+                [i for i in valid if i.expression_str],
+                key=lambda x: x.fitness, reverse=True,
+            ),
+            by_signature=by_sig,
+            sig_best=dict(self._direction_best_expr),
+            lexicase_pool=lex_pool,
+        )
+
     # ── 主循环 ──
 
     def run(self, verbose: bool = True, callback: Callable[[int, Individual, Dict], None] = None) -> 'GPEngine':
@@ -933,127 +1000,75 @@ class GPEngine:
 
         self._initialize_population()
         for gen in range(self.generations):
-
-            # ── 评估 ──
-            if self._num_islands > 1:
-                for i in range(self._num_islands):
-                    self.population = self._islands[i]
-                    self._evaluate_population()
-                    self._islands[i] = self.population
-                # 合并所有岛用于统计/追踪
-                self.population = list(itertools.chain.from_iterable(self._islands))
-            else:
-                self._evaluate_population()
-
-            gen_best = max(self.population, key=lambda x: x.fitness)
-
-            valid = [i for i in self.population if i.fitness > -999]
-            gen_stats = {
-                'generation': gen,
-                'best_fitness': gen_best.fitness,
-                'best_depth': gen_best.depth,
-                'best_expression': gen_best.expression_str,
-                'avg_fitness': np.mean([i.fitness for i in valid]) if valid else -999,
-                'valid_count': len(valid),
-            }
-            self.history.append(gen_stats)
-
-            # 方向追踪 — 同时缓存 signature 到个体
-            for ind in valid:
-                if ind.fitness > -999:
-                    sig = self._expr_signature(ind.expression_str or _expr_str(ind.tree))
-                    ind.signature = sig  # [新增] 2026-07-08 缓存避免 lexicase 重复计算
-                    if sig not in self.direction_log:
-                        self.direction_log[sig] = []
-                    self.direction_log[sig].append(ind.fitness)
-                    prev = self._direction_best_expr.get(sig, (-999, ''))
-                    if ind.fitness > prev[0]:
-                        self._direction_best_expr[sig] = (ind.fitness, ind.expression_str or _expr_str(ind.tree))
-
-            # [重构] 2026-07-08 构建每代快照（替代零散 _sig_index，含 lexicase_pool 预计算）
-            valid_inds = [i for i in self.population if i.fitness > -999 and i.expression_str]
-            sorted_valid = sorted(valid_inds, key=lambda x: x.fitness, reverse=True)
-            by_sig: Dict[str, List[Individual]] = {}
-            for ind in valid_inds:
-                if ind.signature:
-                    by_sig.setdefault(ind.signature, []).append(ind)
-            # 预计算 lexicase_pool（一代一次，避免后代 425 次重复构建）
-            # [修复] 2026-07-08 threshold 基于当前代各方向 best，而非历史 best
-            # 原实现用 self._direction_best_expr（全局历史最优），导致历史高 fitness
-            # 方向持续过滤掉当前代个体，pool 萎缩，lexicase 退化。
-            # [修复] 2026-07-09 threshold = best - abs(best) * ε，避免负 fitness 方向被挡
-            lexicase_pool: List[Individual] = []
-            seen_expr: set = set()
-            for sig, inds in by_sig.items():
-                best_this_gen = max(ind.fitness for ind in inds)
-                threshold = best_this_gen - abs(best_this_gen) * self._epsilon
-                for ind in inds:
-                    if ind.fitness >= threshold and ind.expression_str not in seen_expr:
-                        seen_expr.add(ind.expression_str)
-                        lexicase_pool.append(ind)
-            self._snap = GenerationSnapshot(
-                generation=gen,
-                valid=valid_inds,
-                sorted_valid=sorted_valid,
-                by_signature=by_sig,
-                sig_best=dict(self._direction_best_expr),
-                lexicase_pool=lexicase_pool,
-            )
-
-            # 方向权重 EMA 更新
-            cfg = self.tree_gen_config
-            if cfg and cfg.adaptive and gen > 0 and gen % cfg.adaptive_every == 0:
-                self._update_direction_weights()
-
-            # [新增] 2026-07-08 Motif 库更新: 每 N 代从 Top 个体提取子树
-            if self._motif_enabled and gen > 0 and gen % self._motif_update_every == 0:
-                self._update_motif_library()
-
-            # 算子自适应
-            self._adapt_operators(gen_best.fitness)
-
-            # callback
-            if callback:
-                callback(gen, gen_best, gen_stats)
-
-            if verbose and gen % 5 == 0:
-                logger.info(f"Gen {gen:3d} | best_f={gen_best.fitness:.3f} "
-                            f"depth={gen_best.depth} valid={gen_stats['valid_count']}")
-
-            if self.best_individual is None or gen_best.fitness > self.best_individual.fitness:
-                self.best_individual = gen_best
-
-            # ── 下一代 ──
+            self._evaluate_and_merge()
+            self._post_generation(gen, verbose, callback)
             if gen < self.generations - 1:
-                if self._num_islands > 1:
-                    # 迁移
-                    if gen > 0 and gen % self._migrate_every == 0:
-                        self._migrate()
-                    # 各岛独立进化下一代
-                    for i in range(self._num_islands):
-                        self.population = self._islands[i]
-                        saved_size = self.population_size
-                        saved_inject = self.random_inject_count
-                        saved_elite = self.elite_count
-                        saved_explore = self._explore_ratio
-                        self.population_size = self._island_size
-                        # [修复] 2026-07-09 岛内保留适量随机注入+探索，不硬编码0（否则岛内无新鲜血液）
-                        self.random_inject_count = max(0, int(self._island_size * 0.03))
-                        self.elite_count = max(1, int(self._island_size * (saved_elite / saved_size)))
-                        self._explore_ratio = max(0.03, saved_explore * 0.25)
-
-                        self._islands[i] = self._next_generation(gen)
-
-                        self.population_size = saved_size
-                        self.random_inject_count = saved_inject
-                        self.elite_count = saved_elite
-                        self._explore_ratio = saved_explore
-                    self.population = self._islands[0]
-                else:
-                    self.population = self._next_generation(gen)
+                self._advance_to_next_generation(gen)
 
         self.fitness_cache.save()
         return self
+
+    def _evaluate_and_merge(self):
+        """评估当前种群（岛屿模式逐岛评估后合并）"""
+        if self._num_islands > 1:
+            for i in range(self._num_islands):
+                self.population = self._islands[i]
+                self._evaluate_population()
+                self._islands[i] = self.population
+            self.population = list(itertools.chain.from_iterable(self._islands))
+        else:
+            self._evaluate_population()
+
+    def _post_generation(self, gen: int, verbose: bool, callback):
+        """每代评估后的统一后处理：统计 → 快照 → 自适应 → 回调 → 日志"""
+        gen_best = max(self.population, key=lambda x: x.fitness)
+        valid = [i for i in self.population if i.fitness > -999]
+        gen_stats = {
+            'generation': gen,
+            'best_fitness': gen_best.fitness,
+            'best_depth': gen_best.depth,
+            'best_expression': gen_best.expression_str,
+            'avg_fitness': np.mean([i.fitness for i in valid]) if valid else -999,
+            'valid_count': len(valid),
+        }
+        self.history.append(gen_stats)
+
+        self._snap = self._build_snapshot(gen)
+
+        cfg = self.tree_gen_config
+        if cfg and cfg.adaptive and gen > 0 and gen % cfg.adaptive_every == 0:
+            self._update_direction_weights()
+
+        if self._motif_enabled and gen > 0 and gen % self._motif_update_every == 0:
+            self._update_motif_library()
+
+        self._adapt_operators(gen_best.fitness)
+
+        if callback:
+            callback(gen, gen_best, gen_stats)
+
+        if verbose and gen % 5 == 0:
+            logger.info(f"Gen {gen:3d} | best_f={gen_best.fitness:.3f} "
+                        f"depth={gen_best.depth} valid={gen_stats['valid_count']}")
+
+        if self.best_individual is None or gen_best.fitness > self.best_individual.fitness:
+            self.best_individual = gen_best
+
+    def _advance_to_next_generation(self, gen: int):
+        """进化到下一代：迁移 + 生成新种群"""
+        if self._num_islands > 1:
+            if gen > 0 and gen % self._migrate_every == 0:
+                self._migrate()
+            for i in range(self._num_islands):
+                self.population = self._islands[i]
+                self._islands[i] = self._next_generation(gen,
+                    pop_size=self._island_size,
+                    elite_count=max(1, int(self._island_size * self.elite_count / self.population_size)),
+                    inject_count=max(0, int(self._island_size * 0.03)),
+                    explore_ratio=max(0.03, self._explore_ratio * 0.25))
+            self.population = self._islands[0]
+        else:
+            self.population = self._next_generation(gen)
 
     # ── 结果 ──
 
