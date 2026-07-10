@@ -59,12 +59,14 @@ utils/ast/functions.py — 原语层 (公共基础设施)
   ┌─ 内部工具 (3)
   │  _rolling / _expanding / _persist
 
-  ├─ 时序 ts_ (28 + 2 lambda = 30 条目)
+  ├─ 时序 ts_ (31 + 2 lambda = 33 条目)
   │  基础:      mean / std / sum / max / min / median
   │  周期:      delta / delay / roc
   │  统计:      rank / zscore / scale / quantile / av_diff
   │             var(λ) / logret(λ) / decay_linear / product
-  │  相关:      corr / cov
+  │  相关:      corr / cov / autocorr
+  │  持续性:    step
+  │  形态:      hump
   │  分布形状:  skew / kurt / argmax / argmin
   │  x~t趋势:   slope / resid / rsq / intercept / predict
   │  [y~x回归]  ts_reg_slope / ts_reg_intercept / ts_reg_resid
@@ -741,6 +743,126 @@ def _ts_zscore_core(x, d):
 
 
 @njit(cache=True)
+def _ts_autocorr_core(x, lag, d):
+    """滚动自相关系数: 序列 x 与其 lag 期延迟值在窗口 d 内的 Pearson 相关系数。
+
+    算法: 收集窗口内 x[t] 和 x[t-lag] 都有效的配对 → 计算样本协方差和方差 (ddof=1) → 相关系数
+    返回: 值域 [-1, 1], 有效配对<3 或 std≈0 返回 NaN
+    [对齐] WQ101 无直接对应, ft2 扩展用于动量持续性检测
+    [新增] 2026-07-10"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        sx = 0.0
+        sy = 0.0
+        sxy = 0.0
+        sxx = 0.0
+        syy = 0.0
+        cnt = 0
+        for j in range(i - d + 1, i + 1):
+            k = j - lag
+            if k < 0:
+                continue
+            if not (np.isnan(x[j]) or np.isnan(x[k])):
+                sx += x[j]
+                sy += x[k]
+                sxy += x[j] * x[k]
+                sxx += x[j] * x[j]
+                syy += x[k] * x[k]
+                cnt += 1
+        if cnt >= 3:
+            mx = sx / cnt
+            my = sy / cnt
+            cov_xy = (sxy - cnt * mx * my) / (cnt - 1)
+            var_x = (sxx - cnt * mx * mx) / (cnt - 1)
+            var_y = (syy - cnt * my * my) / (cnt - 1)
+            if var_x < 0.0:
+                var_x = 0.0
+            if var_y < 0.0:
+                var_y = 0.0
+            std_x = np.sqrt(var_x)
+            std_y = np.sqrt(var_y)
+            if std_x > 1e-10 and std_y > 1e-10:
+                r[i] = cov_xy / (std_x * std_y)
+    return r
+
+
+@njit(cache=True)
+def _ts_step_core(x, d):
+    """窗口内符号持续性: 窗口内所有值是否都 >= 0 (从未翻转为负)。
+
+    算法: 检查窗口 [i-d+1, i] 内所有非 NaN 值是否都 >= 0
+    返回: 1.0 (全部 >= 0) 或 0.0 (出现 < 0), 冷启动/全 NaN 返回 NaN
+    [对齐] WQ101 无直接对应, ft2 扩展用于趋势持续性检测
+    [注意] 与 persist 不同: persist 是"连续满足条件的天数"(累计), ts_step 是"整个窗口内是否从未翻转"(二值)
+    [新增] 2026-07-10"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    for i in range(d - 1, n):
+        all_nonneg = True
+        has_valid = False
+        for j in range(i - d + 1, i + 1):
+            if not np.isnan(x[j]):
+                has_valid = True
+                if x[j] < 0:
+                    all_nonneg = False
+                    break
+        if has_valid:
+            r[i] = 1.0 if all_nonneg else 0.0
+    return r
+
+
+@njit(cache=True)
+def _ts_hump_core(x, d):
+    """窗口内驼峰检测: 是否中间高两端低 (先涨后跌形态)。
+
+    算法: 检查窗口 [i-d+1, i] 内最大值位置是否在中间区域 [d*0.3, d*0.7],
+          且最大值 > 窗口起始值 且 最大值 > 窗口结束值
+    返回: 1.0 (驼峰形态) 或 0.0 (非驼峰), 冷启动/全 NaN 返回 NaN
+    [对齐] WQ101 无直接对应, ft2 扩展用于形态检测
+    [注意] 与 persist 不同: persist 检测同向持续性, ts_hump 检测先涨后跌的倒 U 形态
+    [新增] 2026-07-10"""
+    n = len(x)
+    r = np.full(n, np.nan)
+    lo = int(d * 0.3)
+    hi = int(d * 0.7)
+    for i in range(d - 1, n):
+        window = x[i - d + 1: i + 1]
+        # 找最大值及其位置
+        max_val = 0.0
+        max_idx = 0
+        has_valid = False
+        valid_cnt = 0
+        for j in range(d):
+            if not np.isnan(window[j]):
+                valid_cnt += 1
+                if not has_valid or window[j] > max_val:
+                    max_val = window[j]
+                    max_idx = j
+                has_valid = True
+        if not has_valid or valid_cnt < 3:
+            continue
+        # 最大值位置在中间区域
+        if max_idx < lo or max_idx > hi:
+            r[i] = 0.0
+            continue
+        # 两端值
+        left_val = window[0]
+        right_val = window[d - 1]
+        has_left = not np.isnan(left_val)
+        has_right = not np.isnan(right_val)
+        if not has_left:
+            left_val = max_val
+        if not has_right:
+            right_val = max_val
+        if max_val > left_val and max_val > right_val:
+            r[i] = 1.0
+        else:
+            r[i] = 0.0
+    return r
+
+
+@njit(cache=True)
 def _ts_regression_core(y, x, d, rettype):
     """双变量 y~x 滚动线性回归: y = a + b*x + eps。
 
@@ -1106,6 +1228,18 @@ def ts_zscore(x, d):
     [修复] 2026-07-06 std≈0 或冷启动期返回 NaN (原返回0违反冷启动保护, 产生虚假信号)
     [重构] 2026-07-06 numba @njit 加速"""
     return _ts_zscore_core(np.asarray(x, float), int(d))
+
+def ts_autocorr(x, lag, d):
+    """[新增] 2026-07-10 滚动自相关系数: x 与其 lag 期延迟值的 Pearson 相关系数"""
+    return _ts_autocorr_core(np.asarray(x, float), int(lag), _validate_window(d, 'ts_autocorr'))
+
+def ts_step(x, d):
+    """[新增] 2026-07-10 窗口内符号持续性: 是否所有值都 >= 0 (从未翻转为负)"""
+    return _ts_step_core(np.asarray(x, float), _validate_window(d, 'ts_step'))
+
+def ts_hump(x, d):
+    """[新增] 2026-07-10 窗口内驼峰检测: 是否中间高两端低 (先涨后跌形态)"""
+    return _ts_hump_core(np.asarray(x, float), _validate_window(d, 'ts_hump'))
 
 def ts_scale(x, d):
     """[修正] 2026-06-25 过滤 NaN, 对齐 WQ 标准
@@ -1702,6 +1836,9 @@ _register('ts_cov', ts_cov, 'ts_function', data_args=2, param_pool=[5, 10, 20])
 _register('ts_var', lambda x, d: ts_std(x, d) ** 2, 'ts_function', param_pool=[10, 20])
 _register('ts_logret', lambda x: safe_log(x / ts_delay(x, 1)), 'ts_function')
 _register('ts_zscore', ts_zscore, 'ts_function', param_pool=[10, 20, 60])
+_register('ts_autocorr', ts_autocorr, 'ts_function', param_pool=[(1, 10), (5, 20), (10, 60)])
+_register('ts_step', ts_step, 'ts_function', param_pool=[5, 10, 20])
+_register('ts_hump', ts_hump, 'ts_function', param_pool=[10, 20])
 _register('ts_scale', ts_scale, 'ts_function', param_pool=[10, 20])
 _register('ts_quantile', ts_quantile, 'ts_function', param_pool=[5, 10, 20],
           param_ranges=[ParamRange('p', 'float', 0.0, 1.0)])

@@ -1,41 +1,15 @@
-# [重构] 2026-07-07 新增 _SignalFromAST 轻量 AST 求值器 + _build_gp_data_dict
 """
-signals/v5/expression.py — 择时信号表达式 (继承 AstExpression)
-=============================================================================
+signals/v5/expression.py — 择时信号表达式 (直连 utils.ast.v2)
 
-Expression 是 AstExpression 的择时子类，在基类的解析+自省能力之上，
-增加单品种 DataFrame → 1D 信号序列的求值能力。
-
-职责:
-  - generate(ohlcv_df)         → 单品种择时信号 pd.Series
-  - evaluate_panel({code: df}) → 多品种逐列求值 pd.DataFrame
-  - rank_panel({code: df})     → 多品种截面排名 pd.DataFrame
-
-新增 (v5):
-  - _SignalFromAST: 轻量 AST 包装器，接收已有 AST 树直接求值 (跳过 parse)
-                    供 GP 引擎 evaluator 使用，避免反复 parse 字符串。
-  - _build_gp_data_dict: 为 GP 引擎构建完整数据字典 (含所有可能变量)
-
-与 factor/v5/FactorExpression 的关系:
-  - 共同基类: utils.ast.AstExpression (parse→variables→functions→complexity)
-  - 差异: Expression 输入 pd.DataFrame(含OHLCV列), 输出 pd.Series
-          FactorExpression 输入 Dict[str, ndarray], 输出 ndarray(T,N)
-
-用法:
-  >>> from signals.v5 import Expression
-  >>> expr = Expression("(CLOSE / ts_mean(CLOSE, 50) - 1) * 100")
-  >>> signal = expr.generate(ohlcv_df)  # -> pd.Series
-  >>> from signals.v5 import SigEngine
-  >>> analyzer = SigEngine.backtest(signal, data, mode='fast')
-=============================================================================
+[v5] 2026-07-10 从 v4 迁移，移除兼容重导出，直接导入 ast.v2。
 """
-import ast
 import pandas as pd
 import numpy as np
 from typing import Dict, List
 
-from utils.ast import AstExpression, CsResolver, normalize_data_keys
-from utils.ast.dsl import evaluate
+from utils.ast.v2.spec import AstExpression
+from utils.ast.v2.dsl import evaluate
+from utils.ast.v2 import CsResolver, normalize_data_keys
 
 
 class Expression(AstExpression):
@@ -43,14 +17,6 @@ class Expression(AstExpression):
 
     generate() 将 DataFrame 列映射为 ALL_CAPS 变量名，
     逐日求值后返回连续信号序列 (值 >0 做多)。
-
-    Attributes (继承自 AstExpression):
-        expr_str, name, _tree, variables, functions, complexity
-
-    Example:
-        >>> expr = Expression("rsi(CLOSE, 14) < -0.3 and ts_roc(CLOSE, 5) > 0")
-        >>> signal = expr.generate(ohlcv_df)
-        >>> print(signal.describe())
     """
 
     def generate(self, data: pd.DataFrame,
@@ -88,7 +54,6 @@ class Expression(AstExpression):
 
         Returns:
             DataFrame(index=日期, columns=品种代码)，值为连续因子值
-            每列是该品种在同一表达式下的求值结果
         """
         results = {}
         for code, df in assets.items():
@@ -103,7 +68,6 @@ class Expression(AstExpression):
 
         panel = pd.DataFrame(results)
 
-        # 日期对齐
         if align == 'inner':
             common_index = panel.index
             for col in panel.columns:
@@ -117,19 +81,13 @@ class Expression(AstExpression):
         """
         多品种批量求值 + 截面排名（一步到位）
 
-        含 cs_* 截面函数时 → CsResolver (需完整2D面板)
-        无截面函数时 → 逐品种求值 + 每日 scipy 排名
-
         Returns:
             DataFrame(index=日期, columns=品种代码)，值为 0~1 截面百分位排名
         """
-        # 含截面函数 → 委托 CsResolver (需要完整2D面板)
         if self._has_cs:
             return self._rank_panel_via_csresolver(assets, align)
 
-        # 无截面函数 → 原有逻辑 (逐品种求值安全)
         panel = self.evaluate_panel(assets, align=align)
-        # 每日截面排名
         from scipy.stats import rankdata
         ranked = panel.copy()
         for i in range(len(panel)):
@@ -142,20 +100,14 @@ class Expression(AstExpression):
 
     def _rank_panel_via_csresolver(self, assets: Dict[str, pd.DataFrame],
                                     align: str = 'inner') -> pd.DataFrame:
-        """委托 CsResolver 正确处理截面函数 (需要完整2D面板)
-
-        [重构] 2026-06-22 直接使用 utils.ast.CsResolver,
-        不再经过 factor.v5.FactorExpression 中转 (消除跨模块循环依赖)。
-        """
+        """委托 CsResolver 正确处理截面函数 (需要完整2D面板)"""
         symbols = list(assets.keys())
 
-        # 收集所有品种的日期交集 → 确保面板对齐
         common_dates = assets[symbols[0]].index
         for sym in symbols[1:]:
             common_dates = common_dates.intersection(assets[sym].index)
         dates = sorted(common_dates)
 
-        # 为每个需要的变量构建 (T,N) ndarray
         panel_data = {}
         for var in self.variables:
             var_upper = var.upper()
@@ -168,7 +120,6 @@ class Expression(AstExpression):
                     mat[:, j] = df[col_name].reindex(dates).values.astype(float)
             panel_data[var_upper] = mat
 
-        # 直接使用 CsResolver (单遍 bottom-up 处理嵌套/组合截面函数)
         ranked = CsResolver().resolve(self._tree, panel_data)
 
         return pd.DataFrame(ranked, index=dates, columns=symbols)
@@ -179,20 +130,7 @@ def stateful_signal(data: pd.DataFrame, buy_expr: str, sell_expr: str,
                     extra_features: Dict[str, np.ndarray] = None) -> pd.Series:
     """状态机信号: 空仓等BUY→持仓→SELL/超时→空仓
 
-    将非对称 BUY/SELL 表达式转换为单一持仓信号序列，
-    适用于择时策略的 BUY/SELL 分离设计。
-
-    [新增] 2026-07-07 从 AI_zeshi 模板提取到 v5 公共 API。
-
-    Args:
-        data: OHLCV DataFrame
-        buy_expr: 买入触发表达式（值 >0 触发建仓）
-        sell_expr: 卖出触发表达式（值 >0 触发平仓），可为 None
-        max_hold: 最长持仓天数，None = 不超时
-        extra_features: 注入 Expression.generate() 的额外特征
-
-    Returns:
-        pd.Series, index 对齐 data, 值 {0, 1}
+    [v5] 2026-07-10 从 v4 原样迁移，逻辑不变。
     """
     buy_sig = Expression(buy_expr).generate(data, extra_features=extra_features)
     sell_sig = None
@@ -212,7 +150,6 @@ def stateful_signal(data: pd.DataFrame, buy_expr: str, sell_expr: str,
                 sig[i] = 0; pos = 0; hold = 0
             else:
                 sig[i] = 1
-        # pos == 0: sig[i] stays 0
 
     return pd.Series(sig, index=data.index, name=f"STF(B={buy_expr[:30]}, S={sell_expr[:20] if sell_expr else 'None'})")
 
@@ -222,23 +159,19 @@ def _build_data_dict(data: pd.DataFrame,
                      extra_features: Dict[str, np.ndarray] = None) -> Dict[str, np.ndarray]:
     """从 OHLCV DataFrame 构建求值数据字典
 
-    列名大小写不敏感，自动映射 open/high/low/close/volume/amount。
-    支持衍生字段 RETURNS/VWAP 的自动计算。
+    [v5] 2026-07-10 从 v4 原样迁移。
     """
     data_dict = {}
     n = len(data)
 
-    # 列名映射（大小写不敏感）
     col_map = {c.upper().strip(): c for c in data.columns}
 
-    # 标准 OHLCV
     for std, alt in [('CLOSE','close'), ('OPEN','open'), ('HIGH','high'),
                       ('LOW','low'), ('VOLUME','volume'), ('AMOUNT','amount')]:
         key = std if std in col_map else (alt if alt in col_map else None)
         if key:
             data_dict[std] = data[col_map[key]].values.astype(float)
 
-    # 衍生字段
     for var in required_vars:
         u = var.upper()
         if u in ('RETURNS', 'RET') and 'CLOSE' in data_dict:
@@ -249,99 +182,8 @@ def _build_data_dict(data: pd.DataFrame,
             v = data_dict['VOLUME']
             data_dict['VWAP'] = np.where(v > 0, data_dict['AMOUNT'] / v, data_dict['CLOSE'])
 
-    # 注入额外特征
     if extra_features:
         for name, arr in extra_features.items():
             data_dict[name.upper()] = np.asarray(arr, dtype=float)
-
-    return data_dict
-
-
-# ============================================================
-# v5 新增: _SignalFromAST — 轻量 AST 求值器 (GP 引擎用)
-# ============================================================
-
-class _SignalFromAST:
-    """轻量 AST 包装器: 接收已有 AST 树直接求值 (跳过 parse)
-
-    使用场景: GP 引擎在内部生成/变异 ast.Expression 对象，
-    直接传入此包装器求值，避免反复 parse 字符串。
-
-    与 AstExpression 的区别:
-      - AstExpression: expr_str → parse → tree → evaluate
-      - _SignalFromAST: tree (已有) → evaluate
-
-    与 factor/v5/_ExpressionFromAST 的区别:
-      - 因子端: 输入 Dict[str, ndarray], 输出 ndarray(T,N) (2D 面板)
-      - 信号端: 输入 Dict[str, ndarray], 输出 1D ndarray (信号序列)
-    """
-
-    def __init__(self, tree: ast.Expression, name: str = ''):
-        self._tree = tree
-        self.name = name
-
-    def evaluate(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        """从数据字典求值 → 1D ndarray (信号序列)
-
-        Args:
-            data: Dict[str, np.ndarray], 由 _build_gp_data_dict 构建
-                  或由 _build_data_dict 按需构建
-
-        Returns:
-            np.ndarray, 1D 信号序列
-        """
-        # [修复] 2026-07-07 对齐 factor/v5: 加 normalize_data_keys + nan_to_num
-        data_norm = normalize_data_keys(data)
-        result = evaluate(self._tree, data_norm)
-        if result.size == 1:
-            n = 0
-            for v in data_norm.values():
-                if isinstance(v, (np.ndarray, list)):
-                    n = max(n, len(np.asarray(v).ravel()))
-                    break
-            result = np.full(max(n, 1), result.item())
-        result = np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
-        return result.flatten()
-
-
-def _build_gp_data_dict(data: pd.DataFrame) -> Dict[str, np.ndarray]:
-    """为 GP 引擎构建完整数据字典 (含所有可能变量)
-
-    GP 引擎在随机生成/变异表达式时，变量名不确定，
-    需要预构建包含所有 OHLCV 变量的数据字典。
-
-    与 _build_data_dict 的区别:
-      - _build_data_dict: 按 required_vars 按需构建 (Expression.generate 用)
-      - _build_gp_data_dict: 预构建全部变量 (GP 引擎 evaluator 用)
-
-    Args:
-        data: OHLCV DataFrame
-
-    Returns:
-        Dict[str, np.ndarray]: 含 CLOSE/OPEN/HIGH/LOW/VOLUME/AMOUNT/RETURNS/VWAP
-    """
-    data_dict = {}
-    n = len(data)
-
-    col_map = {c.upper().strip(): c for c in data.columns}
-
-    # 标准 OHLCV
-    for std, alt in [('CLOSE', 'close'), ('OPEN', 'open'), ('HIGH', 'high'),
-                     ('LOW', 'low'), ('VOLUME', 'volume'), ('AMOUNT', 'amount')]:
-        key = std if std in col_map else (alt if alt in col_map else None)
-        if key:
-            data_dict[std] = data[col_map[key]].values.astype(float)
-
-    # 衍生字段
-    if 'CLOSE' in data_dict:
-        c = data_dict['CLOSE']
-        r = np.full(n, np.nan)
-        r[1:] = c[1:] / c[:-1] - 1
-        data_dict['RETURNS'] = r
-        data_dict['RET'] = r
-
-    if 'AMOUNT' in data_dict and 'VOLUME' in data_dict:
-        v = data_dict['VOLUME']
-        data_dict['VWAP'] = np.where(v > 0, data_dict['AMOUNT'] / v, data_dict['CLOSE'])
 
     return data_dict
