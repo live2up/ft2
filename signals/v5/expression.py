@@ -156,11 +156,16 @@ def stateful_signal(data: pd.DataFrame, buy_expr: str, sell_expr: str,
 
 
 def _build_data_dict(data: pd.DataFrame,
-                     required_vars: List[str],
+                     required_vars: List[str] = None,
                      extra_features: Dict[str, np.ndarray] = None) -> Dict[str, np.ndarray]:
     """从 OHLCV DataFrame 构建求值数据字典
 
     [v5] 2026-07-10 从 v4 原样迁移。
+    
+    Args:
+        data: OHLCV DataFrame
+        required_vars: 需要的变量列表。None 表示包含所有标准变量和派生变量
+        extra_features: 额外预计算特征
     """
     data_dict = {}
     n = len(data)
@@ -173,15 +178,25 @@ def _build_data_dict(data: pd.DataFrame,
         if key:
             data_dict[std] = data[col_map[key]].values.astype(float)
 
-    for var in required_vars:
-        u = var.upper()
-        if u in ('RETURNS', 'RET') and 'CLOSE' in data_dict:
+    # 派生变量：required_vars=None 时生成所有，否则按需生成
+    if required_vars is None:
+        if 'CLOSE' in data_dict:
             c = data_dict['CLOSE']
             r = np.full(n, np.nan); r[1:] = c[1:] / c[:-1] - 1
             data_dict['RETURNS'] = r; data_dict['RET'] = r
-        elif u == 'VWAP' and 'AMOUNT' in data_dict and 'VOLUME' in data_dict:
+        if 'AMOUNT' in data_dict and 'VOLUME' in data_dict:
             v = data_dict['VOLUME']
             data_dict['VWAP'] = np.where(v > 0, data_dict['AMOUNT'] / v, data_dict['CLOSE'])
+    else:
+        for var in required_vars:
+            u = var.upper()
+            if u in ('RETURNS', 'RET') and 'CLOSE' in data_dict:
+                c = data_dict['CLOSE']
+                r = np.full(n, np.nan); r[1:] = c[1:] / c[:-1] - 1
+                data_dict['RETURNS'] = r; data_dict['RET'] = r
+            elif u == 'VWAP' and 'AMOUNT' in data_dict and 'VOLUME' in data_dict:
+                v = data_dict['VOLUME']
+                data_dict['VWAP'] = np.where(v > 0, data_dict['AMOUNT'] / v, data_dict['CLOSE'])
 
     if extra_features:
         for name, arr in extra_features.items():
@@ -237,29 +252,4 @@ def _build_gp_data_dict(data: pd.DataFrame,
     Returns:
         Dict[str, np.ndarray]，可直接传入 gp/v5 evaluator
     """
-    data_dict = {}
-    n = len(data)
-
-    col_map = {c.upper().strip(): c for c in data.columns}
-
-    for std, alt in [('CLOSE','close'), ('OPEN','open'), ('HIGH','high'),
-                      ('LOW','low'), ('VOLUME','volume'), ('AMOUNT','amount')]:
-        key = std if std in col_map else (alt if alt in col_map else None)
-        if key:
-            data_dict[std] = data[col_map[key]].values.astype(float)
-
-    # 常用派生变量
-    if 'CLOSE' in data_dict:
-        c = data_dict['CLOSE']
-        r = np.full(n, np.nan); r[1:] = c[1:] / c[:-1] - 1
-        data_dict['RETURNS'] = r; data_dict['RET'] = r
-
-    if 'AMOUNT' in data_dict and 'VOLUME' in data_dict:
-        v = data_dict['VOLUME']
-        data_dict['VWAP'] = np.where(v > 0, data_dict['AMOUNT'] / v, data_dict['CLOSE'])
-
-    if extra_features:
-        for name, arr in extra_features.items():
-            data_dict[name.upper()] = np.asarray(arr, dtype=float)
-
-    return data_dict
+    return _build_data_dict(data, required_vars=None, extra_features=extra_features)

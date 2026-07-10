@@ -400,6 +400,13 @@ class FacEngine:
                 n_target = len(target_codes)
 
                 if n_target > 0:
+                    # [注意] vector 模式采用等权重置：每次调仓强制所有持仓品种等权
+                    # 这与 fast 模式的行为不同：
+                    #   - fast 模式保留品种维持原权重，新买入品种按 1/len(top_codes) 定价
+                    #   - vector 模式所有目标持仓品种统一按 1/n_target 等权
+                    # 结果：表现好的品种权重不会被累积放大，表现差的品种也不会被自动稀释。
+                    # 适用场景：被动指数再平衡、等权因子轮动。
+                    # 若需对齐 fast 的绩效累积特性，应改为保留原权重 + 新品种按比例分配。
                     wt = 1.0 / n_target
                     new_weights = {c: wt for c in target_codes}
                 else:
