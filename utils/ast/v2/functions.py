@@ -831,16 +831,14 @@ def _ts_hump_core(x, d):
         # 找最大值及其位置
         max_val = 0.0
         max_idx = 0
-        has_valid = False
         valid_cnt = 0
         for j in range(d):
             if not np.isnan(window[j]):
                 valid_cnt += 1
-                if not has_valid or window[j] > max_val:
+                if valid_cnt == 1 or window[j] > max_val:
                     max_val = window[j]
                     max_idx = j
-                has_valid = True
-        if not has_valid or valid_cnt < 3:
+        if valid_cnt < 3:
             continue
         # 最大值位置在中间区域
         if max_idx < lo or max_idx > hi:

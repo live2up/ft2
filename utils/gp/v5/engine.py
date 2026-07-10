@@ -339,7 +339,7 @@ class GPEngine:
             return "unknown"
         import re
         from collections import Counter
-        from utils.ast.functions import FUNC_REGISTRY
+        from utils.ast.v2.functions import FUNC_REGISTRY
         funcs = set(re.findall(r'([a-z_]+)\(', expr_str))
         math_sig = '+'.join(sorted(
             f for f in funcs

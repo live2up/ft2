@@ -108,7 +108,7 @@ def _fill_weights(user_weights, default_keys, fill_value=0):
 
 def _get_funcs_by_group(group_name: str) -> list:
     """从 FUNC_CATEGORIES 获取指定 group_weights 大类下的函数名列表。"""
-    from utils.ast.functions import FUNC_CATEGORIES
+    from utils.ast.v2.functions import FUNC_CATEGORIES
     return sorted(set(FUNC_CATEGORIES.get(group_name, [])))
 
 

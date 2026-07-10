@@ -60,7 +60,7 @@ def _random_terminal(cfg: TreeGenConfig) -> ast.AST:
 
 def _get_func_spec(func_name: str):
     """从 FUNC_REGISTRY 惰性查询 FunctionSpec。"""
-    from utils.ast.functions import FUNC_REGISTRY
+    from utils.ast.v2.functions import FUNC_REGISTRY
     return FUNC_REGISTRY.get(func_name.lower())
 
 
@@ -85,7 +85,7 @@ def _random_call(cfg: TreeGenConfig, depth: int, weight_key: str) -> ast.Call:
                 func_names, func_weights = zip(*filtered)
         func_name = rng.choices(func_names, weights=func_weights, k=1)[0]
     elif cfg.func_allowlist:
-        from utils.ast.functions import FUNC_REGISTRY
+        from utils.ast.v2.functions import FUNC_REGISTRY
         available = [f for f in cfg.func_allowlist if f in FUNC_REGISTRY]
         func_name = rng.choice(available) if available else rng.choice(list(FUNC_REGISTRY.keys()))
     else:

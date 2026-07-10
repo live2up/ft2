@@ -11,7 +11,7 @@ from typing import List
 
 logger = logging.getLogger(__name__)
 
-from utils.ast.dsl import ast_depth, ast_node_count
+from utils.ast.v2.dsl import ast_depth, ast_node_count
 
 
 # ============================================================
