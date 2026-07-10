@@ -3,6 +3,7 @@ signals/v5/expression.py — 择时信号表达式 (直连 utils.ast.v2)
 
 [v5] 2026-07-10 从 v4 迁移，移除兼容重导出，直接导入 ast.v2。
 """
+import ast
 import pandas as pd
 import numpy as np
 from typing import Dict, List
@@ -181,6 +182,81 @@ def _build_data_dict(data: pd.DataFrame,
         elif u == 'VWAP' and 'AMOUNT' in data_dict and 'VOLUME' in data_dict:
             v = data_dict['VOLUME']
             data_dict['VWAP'] = np.where(v > 0, data_dict['AMOUNT'] / v, data_dict['CLOSE'])
+
+    if extra_features:
+        for name, arr in extra_features.items():
+            data_dict[name.upper()] = np.asarray(arr, dtype=float)
+
+    return data_dict
+
+
+# ============================================================
+# GP 桥接层 (utils/gp/v5 专用)
+# ============================================================
+
+class _SignalFromAST:
+    """轻量 AST 包装器: 接收已有 AST 树直接求值为 1D 信号序列
+
+    使用场景: GP 引擎在内部生成/变异 ast.Expression 对象，
+    直接传入此包装器求值，避免反复 parse 字符串。
+
+    与 _ExpressionFromAST (factor/v5) 的区别:
+      - factor 端: 输出 2D 面板，保留 NaN 用于截面排名
+      - signal 端: 输出 1D 序列，NaN → 0 表示无信号
+    """
+
+    def __init__(self, tree: ast.Expression, name: str = ''):
+        self._tree = tree
+        self.name = name
+
+    def evaluate(self, data: Dict[str, np.ndarray]) -> np.ndarray:
+        """直接求值 AST 树 → 1D 信号序列
+
+        Args:
+            data: {变量名: np.ndarray}，由 _build_gp_data_dict 构建
+
+        Returns:
+            np.ndarray, 1D 信号序列，NaN → 0
+        """
+        data_norm = normalize_data_keys(data)
+        result = evaluate(self._tree, data_norm)
+        result = np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
+        return result.flatten()
+
+
+def _build_gp_data_dict(data: pd.DataFrame,
+                        extra_features: Dict[str, np.ndarray] = None) -> Dict[str, np.ndarray]:
+    """从 OHLCV DataFrame 构建 GP 求值数据字典
+
+    提取所有标准变量 + 常用派生变量 (RETURNS, RET, VWAP)。
+
+    Args:
+        data: OHLCV DataFrame (index=DatetimeIndex)
+        extra_features: 额外预计算特征 {特征名: np.ndarray}
+
+    Returns:
+        Dict[str, np.ndarray]，可直接传入 gp/v5 evaluator
+    """
+    data_dict = {}
+    n = len(data)
+
+    col_map = {c.upper().strip(): c for c in data.columns}
+
+    for std, alt in [('CLOSE','close'), ('OPEN','open'), ('HIGH','high'),
+                      ('LOW','low'), ('VOLUME','volume'), ('AMOUNT','amount')]:
+        key = std if std in col_map else (alt if alt in col_map else None)
+        if key:
+            data_dict[std] = data[col_map[key]].values.astype(float)
+
+    # 常用派生变量
+    if 'CLOSE' in data_dict:
+        c = data_dict['CLOSE']
+        r = np.full(n, np.nan); r[1:] = c[1:] / c[:-1] - 1
+        data_dict['RETURNS'] = r; data_dict['RET'] = r
+
+    if 'AMOUNT' in data_dict and 'VOLUME' in data_dict:
+        v = data_dict['VOLUME']
+        data_dict['VWAP'] = np.where(v > 0, data_dict['AMOUNT'] / v, data_dict['CLOSE'])
 
     if extra_features:
         for name, arr in extra_features.items():
