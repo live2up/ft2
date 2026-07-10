@@ -54,12 +54,14 @@ class GPEngine:
                  tree_gen_config: TreeGenConfig = None,
                  evaluator: Optional[Callable] = None,
                  future_returns=None, returns=None,
-                 cache_db: str = ''):
+                 cache_db: str = '',
+                 source: str = ''):
         self.data = data
         self.future_returns = future_returns
         self.returns = returns
         self.fitness_calc = fitness_calculator
         self._evaluator = evaluator
+        self._source = source
 
         # 配置
         cfg = dict(DEFAULT_GP_CONFIG)
@@ -132,7 +134,14 @@ class GPEngine:
         import hashlib
         fingerprint = f"{self._shape}_{self.parsimony_penalty:.4f}"
         fitness_hash = hashlib.md5(fingerprint.encode()).hexdigest()[:12]
-        self.fitness_cache = FitnessCache(cache_db, fitness_hash)
+        # [新增] 2026-07-10 溯源信息: source + session_id
+        session_id = ''
+        if self._source:
+            seed_val = random_seed if random_seed is not None else 0
+            session_id = f"{self._source}_seed{seed_val}"
+        self.fitness_cache = FitnessCache(cache_db, fitness_hash,
+                                          source=self._source,
+                                          session_id=session_id)
 
         # 方向演化追踪
         self.direction_log: Dict[str, List[float]] = {}

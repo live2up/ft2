@@ -2,6 +2,7 @@
 utils/gp/v5/cache.py — Fitness 缓存（内存 + SQLite 持久化）
 =============================================================================
 [抽取] 2026-07-06 从 engine.py 拆分。封装缓存逻辑，支持 LRU 上限演进。
+[修改] 2026-07-10 新增 source/session_id 列，支持因子溯源。
 """
 import hashlib
 import sqlite3
@@ -23,10 +24,13 @@ class FitnessCache:
     避免 10 万+ 历史缓存一次性读入内存。
     """
 
-    def __init__(self, cache_db: str = '', fitness_hash: str = ''):
+    def __init__(self, cache_db: str = '', fitness_hash: str = '',
+                 source: str = '', session_id: str = ''):
         self._mem: Dict[str, Tuple[float, int, int]] = {}
         self._db = cache_db
         self._hash = fitness_hash
+        self._source = source
+        self._session_id = session_id
         self._lock = threading.Lock()
         if self._db:
             self._init_db()
@@ -37,9 +41,17 @@ class FitnessCache:
             expr_hash TEXT PRIMARY KEY,
             expression TEXT NOT NULL,
             fitness REAL, depth INTEGER, nodes INTEGER,
-            fitness_hash TEXT, created_at TEXT DEFAULT (datetime('now'))
+            fitness_hash TEXT,
+            source TEXT, session_id TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
         )''')
         conn.execute('CREATE INDEX IF NOT EXISTS idx_expr_hash ON expressions(fitness_hash)')
+        # [新增] 2026-07-10 旧库迁移：补列（SQLite ALTER TABLE 不支持 IF NOT EXISTS）
+        for col in ['source', 'session_id']:
+            try:
+                conn.execute(f'ALTER TABLE expressions ADD COLUMN {col} TEXT')
+            except sqlite3.OperationalError:
+                pass  # 列已存在
         conn.commit()
         conn.close()
 
@@ -85,11 +97,14 @@ class FitnessCache:
         data = []
         for expr, (fit, dep, nod) in self._mem.items():
             eh = hashlib.md5(expr.encode()).hexdigest()[:16]
-            data.append((eh, expr, fit, dep, nod, self._hash))
+            data.append((eh, expr, fit, dep, nod, self._hash,
+                         self._source or None,
+                         self._session_id or None))
         conn.executemany(
             'INSERT OR REPLACE INTO expressions'
-            '(expr_hash, expression, fitness, depth, nodes, fitness_hash)'
-            'VALUES(?,?,?,?,?,?)',
+            '(expr_hash, expression, fitness, depth, nodes,'
+            ' fitness_hash, source, session_id)'
+            'VALUES(?,?,?,?,?,?,?,?)',
             data,
         )
         conn.commit()
