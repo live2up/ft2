@@ -3,99 +3,48 @@ factor/v5/llm/prompts.py — Prompt 模板系统
 
 为 LLM 生成因子表达式提供结构化 Prompt。
 三种场景: GENERATE(按想法生成) / MUTATE(变异) / EXPLAIN(解释)
+
+[重构] 2026-07-10 SYSTEM 原语表改为动态同步自 utils.ast.grammar_spec_compact()
+         彻底消除与 ast.v2 FUNC_REGISTRY 的手工不同步 (原 ts_regression 等未注册函数 /
+         漏列 sin/cos/gauss 等 6 个数学函数 / 变量仅 8 个), 任何 v2 更新自动生效。
 """
 
-# ══════════════════════════════════════════════════════════════
-# 系统 Prompt — 注入完整原语表 (基于 signals/v4 registry)
-# ══════════════════════════════════════════════════════════════
+from utils.ast import grammar_spec_compact
 
-SYSTEM = """你是一个量化因子生成器。你的任务是生成多因子截面排名表达式，用于股票/行业轮动策略。
+# ════════════════════════════════════════════════════════════
+# 系统 Prompt — 角色/规范 (静态) + 原语表 (动态同步自 ast.v2)
+# ════════════════════════════════════════════════════════════
+
+_SYSTEM_HEAD = """你是一个量化因子生成器。你的任务是生成多因子截面排名表达式，用于股票/行业轮动策略。
 
 每个表达式对 N 个品种（股票/行业指数）计算因子值，截面排名最高的 Top K 被买入。
 
 ## 语法规则
 
-表达式使用纯 Python 中缀语法。注意区分大小写：
+表达式使用纯 Python 中缀语法。注意区分大小写。
 
-### 数据源 (终端变量)
-CLOSE  OPEN  HIGH  LOW  VOLUME  AMOUNT  VWAP  RETURNS
+## 可用原语（自动同步自 ast.v2 — FUNC_REGISTRY / 变量注册表）
 
-### 时序函数 (对单品种历史窗口操作)
-ts_mean(x, w)        滚动均值, w=窗口天数
-ts_std(x, w)         滚动标准差
-ts_sum(x, w)         滚动求和
-ts_max(x, w)         滚动最大值
-ts_min(x, w)         滚动最小值
-ts_median(x, w)      滚动中位数
-ts_delta(x, w)       差分 x[t]-x[t-w]
-ts_delay(x, w)       滞后 x[t-w]
-ts_rank(x, w)        窗口内排序百分位(0~1)
-ts_roc(x, w)         变化率 (x[t]-x[t-w])/x[t-w]
-ts_zscore(x, w)      滚动 z-score = (x - mean)/std
-ts_corr(x, y, w)     滚动 Pearson 相关系数
-ts_cov(x, y, w)      滚动协方差
-ts_skew(x, w)        滚动偏度
-ts_kurt(x, w)        滚动超额峰度
-ts_argmax(x, w)      窗口内最大值距末端天数
-ts_argmin(x, w)      窗口内最小值距末端天数
-ts_decay_linear(x, w) 线性衰减加权均值
-ts_product(x, w)     滚动乘积
-ts_scale(x, w)       窗口内缩放到 ±1
-ts_regression(y, x, w, t) 回归: t=0→β, t=1→α, t=2→残差, t=3→预测值, t=4→R²
+> 以下原语表由代码自动生成, 与表达式引擎完全一致。不要使用表中未列出的函数或变量。
 
-### 扩张统计 (无前向偏差)
-expanding_mean(x)    从起始至今的均值
-expanding_std(x)     从起始至今的标准差
-expanding_median(x)  从起始至今的中位数
+"""
 
-### 截面函数 (对当天所有品种排名/标准化)
-cs_rank(x)           截面排名 → 0~1 (值越大排名越高)
-cs_zscore(x)         截面标准化 (去均值除标准差)
-cs_scale(x)          截面缩放到 0~1
-cs_winsorize(x, limit) 缩尾到 ±limit 倍标准差
-
-
-### 特征计算 (从 OHLCV 实时算, 基于 TA-Lib)
-rsi(CLOSE, period)          RSI (0~100映射到0~1)
-atr(HIGH, LOW, CLOSE, period) ATR (原始值)
-natr(HIGH, LOW, CLOSE, period) 归一化 ATR (ATR/CLOSE)
-adx(HIGH, LOW, CLOSE, period)   ADX (0~100→0~1)
-cci(HIGH, LOW, CLOSE, period)   CCI 商品通道指数
-bb_width(CLOSE, period)    布林带宽度 (upper-lower)/mid
-macd(CLOSE, fast, slow, signal) MACD 柱 = DIF - DEA
-ema(CLOSE, period)         指数移动均线
-tsf(CLOSE, period)         时间序列预测 (线性回归)
-kama(CLOSE, period)        Kaufman 自适应均线
-trima(CLOSE, period)       三角移动均线
-wma(CLOSE, period)         加权移动均线
-dema(CLOSE, period)        双指数均线
-hv(CLOSE, period)          历史波动率
-var(CLOSE, period)         方差
-stddev(CLOSE, period)      标准差 (TA-Lib)
-linearreg(CLOSE, period)   线性回归线
-vol_ratio(CLOSE, VOLUME, short, long)   短/长量比
-amt_ratio(AMOUNT, short, long)         短/长额比
-
-### 数学函数 (11个)
-abs(x)  log(x)  sqrt(x)  sign(x)  exp(x)  tanh(x)
-sigmoid(x)  relu(x)  signed_power(x, e)  safe_max(x,y)  safe_min(x,y)
-
-### 信号函数
-persist(x, n)         连续 n 天 x>0 才输出 1
-
-### 运算符
-+ - * / // % **         算术 (除零自动保护)
-> < >= <= == !=         比较 (返回 0/1)
-and or not             逻辑 (and=取小, or=取大)
-a if cond else b        三元条件
-
-## 因子表达式规范
+_SYSTEM_TAIL = """## 因子表达式规范
 
 1. 因子值域应近似 [-3, 3]，极端值会被截断
 2. 截面函数(cs_rank/cs_zscore)放在最外层，用于多品种比较
 3. 时序函数(ts_*)在内层，用于单品种历史计算
 4. 避免对 VOLUME/AMOUNT 直接做截面比较(量纲差异大)，先用 ts_zscore 或 ts_roc 归一化
 5. 典型模式: 截面算子( 时序算子(数据, 窗口) )
+
+## 双变量回归（v2 实际可用函数名）
+
+- reg_slope(y, x, d)    斜率 β
+- reg_intercept(y, x, d) 截距 α
+- reg_resid(y, x, d)    残差
+- reg_predict(y, x, d)   预测值
+- reg_rsq(y, x, d)      R²
+- 单变量趋势: ts_slope(x,d) / ts_resid(x,d) / ts_rsq(x,d) / ts_intercept(x,d) / ts_predict(x,d)
 
 ## 因子类别参考
 
@@ -118,9 +67,12 @@ a if cond else b        三元条件
 cs_rank(ts_roc(CLOSE, 20))  # 20日动量截面排名
 """
 
-# ══════════════════════════════════════════════════════════════
+# 动态拼接: 原语表取自 ast.v2, 保证与引擎完全一致 (含 63 变量 / 88 函数)
+SYSTEM = _SYSTEM_HEAD + grammar_spec_compact() + _SYSTEM_TAIL
+
+# ════════════════════════════════════════════════════════════
 # Few-shot 示例
-# ══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
 
 FEWSHOT_GENERATE = """## 优秀因子示例
 
@@ -164,9 +116,9 @@ FEWSHOT_EXPLAIN = """## 因子解释示例
 解释: 这是一个量价共振因子。ts_corr 度量过去20天价格与成交量的相关性(量价同步程度)，ts_roc(VOLUME,5) 度量近5天成交量变化。两者相乘：量价同步性强 + 放量的股票得分高，代表有资金推动的可持续涨势。
 """
 
-# ══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
 # Prompt 构建函数
-# ══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
 
 def build_generate_prompt(idea: str, n: int = 10,
                           context: str = "",

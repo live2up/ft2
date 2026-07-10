@@ -357,13 +357,14 @@ AST_GRAMMAR_SPEC = """
    ts_median, ts_delta, ts_delay, ts_rank, ts_corr, ts_cov,
    ts_skew, ts_kurt, ts_argmax, ts_argmin, ts_roc, ts_zscore,
    ts_scale, ts_quantile, ts_av_diff, ts_decay_linear, ts_product,
-   ts_var, ts_logret, ts_regression, ts_resid
+   ts_var, ts_logret, ts_resid
+   reg_slope, reg_intercept, reg_resid, reg_predict, reg_rsq (双变量回归, 参数 y,x,d)
 
 2. **扩张统计** (expanding_*): expanding_mean, expanding_median,
    expanding_std, expanding_percentile
 
 3. **截面算子** (cs_*): cs_rank, cs_zscore, cs_scale, cs_winsorize,
-   cs_quantile
+   cs_quantile, cs_normalize
    注意: 截面函数需要完整 2D 面板数据, 不能在单品种择时中使用
 
 4. **特征计算**: rsi, atr, atr_sma, macd, adx, cci, bb_width,
@@ -371,6 +372,7 @@ AST_GRAMMAR_SPEC = """
    linearreg, vol_ratio, amt_ratio, wilder_smooth
 
 5. **数学运算**: abs, log, sqrt, sign, exp, tanh, sigmoid, relu,
+   softsign, sin, cos, gauss, p4, neg, square_sigmoid,
    signed_power, safe_max, safe_min
 
 6. **信号确认**: persist(expr, n) — 连续 n 日同向才触发
