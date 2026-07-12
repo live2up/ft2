@@ -173,7 +173,24 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 
 # ============================================================
-# 模块一: 内部工具函数 (1D 安全防护)
+
+# ═══ 模块二: 内部工具函数 ═══
+
+
+# ═══ 模块三: Numba @njit 核心函数 ═══
+
+[重构] 2026-07-06 ts_*/cs_* 函数用 numba @njit 加速, _rolling 作为 fallback 保留
+═══════════════════════════════════════════════════════════════
+"""
+import numpy as np
+import talib
+from dataclasses import dataclass, field
+from numba import njit
+from typing import Any, Callable, Dict, List, Optional, Union
+
+
+# ============================================================
+# 内部工具函数 (1D 安全防护)
 # ============================================================
 
 def _rolling(x: np.ndarray, window: int, func, *a, **kw):
@@ -241,10 +258,12 @@ def _validate_window(d, name):
 
 
 # ============================================================
-# 模块二: numba @njit 核心函数
+# [重构] 2026-07-06 numba @njit 核心函数
 # 所有 ts_*/cs_* 的计算逻辑在此实现, 上层 ts_* 为薄包装
 # NaN 处理: 跳过窗口内 NaN, 全 NaN 返回 NaN (ts_resid 返回 0.0)
 # ============================================================
+
+# ── 基础滚动 ──
 
 @njit(cache=True)
 def _ts_mean_core(x, d):
@@ -365,6 +384,8 @@ def _ts_median_core(x, d):
     return r
 
 
+# ── 排名/分位 ──
+
 @njit(cache=True)
 def _ts_rank_core(x, d):
     """滚动排名: 当前值 x[i] 在窗口内的归一化排名 [1/cnt, 1]。
@@ -453,6 +474,8 @@ def _ts_argmin_core(x, d):
             r[i] = i - best_idx
     return r
 
+
+# ── 位置 ──
 
 @njit(cache=True)
 def _ts_corr_core(x, y, d):
@@ -609,6 +632,8 @@ def _ts_kurt_core(x, d):
     return r
 
 
+# ── 加权/乘积 ──
+
 @njit(cache=True)
 def _ts_scale_core(x, d):
     """[重构] 2026-07-06 numba @njit 加速: 滚动缩放, x[i]/sum(|x|), sum_abs<=1e-10 返回 0"""
@@ -678,6 +703,8 @@ def _ts_product_core(x, d):
     return r
 
 
+# ── 形态/持续 ──
+
 @njit(cache=True)
 def _ts_quantile_core(x, d, p):
     """滚动分位数值: 返回窗口内 p 分位数的值 (非排名)。
@@ -713,6 +740,8 @@ def _ts_quantile_core(x, d, p):
             r[i] = sorted_v[idx]
     return r
 
+
+# ── 统计/分布 ──
 
 @njit(cache=True)
 def _ts_zscore_core(x, d):
@@ -862,6 +891,8 @@ def _ts_hump_core(x, d):
     return r
 
 
+# ── 回归: 双变量 y~x ──
+
 @njit(cache=True)
 def _ts_regression_core(y, x, d, rettype):
     """双变量 y~x 滚动线性回归: y = a + b*x + eps。
@@ -923,6 +954,8 @@ def _ts_regression_core(y, x, d, rettype):
                         r[i] = 0.0
     return r
 
+
+# ── 回归: 单变量 x~t ──
 
 @njit(cache=True)
 def _ts_linear_reg_core(x, window, rettype, fill_value):
@@ -1002,6 +1035,8 @@ def _ts_linear_reg_core(x, window, rettype, fill_value):
                         r[i] = 0.0
     return r
 
+
+# ── 截面 ──
 
 @njit(cache=True)
 def _cs_zscore_core(x):
@@ -1144,13 +1179,14 @@ def _cs_rank_core(panel):
 
 
 # ============================================================
-# 模块三: 时序函数 (ts_) — 窗口滚动, 只用历史数据
+
+# ═══ 模块四: 时序函数 (ts_) 包装层 ═══
+
+# 时序函数 (ts_) — 窗口滚动, 只用历史数据
 # ============================================================
 
 # [修正] 2026-06-25 改用 nan* 版本, 对齐 WQ NaN=缺失数据应忽略的规范
 # [重构] 2026-07-06 改用 numba @njit 加速, _rolling 作为 fallback 保留
-
-# ── 基础统计 ──
 def ts_mean(x, d):       return _ts_mean_core(np.asarray(x, float), _validate_window(d, 'ts_mean'))
 def ts_std(x, d):        return _ts_std_core(np.asarray(x, float), _validate_window(d, 'ts_std'))
 def ts_sum(x, d):
@@ -1160,7 +1196,6 @@ def ts_max(x, d):        return _ts_max_core(np.asarray(x, float), _validate_win
 def ts_min(x, d):        return _ts_min_core(np.asarray(x, float), _validate_window(d, 'ts_min'))
 def ts_median(x, d):     return _ts_median_core(np.asarray(x, float), _validate_window(d, 'ts_median'))
 
-# ── 周期/差分 ──
 def ts_delta(x, d):
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
     r[d:] = x[d:] - x[:-d]; return r
@@ -1169,13 +1204,11 @@ def ts_delay(x, d):
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
     r[d:] = x[:-d]; return r
 
-# ── 统计/排名 ──
 def ts_rank(x, d):
     """[修复] 2026-07-06 过滤 NaN 后计算排名, 避免 NaN 干扰 searchsorted
     [重构] 2026-07-06 numba @njit 加速"""
     return _ts_rank_core(np.asarray(x, float), int(d))
 
-# ── 相关/协方差 ──
 def ts_corr(x, y, d):
     """[修复] 2026-07-06 过滤 NaN 后计算, 对齐 WQ NaN=缺失数据应忽略规范
     [重构] 2026-07-06 numba @njit 加速"""
@@ -1197,7 +1230,6 @@ def ts_kurt(x, d):
     [重构] 2026-07-06 numba @njit 加速"""
     return _ts_kurt_core(np.asarray(x, float), int(d))
 
-# ── 分布形状/极值位置 ──
 def ts_argmax(x, d):
     """滚动窗口最大值位置: 返回最大值距今天数。
 
@@ -1276,11 +1308,24 @@ def ts_product(x, d):
     [重构] 2026-07-06 numba @njit 加速"""
     return _ts_product_core(np.asarray(x, float), _validate_window(d, 'ts_product'))
 
-# ═══════════════════════════════════════════════════════════════
-# 回归函数 (x~t 趋势回归 + y~x 双变量回归)
-# ═══════════════════════════════════════════════════════════════
+def regression(y, x, d, rettype=2):
+    """滚动线性回归: y = alpha + beta*x + eps
 
-# ── x~t 趋势回归 (单变量对时间) ──
+    Args:
+        y: 因变量
+        x: 自变量
+        d: 窗口
+        rettype: 0=斜率, 1=截距, 2=残差, 3=预测值, 4=R²
+
+    [重构] 2026-07-06 numba @njit 加速
+    """
+    return _ts_regression_core(np.asarray(y, float), np.asarray(x, float), int(d), int(rettype))
+
+
+# [兼容] 2026-07-03 旧名别名（已停止生产使用，后续删除）
+ts_regression_residual = lambda y, x, d: regression(y, x, d, 2)  # 默认 rettype=2 → 残差
+
+
 def ts_resid(x, window):
     """时序回归残差: 对时间做线性回归 x=a+b*t，返回当前值-预测值
     [重构] 2026-07-06 numba @njit 加速
@@ -1311,7 +1356,7 @@ def ts_predict(x, window):
     [重构] 2026-07-06 numba @njit 加速, 默认填充值 NaN"""
     return _ts_linear_reg_core(np.asarray(x, float), int(window), 3, np.nan)
 
-# ── 自回归残差 ──
+
 def ts_ar_resid(x, order=5):
     """自回归残差: X(t) ~ c + φ₁X(t-1) + ... + φpX(t-p), 返回残差 ε(t)。
 
@@ -1351,28 +1396,42 @@ def ts_ar_resid(x, order=5):
     return r
 
 
-# ── y~x 双变量回归 (y 对 x) ──
-def regression(y, x, d, rettype=2):
-    """滚动线性回归: y = alpha + beta*x + eps
+# ── 双变量回归 (y~x) ──
+# [说明] reg_* 函数是双变量回归 y~x 的包装器，
+#        底层调用 _ts_regression_core，返回斜率/截距/残差/预测值/R²
+#        与 ts_slope/ts_resid 等单变量回归(x~t)区分开
 
-    Args:
-        y: 因变量
-        x: 自变量
-        d: 窗口
-        rettype: 0=斜率, 1=截距, 2=残差, 3=预测值, 4=R²
-
-    [重构] 2026-07-06 numba @njit 加速
-    """
-    return _ts_regression_core(np.asarray(y, float), np.asarray(x, float), int(d), int(rettype))
+def reg_slope(y, x, d):
+    """双变量回归斜率: y = a + b*x + eps，返回斜率 b"""
+    return regression(y, x, d, 0)
 
 
-# [兼容] 2026-07-03 旧名别名（已停止生产使用，后续删除）
-ts_regression_residual = lambda y, x, d: regression(y, x, d, 2)  # 默认 rettype=2 → 残差
+def reg_intercept(y, x, d):
+    """双变量回归截距: y = a + b*x + eps，返回截距 a"""
+    return regression(y, x, d, 1)
+
+
+def reg_resid(y, x, d):
+    """双变量回归残差: y = a + b*x + eps，返回残差 y - (a+b*x)"""
+    return regression(y, x, d, 2)
+
+
+def reg_predict(y, x, d):
+    """双变量回归预测值: y = a + b*x + eps，返回预测值 a+b*x"""
+    return regression(y, x, d, 3)
+
+
+def reg_rsq(y, x, d):
+    """双变量回归 R²: y = a + b*x + eps，返回 R²"""
+    return regression(y, x, d, 4)
 
 
 # ============================================================
-# 模块四: 扩张统计 (expanding_) — 起始→当前, 无固定窗口
+# 扩张统计 (expanding_) — 起始→当前, 无固定窗口
 # ============================================================
+
+
+# ═══ 模块五: 扩张统计 (expanding_) ═══
 
 def expanding_mean(x, min_p=20):    return _expanding(x, np.mean, max(1, int(min_p)))
 def expanding_median(x, min_p=20):  return _expanding(x, np.median, max(1, int(min_p)))
@@ -1382,8 +1441,11 @@ def expanding_percentile(x, p, min_p=20):
 
 
 # ============================================================
-# 模块五: 截面函数 (cs_) — 每日跨品种统计, 需完整 2D 面板
+# 截面函数 (cs_) — 每日跨品种统计, 需完整 2D 面板
 # ============================================================
+
+
+# ═══ 模块六: 截面函数 (cs_) ═══
 
 def cs_rank(x):
     """截面排名: 并列值取最小排名, 归一化到 (0, 1]。
@@ -1454,8 +1516,11 @@ def cs_quantile(x, q=0.5, interpolation='linear'):
 
 
 # ============================================================
-# 模块六: 数学函数 — 逐元素安全运算
+# 数学函数 — 逐元素安全运算
 # ============================================================
+
+
+# ═══ 模块七: 数学函数 ═══
 
 def safe_abs(x):          return np.abs(x)
 def safe_log(x):
@@ -1526,7 +1591,7 @@ def safe_min(x, y):    return np.minimum(x, y)
 
 
 # ============================================================
-# 模块七: 信号函数
+# 信号函数
 # ============================================================
 #
 # ── 非对称买卖模式（单表达式即可实现，无需额外状态机） ──
@@ -1548,12 +1613,18 @@ def safe_min(x, y):    return np.minimum(x, y)
 #
 # 所有模式输出为连续信号线，引擎层按 >0 做多 / <0 做空 解释。
 
+
+# ═══ 模块八: 信号函数 ═══
+
 def persist(x, n=3):
     return _persist(x, n)
 
 
 # ============================================================
-# 模块八: 特征计算函数 (从 OHLCV 实时算，无需 FeatureSpace)
+
+# ═══ 模块九: 特征计算函数 (TA-Lib) ═══
+
+# 特征计算函数（从原始 OHLCV 数组实时算，无需 FeatureSpace）
 # ============================================================
 
 def _feature_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
@@ -1744,7 +1815,10 @@ def _feature_amt_ratio(amount: np.ndarray, short: int = 5, long: int = 20) -> np
 
 
 # ============================================================
-# 模块九: 函数注册表 (FUNC_REGISTRY + FunctionSpec)
+
+# ═══ 模块十: 函数注册表 + 注册 ═══
+
+# 函数注册表
 # ============================================================
 
 # [重构] 2026-07-07 引入 FunctionSpec: 把函数实现、GP 分类、数据参数个数、
@@ -1918,11 +1992,11 @@ _register('ts_av_diff', ts_av_diff, 'ts_function', param_pool=[10, 20])
 _register('ts_decay_linear', ts_decay_linear, 'ts_function', param_pool=[5, 10, 20])
 _register('ts_product', ts_product, 'ts_function', param_pool=[10, 20])
 # ── 双变量回归 reg_ (y~x, 3 参数: y, x, d) ──
-_register('reg_slope', lambda y, x, d: regression(y, x, d, 0), 'ts_function', data_args=2, param_pool=[5, 10])
-_register('reg_intercept', lambda y, x, d: regression(y, x, d, 1), 'ts_function', data_args=2, param_pool=[5, 10])
-_register('reg_resid', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_args=2, param_pool=[5, 10])
-_register('reg_predict', lambda y, x, d: regression(y, x, d, 3), 'ts_function', data_args=2, param_pool=[5, 10])
-_register('reg_rsq', lambda y, x, d: regression(y, x, d, 4), 'ts_function', data_args=2, param_pool=[5, 10])
+_register('reg_slope', reg_slope, 'ts_function', data_args=2, param_pool=[5, 10])
+_register('reg_intercept', reg_intercept, 'ts_function', data_args=2, param_pool=[5, 10])
+_register('reg_resid', reg_resid, 'ts_function', data_args=2, param_pool=[5, 10])
+_register('reg_predict', reg_predict, 'ts_function', data_args=2, param_pool=[5, 10])
+_register('reg_rsq', reg_rsq, 'ts_function', data_args=2, param_pool=[5, 10])
 _register('ts_slope', ts_slope, 'ts_function', param_pool=[10, 20])
 _register('ts_intercept', ts_intercept, 'ts_function', param_pool=[10, 20])
 _register('ts_resid', ts_resid, 'ts_function', param_pool=[10, 20])
@@ -2008,15 +2082,18 @@ _register('ts_regression_residual', lambda y, x, d: regression(y, x, d, 2), 'ts_
 _register('ts_rsquare', ts_rsq, 'ts_function', param_pool=[10, 20])
 _register('ts_logret', lambda x: safe_log(x / ts_delay(x, 1)), 'math_function')  # [废弃] 改用 logret
 
-# ============================================================
-# 模块十: 安全常量 + 变量层 (合并自 variables.py)
-# ============================================================
-# 统一管理"能引用什么"(变量)和"能算什么"(函数)两类元数据。
-# [新增] 2026-07-08 VarSpec + _VAR_REGISTRY, 替代双表分离模式。
-# ============================================================
-
 # 安全常量 (表达式中的 True/False/None/pi/e)
 SAFE_CONSTANTS = {'True': 1.0, 'False': 0.0, 'None': 0.0, 'pi': np.pi, 'e': np.e}
+
+
+# ============================================================
+
+# ═══ 模块十一: 变量�� ═══
+
+# 变量层 — 合并自 variables.py
+# [重构] 2026-07-08 将 variables.py 合并到 functions.py,
+# 统一管理"能引用什么"(变量)和"能算什么"(函数)两类元数据。
+# [新增] 2026-07-08 VarSpec + _VAR_REGISTRY, 替代双表分离模式。
 # ============================================================
 
 # ── 单一事实来源: _VAR_REGISTRY ──
@@ -2164,7 +2241,10 @@ def _sync_var_backward_compat():
 
 
 # ============================================================
-# 模块十一: 临时自定义注册 API (LLM 探索时热添加)
+
+# ═══ 模块十二: 自定义注册 API ═══
+
+# 临时自定义注册 (LLM 探索时热添加，无需修改 functions.py)
 # ============================================================
 #
 # 使用场景:
