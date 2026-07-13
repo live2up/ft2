@@ -2,7 +2,7 @@
 
 > **AI 助手请先阅读此文件**，掌握 Notebook 输出模块的调用规范和数据格式
 >
-> **版本：v2.1.0 | 更新日期：2026-05-30**
+> **版本：v2.2.0 | 更新日期：2026-07-13**
 
 ---
 
@@ -61,15 +61,16 @@ nb = Notebook(title: str = "Notebook Report")
 ### 输出
 
 ```python
-nb.export_html(name=None, template_path=None, local_static=False)
+nb.export_html(name=None, template_path=None, local_static=False, base_dir=None)
 # name: 输出文件名（不含 .html 扩展名），默认使用标题
 # template_path: 自定义模板路径，默认 ../template/notebook.html
 # local_static: True=本地 file:// 资源（离线），False=CDN 资源（默认）
+# base_dir: 输出目录（None=自动: 实例 base_dir > cwd）
 nb.to_json()                                    # 导出 JSON 字符串
 nb.to_dict()                                    # 导出字典
 ```
 
-**输出路径规则：** HTML 文件输出到 **调用者脚本所在目录**（`base_dir`），非 notebook 模块目录。
+**输出路径规则：** HTML 文件输出目录按优先级：显式 `base_dir` 参数 > 实例属性 `nb.base_dir` > 当前工作目录 (`os.getcwd()`)。可通过 `nb.base_dir = '/path'` 预设输出目录。
 **本地测试：** 使用 `local_static=True`，浏览器通过 `file://` 协议加载本地 JS/CSS。
 
 ---
@@ -78,18 +79,18 @@ nb.to_dict()                                    # 导出字典
 
 | 方法 | 类型 | 说明 | 必填参数 |
 |------|------|------|----------|
-| `nb.title(text, level=1)` | 文本 | 标题 | `text: str` |
-| `nb.text(text, color=None)` | 文本 | 文本 | `text: str` |
-| `nb.markdown(text)` | 文本 | Markdown | `text: str` |
-| `nb.code(code, language='python', output=None)` | 代码 | 代码块 | `code: str` |
+| `nb.section(title, collapsed=None)` | 布局 | **章节容器**（推荐，所有内容放其内） | `title: str` |
+| `nb.markdown(text)` | 文本 | **Markdown（推荐）**，支持 `##` 标题、加粗、列表等 | `text: str` |
 | `nb.table(data, columns=None, title=None, **options)` | 数据 | 表格 | `data: List[Dict] / DataFrame` |
-| `nb.metrics(data, title=None, columns=4)` | 数据 | 指标卡片 | `data: List[Dict] / Dict` |
 | `nb.chart(chart_type, data, title=None, height='400px', **kwargs)` | 图表 | 图表 | 见下方图表规范 |
-| `nb.pyecharts(chart, title=None, height='400px', width='100%')` | 图表 | pyecharts 原生 | `chart: pyecharts 对象` |
+| `nb.metrics(data, title=None, columns=4)` | 数据 | 指标卡片 | `data: List[Dict] / Dict` |
 | `nb.chartg(chart_type, data, height=200, **kwargs)` | 图表 | Grid 累加 | 同 chart |
+| `nb.pyecharts(chart, title=None, height='400px', width='100%')` | 图表 | pyecharts 原生 | `chart: pyecharts 对象` |
 | `nb.divider()` | 布局 | 分隔线 | 无 |
+| `nb.text(text, color=None)` | 文本 | 文本（支持 color） | `text: str` |
+| `nb.title(text, level=1)` | 文本 | 标题（不推荐，用 markdown 替代） | `text: str` |
+| `nb.code(code, language='python', output=None)` | 代码 | 代码块 | `code: str` |
 | `nb.html(html_content)` | 布局 | 原始 HTML | `html_content: str` |
-| `nb.section(title, collapsed=None)` | 布局 | 章节容器 | `title: str` |
 
 **所有方法返回 `self`，支持链式调用。**
 
@@ -237,6 +238,7 @@ nb.metrics(data, title='核心指标', columns=4)
 | `'kline'` | K线图 | 标准格式 / DataFrame |
 | `'pie'` | 饼图 | 列表格式 / DataFrame |
 | `'heatmap'` | 热力图 | 嵌套字典 / DataFrame |
+| `'perf'` | 业绩全景 | 标准格式（传入原始资产值，前端自动计算收益/回撤/超额） |
 
 #### 3.1 标准格式（line / area / bar / scatter / kline）
 
@@ -315,7 +317,15 @@ nb.chart('pie', df_pie, title='资产分布')
 nb.chart('heatmap', df_heatmap, title='月度收益')
 ```
 
-#### 3.7 图表可选参数
+#### 3.3 perf 业绩全景
+
+```python
+# 传入原始资产值（非收益率），前端自动计算收益/回撤/超额
+# 数据格式与 line 相同: {'xAxis': [...], 'series': [{'name': '策略', 'data': [1.0, 1.05, ...]}]}
+nb.chart('perf', data, title='业绩全景')
+```
+
+#### 3.4 图表可选参数
 
 ```python
 nb.chart('line', data,
@@ -374,7 +384,7 @@ nb.chartg('line', sig_data, height=100)
 
 ### 5. pyecharts 原生 `nb.pyecharts()`
 
-当 `nb.chart()` 的简化封装不够用时，直接使用 pyecharts 对象：
+当 `nb.chart()` 的简化封装不够用时，直接使用 pyecharts 对象。**输出会自动精简**（经 `minimize_option` 处理），去除冗余默认值，减小 HTML 体积。
 
 ```python
 from pyecharts.charts import Line
@@ -448,7 +458,7 @@ Notebook 最终输出到 HTML `<head>` 中的 JSON-LD 数据：
         },
         {
             "type": "chart",
-            "content": {"charts": {/* echarts option */}, "width": "100%", "height": "400px"}
+            "content": {"charts": {/* echarts option */}, "width": "100%", "height": "400px", "chartType": "line"}
         },
         {
             "type": "section",
@@ -550,7 +560,7 @@ nb.export_html()
 4. **chartg 自动合并**：chartg 是累加模式，在下一个非 chartg 操作时自动 flush
 5. **输入即输出原则**：xAxis 日期字符串原样传入，前端用 `category` 类型直接显示，不做时区/格式转换
 6. **Grid 高度语义**：`height` = chart 绘图区高度（px），不包含 legend 和间距，后端自动累加
-7. **输出路径**：`export_html()` 输出到调用者脚本所在目录，非 notebook 模块目录
+7. **输出路径**：`export_html()` 输出目录优先级：显式 `base_dir` > `nb.base_dir` > `os.getcwd()`。可预设 `nb.base_dir = '/path'`。
 8. **链式调用**：所有 cell 方法返回 self，可 `nb.title("A").text("B").divider()`
 9. **section 内 title**：在 `with nb.section(...)` 内，cell 的 `title` 参数作为小标题；在 section 外，`title` 参数会自动创建一个单元素 section
 10. **pyecharts 延迟导入**：pyecharts 仅在首次使用图表时导入，不影响纯文本/表格场景的性能
@@ -611,7 +621,7 @@ with nb.section("交易明细", collapsed=True):  # 默认折叠
 | **二级 section 用于细分** | 风险分析下可嵌套 VaR / 最大回撤 / 波动率 等子主题 |
 | **深度 ≤ 2** | 最多嵌套到二级 section，更深会影响可读性 |
 | **section 内 cell 加 title** | 在 section 内部，图表/表格的 `title` 作为 `<h3>` 小标题展示 |
-| **section 外 cell 也加 title** | 不在 section 内时，cell 的 `title` 会自动创建单元素 section 包裹 |
+| **text/markdown 必须在 section 内** | `nb.text()` 和 `nb.markdown()` 都必须在 `with nb.section()` 内部使用 |
 | **长列表 section 折叠** | 交易明细、原始数据等用 `collapsed=True`，保持报告简洁 |
 | **4-6 个一级 section** | 太少内容拥挤，太多层级琐碎，4-6 个主题是最佳平衡 |
 
@@ -635,6 +645,27 @@ with nb.section("交易明细", collapsed=True):  # 默认折叠
     └── 全部成交记录 (table)
 ```
 
+**核心原则：始终用 `with nb.section()` 包裹内容。**
+
+Notebook 的 HTML 报告视觉层次完全依赖 section 构建——section 提供标题、卡片边框、折叠交互、导航锚点。脱离 section 的裸 cell 在页面上无容器包裹，视觉上"浮空"，缺乏层次和边界，阅读体验差。因此：
+
+- **常规报告**：所有内容都应放在 `with nb.section()` 内，section 是组织报告的唯一正确方式
+- **裸 cell 适用场景**：仅在原生 HTML 构建（`nb.html()`）等无需 Notebook 布局体系时才考虑，此时内容由调用方自行组织样式
+
+**title / text / markdown 的正确用法：**
+
+ `nb.markdown()` 是**最推荐**的文本方式（支持 `##` 标题、加粗、列表、代码块等），其次是 `nb.text()`（支持 color）。`nb.title()` 不推荐主动使用。
+
+ 所有文本方法都**必须在 section 内部使用**：
+
+ ```python
+ with nb.section("收益分析"):
+     nb.markdown("### 净值走势")                      # 推荐：用 ## 做小标题
+     nb.chart('line', {...})
+     nb.markdown("**解读：** 净值持续创新高")          # 加粗文本
+     nb.text("备注：数据截至 2026-06-30", color="gray") # 辅助说明
+ ```
+
 **不使用 section 的反模式：**
 
 ```python
@@ -643,7 +674,7 @@ nb.metrics({...})
 nb.chart('line', {...}, title='净值')
 nb.chart('bar', {...}, title='收益')
 nb.table(data)
-# 缺点：无层次感，阅读体验差，前端无法提供折叠/导航
+# 缺点：无容器包裹，视觉浮空；无层次感；前端无法提供折叠/导航
 ```
 
 ### 图表高度选择
@@ -689,4 +720,4 @@ total = sum(chart_heights) + 30×(n-1) + 28×n
 
 ---
 
-> 最后更新：2026-05-30
+> 最后更新：2026-07-13

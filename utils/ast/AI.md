@@ -5,9 +5,9 @@
 > 本文件描述 v2 **当前实现**，是与该模块交互的唯一事实来源。涉及表达式求值、截面排名、缺失值处理时，务必遵守文末「关键语义（必读）」一节。
 > 修改任何行为（尤其 NaN/排名语义）前，先读 `functions.py` / `dsl.py` 真实实现与同目录 `审核报告.md`，勿依赖记忆或历史文档。
 
-> **版本：v2 | 更新日期：2026-07-09**
+> **版本：v2 | 更新日期：2026-07-13**
 >
-> [更新] 2026-07-09 同步 v2 代码现状：numba @njit 加速；cs_rank / cross_sectional_rank / 特征函数对缺失值返回 NaN；新增函数 reg_*/ts_var/ts_logret/signed_power/safe_max/safe_min/cs_quantile/cs_normalize/atr_sma/stddev/var/linearreg；3 个旧名别名（ts_resi/ts_regression_residual/ts_rsquare）标记待删除。
+> [更新] 2026-07-13 同步 v2 代码现状：模块化重新排版（模块一~十一）；新增 ts_ar_resid 自回归残差；修复 ts_resid/ts_predict 的 NaN 窗口偏差 bug；cs_quantile 重写为行业标准；注册函数增至 92 个。
 
 ## 模块定位
 
@@ -18,7 +18,7 @@
 | 层 | 文件 | 职责 |
 |---|---|---|
 | 语法层 | `dsl.py` | parse/evaluate/validate/安全校验 |
-| 原语层+变量层 | `functions.py` | 87 函数注册表 + 63 变量注册表 + 元数据 dataclass |
+| 原语层+变量层 | `functions.py` | 92 函数注册表 + 63 变量注册表 + 元数据 dataclass |
 | 编排层 | `resolver.py` | CsResolver 截面函数嵌套解算 |
 | 规格层 | `spec.py` | AST构建器/规范化/LLM语法规格/表达式基类 |
 
@@ -28,7 +28,7 @@
 ## 核心元数据
 
 ```python
-# 函数规格 — 87 个 FUNC_REGISTRY 条目 (84 函数定义 + 3 旧名别名 ts_resi/ts_regression_residual/ts_rsquare, 后续删除)
+# 函数规格 — 92 个 FUNC_REGISTRY 条目 (89 函数定义 + 4 旧名别名 ts_resi/ts_regression_residual/ts_rsquare/ts_logret)
 FunctionSpec(func, category, data_args, param_pool, param_ranges, data_vars)
 
 # 变量规格 — 63 个注册变量
@@ -168,7 +168,7 @@ ts_roc(x, d)      ts_zscore(x, d)   ts_scale(x, d)
 ts_quantile(x, d, p)                ts_av_diff(x, d)
 ts_decay_linear(x, d)  ts_product(x, d)
 ts_slope(x, d)    ts_resid(x, d)    ts_rsq(x, d)
-ts_intercept(x, d)  ts_predict(x, d)
+ts_intercept(x, d)  ts_predict(x, d)  ts_ar_resid(x, p)
 
 # 双变量回归 (y~x, 3 参数: y, x, d)
 reg_slope(y, x, d)     reg_intercept(y, x, d)
@@ -245,4 +245,4 @@ persist(expr, n)  — 连续 n 日同向才触发
 - `ts_resi` → 用 `ts_resid`；`ts_regression_residual` → 用 `reg_resid`；`ts_rsquare` → 用 `ts_rsq`。
 
 ### 审核报告状态
-- 同目录 `审核报告.md`（2026-07-06）第一轮 P0/P1 已全部修复；第二轮发现的 P1-A/B/C/D（特征函数缺失值处理）已在 2026-07-09 修复。剩余待处理项：P2-1/2/3（窗口含 NaN 时语义偏差，对干净数据无影响）、P2-7/8（性能，不影响正确性）、P3（文档/边界）。
+- 同目录 `审核报告.md`（2026-07-06）第一轮 P0/P1 已全部修复；第二轮发现的 P1-A/B/C/D（特征函数缺失值处理）已在 2026-07-09 修复；2026-07-13 修复 ts_resid/ts_predict 的 NaN 窗口偏差（window 含 NaN 时 cnt<window，修复后用 cnt-1 而非 window-1 计算预测时间）。剩余待处理项：P2-1/2/3（窗口含 NaN 时语义偏差，对干净数据无影响）、P2-7/8（性能，不影响正确性）、P3（文档/边界）。
