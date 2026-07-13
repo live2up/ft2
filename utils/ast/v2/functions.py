@@ -1162,10 +1162,12 @@ def ts_median(x, d):     return _ts_median_core(np.asarray(x, float), _validate_
 
 # ── 周期/差分 ──
 def ts_delta(x, d):
+    d = _validate_window(d, 'ts_delta')
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
     r[d:] = x[d:] - x[:-d]; return r
 
 def ts_delay(x, d):
+    d = _validate_window(d, 'ts_delay')
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
     r[d:] = x[:-d]; return r
 
@@ -1224,7 +1226,9 @@ def ts_roc(x, d):
     返回: 值域无界, x[t-d]≈0 返回 NaN
     [对齐] WQ101 delta(x,d) 不含除法, ft2 ts_roc 是相对变化率
            若需绝对变化用 ts_delta(x, d)
-    [修复] 2026-07-06 x[t-d] 接近 0 时返回 NaN (原硬编码除零行为)"""
+    [修复] 2026-07-06 x[t-d] 接近 0 时返回 NaN (原硬编码除零行为)
+    [新增] 2026-07-13 加 _validate_window, 防 d=0 返回全0假信号 (P2-D 运行层兜底)"""
+    d = _validate_window(d, 'ts_roc')
     x = np.asarray(x, float); r = np.full_like(x, np.nan)
     r[d:] = (x[d:] - x[:-d]) / np.where(np.abs(x[:-d]) > 1e-10, x[:-d], np.nan)
     return r
@@ -1850,6 +1854,53 @@ def get_func_category(name: str) -> str:
     return spec.category if spec is not None else 'math_function'
 
 
+def _check_param_arity(name: str, func: Callable,
+                       data_args: int,
+                       param_pool: Optional[List[Any]],
+                       param_ranges: Optional[List[ParamRange]]) -> None:
+    """[新增] 2026-07-13 校验函数签名与 FunctionSpec 声明的参数数一致性。
+
+    GP 按 data_args + param_pool + param_ranges 顺序生成位置参数,
+    若声明数与签名不匹配, GP 会生成缺参数/多参数的调用, 求值时 TypeError。
+    此校验在注册时发 warning, 不阻断注册 (允许函数有额外默认参数)。
+    """
+    import inspect, warnings
+    try:
+        sig = inspect.signature(func)
+    except (ValueError, TypeError):
+        return  # 无法内省 (C 扩展/numba dispatcher), 跳过
+
+    params = list(sig.parameters.values())
+    # 含 *args/**kwargs 的函数参数数不固定, 跳过
+    if any(p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in params):
+        return
+
+    n_required = sum(1 for p in params if p.default is p.empty)  # 无默认值的位置参数
+    n_total = len(params)
+
+    # spec 声明的总参数数
+    n_declared = data_args
+    if param_pool:
+        n_declared += len(param_pool[0]) if isinstance(param_pool[0], tuple) else 1
+    if param_ranges:
+        n_declared += len(param_ranges)
+
+    if n_declared < n_required:
+        warnings.warn(
+            f"register_function: '{name}' 签名需要 {n_required} 个位置参数, "
+            f"但 spec 只声明了 {n_declared} 个 (data_args={data_args}, "
+            f"param_pool={'有' if param_pool else '无'}, "
+            f"param_ranges={len(param_ranges) if param_ranges else 0}个). "
+            f"GP 可能生成缺参数的调用 -> 求值时 TypeError. "
+            f"请补充 param_pool 或 param_ranges."
+        )
+    elif n_declared > n_total:
+        warnings.warn(
+            f"register_function: '{name}' 签名只有 {n_total} 个参数, "
+            f"但 spec 声明了 {n_declared} 个. GP 会生成多余参数 -> 求值时 TypeError."
+        )
+
+
 def _register(name: str, func: Callable, category: str,
               data_args: Optional[int] = None,
               param_pool: Optional[List[Any]] = None,
@@ -1860,6 +1911,7 @@ def _register(name: str, func: Callable, category: str,
     [规范] 2026-07-08 data_vars 非空时, data_args 自动取 len(data_vars),
     无需手动指定。消除 data_args 与 data_vars 的冗余。
     [调整] 2026-07-08 data_arity → data_args, param_constraints → param_ranges
+    [新增] 2026-07-13 注册时校验签名参数数 vs spec 声明 (防 GP 生成缺参数调用)
     """
     name_lower = name.lower()
     if category not in VALID_FUNC_CATEGORIES:
@@ -1878,6 +1930,8 @@ def _register(name: str, func: Callable, category: str,
         param_ranges=param_ranges,
         data_vars=data_vars,
     )
+    # [新增] 2026-07-13 参数完整性校验: 签名参数数 vs spec 声明 (防 GP 生成缺参数调用)
+    _check_param_arity(name_lower, func, data_args, param_pool, param_ranges)
     if category not in FUNC_CATEGORIES:
         FUNC_CATEGORIES[category] = []
     if name_lower not in FUNC_CATEGORIES[category]:
