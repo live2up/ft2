@@ -481,6 +481,14 @@ def eval_colwise(tree: ast.Expression, data: Dict[str, np.ndarray],
                 True=异常立即抛出 (调试模式, 带列号定位)
 
     [重构] 2026-06-22 从 resolver.py 移动到 dsl.py (通用工具)
+    [修复] 2026-07-13 对齐 WQ101 NaN 处理规范:
+           - NaN (冷启动/求值失败) 保留为 NaN, 不转 0。
+             WQ101 规范: NaN=缺失数据, 截面算子应跳过, 不参与排名。
+             下游 _cs_rank_core 已 nan-aware (跳过 NaN 行), 保留 NaN 安全。
+           - inf/-inf (除零等) 转为 NaN, 因 inf 非合法因子值且
+             _cs_rank_core 只跳 NaN 不跳 inf, 需在此归一化。
+           - 原实现 nan_to_num(nan=0.0) 把冷启动 NaN 误转为 0,
+             被 cross_sectional_rank 当真实值排名, 产生假信号 (P0-1)。
     """
     result = np.full((T, N), np.nan)
     for j in range(N):
@@ -502,7 +510,8 @@ def eval_colwise(tree: ast.Expression, data: Dict[str, np.ndarray],
                     f"eval_colwise 第 {j} 列求值失败: {e}"
                 ) from e
             result[:, j] = np.nan
-    return np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
+    # [修复] 2026-07-13 对齐 WQ101: 保留 NaN (下游 _cs_rank_core 跳过), 仅 inf→NaN
+    return np.where(np.isinf(result), np.nan, result)
 
 
 def cross_sectional_rank(vals: np.ndarray) -> np.ndarray:
