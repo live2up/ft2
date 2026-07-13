@@ -165,6 +165,8 @@ utils/ast/functions.py — 原语层 (公共基础设施)
 [重构] 2026-07-06 ts_*/cs_* 函数用 numba @njit 加速, _rolling 作为 fallback 保留
 ═══════════════════════════════════════════════════════════════
 """
+import inspect
+
 import numpy as np
 import talib
 from dataclasses import dataclass, field
@@ -863,7 +865,7 @@ def _ts_hump_core(x, d):
 
 
 @njit(cache=True)
-def _ts_regression_core(y, x, d, rettype):
+def _regression_core(y, x, d, rettype):
     """双变量 y~x 滚动线性回归: y = a + b*x + eps。
 
     算法: 对有效 (x,y) 对做最小二乘 → 斜率 b, 截距 a
@@ -1367,7 +1369,7 @@ def regression(y, x, d, rettype=2):
 
     [重构] 2026-07-06 numba @njit 加速
     """
-    return _ts_regression_core(np.asarray(y, float), np.asarray(x, float), int(d), int(rettype))
+    return _regression_core(np.asarray(y, float), np.asarray(x, float), int(d), int(rettype))
 
 
 # [兼容] 2026-07-03 旧名别名（已停止生产使用，后续删除）
@@ -1862,9 +1864,9 @@ def _check_param_arity(name: str, func: Callable,
 
     GP 按 data_args + param_pool + param_ranges 顺序生成位置参数,
     若声明数与签名不匹配, GP 会生成缺参数/多参数的调用, 求值时 TypeError。
-    此校验在注册时发 warning, 不阻断注册 (允许函数有额外默认参数)。
+    此校验 fail-fast (raise), 注册时立即暴露, 不等到 GP 跑几百代才 TypeError。
+    (2026-07-13 改为 raise, 原 warning 不够严格)
     """
-    import inspect, warnings
     try:
         sig = inspect.signature(func)
     except (ValueError, TypeError):
@@ -1886,16 +1888,16 @@ def _check_param_arity(name: str, func: Callable,
         n_declared += len(param_ranges)
 
     if n_declared < n_required:
-        warnings.warn(
+        raise ValueError(
             f"register_function: '{name}' 签名需要 {n_required} 个位置参数, "
             f"但 spec 只声明了 {n_declared} 个 (data_args={data_args}, "
             f"param_pool={'有' if param_pool else '无'}, "
             f"param_ranges={len(param_ranges) if param_ranges else 0}个). "
-            f"GP 可能生成缺参数的调用 -> 求值时 TypeError. "
+            f"GP 会生成缺参数的调用 -> 求值时 TypeError. "
             f"请补充 param_pool 或 param_ranges."
         )
     elif n_declared > n_total:
-        warnings.warn(
+        raise ValueError(
             f"register_function: '{name}' 签名只有 {n_total} 个参数, "
             f"但 spec 声明了 {n_declared} 个. GP 会生成多余参数 -> 求值时 TypeError."
         )
@@ -1931,6 +1933,7 @@ def _register(name: str, func: Callable, category: str,
         data_vars=data_vars,
     )
     # [新增] 2026-07-13 参数完整性校验: 签名参数数 vs spec 声明 (防 GP 生成缺参数调用)
+    # 2026-07-13 fail-fast: 不匹配直接 raise ValueError, 注册时立即暴露
     _check_param_arity(name_lower, func, data_args, param_pool, param_ranges)
     if category not in FUNC_CATEGORIES:
         FUNC_CATEGORIES[category] = []
