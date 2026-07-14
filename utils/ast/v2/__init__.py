@@ -51,7 +51,7 @@ from .dsl import (
     get_variables, get_functions,
     normalize_data_keys,
     eval_colwise, cross_sectional_rank,
-    ast_depth, ast_node_count,
+    ast_depth, ast_node_count, walk_nodes,
     DSLSecurityError, DSLSyntaxError,
 )
 
@@ -100,7 +100,7 @@ __all__ = [
     'get_variables', 'get_functions',
     'normalize_data_keys',
     'eval_colwise', 'cross_sectional_rank',
-    'ast_depth', 'ast_node_count',
+    'ast_depth', 'ast_node_count', 'walk_nodes',
     'DSLSecurityError', 'DSLSyntaxError',
 
     # base — AST 表达式基类

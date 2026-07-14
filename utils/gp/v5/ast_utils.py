@@ -11,7 +11,7 @@ from typing import List
 
 logger = logging.getLogger(__name__)
 
-from utils.ast.v2.dsl import ast_depth, ast_node_count
+from utils.ast.v2.dsl import ast_depth, ast_node_count, walk_nodes
 
 
 # ============================================================
@@ -38,7 +38,7 @@ def _collect_replaceable(tree: ast.Expression, mode: str = 'any') -> list:
       'bool'     — 产生布尔值的子树
     """
     func_names = set()
-    for node in ast.walk(tree.body):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             func_names.add(id(node.func))
 
@@ -53,13 +53,13 @@ def _collect_replaceable(tree: ast.Expression, mode: str = 'any') -> list:
         meaningful = (ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare,
                       ast.IfExp, ast.Call, ast.Name, ast.Constant)
 
-    return [n for n in ast.walk(tree.body)
+    return [n for n in walk_nodes(tree)
             if isinstance(n, meaningful) and id(n) not in func_names]
 
 
 def _parent_map(tree: ast.Expression) -> dict:
     parents = {}
-    for node in ast.walk(tree.body):
+    for node in walk_nodes(tree):
         for child in ast.iter_child_nodes(node):
             parents[child] = node
     return parents
@@ -301,7 +301,7 @@ def _extract_subtrees(tree: ast.Expression,
     排除：纯函数名节点、Load/Store 元节点、单变量/常数节点。
     """
     func_names = set()
-    for node in ast.walk(tree.body):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             func_names.add(id(node.func))
 
@@ -309,7 +309,7 @@ def _extract_subtrees(tree: ast.Expression,
                   ast.IfExp, ast.Call)
 
     subtrees = []
-    for node in ast.walk(tree.body):
+    for node in walk_nodes(tree):
         if isinstance(node, meaningful) and id(node) not in func_names:
             d = ast_depth(node)
             if min_depth <= d <= max_depth:

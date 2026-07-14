@@ -553,3 +553,38 @@ def ast_node_count(tree) -> int:
     # [兼容] 2026-07-08 支持任意 AST 节点，不仅限于 ast.Expression
     body = tree.body if hasattr(tree, 'body') else tree
     return sum(1 for _ in ast.walk(body))
+
+
+# ============================================================
+# AST 遍历统一入口 — 安全遍历表达式节点
+# ============================================================
+
+def walk_nodes(tree: ast.AST) -> list:
+    """安全遍历 AST 所有节点（统一入口）。
+
+    兼容 ast.Expression / ast.Module / 任意 AST 节点，
+    消费者不再需要关心 .body 细节。
+
+    用法:
+        from utils.ast.v2 import walk_nodes
+        for node in walk_nodes(tree):
+            if isinstance(node, ast.Call):
+                ...
+
+    Args:
+        tree: 任意 AST 节点（通常为 parse_expression 返回的 ast.Expression）
+
+    Returns:
+        list: 遍历得到的节点列表（不包括 Expression/Module 等容器节点本身）
+    """
+    # ast.Expression: 内部 body 是单节点，需要 walk(body) 避免遍历 Expression 自身
+    if isinstance(tree, ast.Expression):
+        return list(ast.walk(tree.body))
+    # ast.Module: body 是语句列表，需要 walk 每个 statement
+    if isinstance(tree, ast.Module):
+        nodes = []
+        for stmt in tree.body:
+            nodes.extend(ast.walk(stmt))
+        return nodes
+    # 已经是裸节点或任意其他 AST 类型，直接 walk
+    return list(ast.walk(tree))

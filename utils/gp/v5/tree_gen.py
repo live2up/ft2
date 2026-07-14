@@ -8,7 +8,7 @@ import copy
 import random
 import logging
 
-from utils.ast.dsl import ast_depth
+from utils.ast.dsl import ast_depth, walk_nodes
 from utils.ast.spec import make_var, make_const, make_compare, make_boolop, make_ifexp, make_unaryop
 from .config import (
     GP_VARIABLES, GP_CONSTANTS,
@@ -286,7 +286,7 @@ def _mutate_param(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) 
     # 收集所有 (常量节点, 所属 Call, 参数索引)
     parents = _parent_map(new_tree)
     candidates = []
-    for node in ast.walk(new_tree.body):
+    for node in walk_nodes(new_tree):
         # [修复] 2026-07-08 排除 bool (bool 是 int 子类, 不应参与参数变异)
         if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
             parent = parents.get(node)
@@ -350,8 +350,9 @@ def _mutate_logic(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) 
     """逻辑变异: and↔or, 添加/移除 not"""
     rng = cfg.rng
     new_tree = copy.deepcopy(tree)
-    bool_ops = [n for n in ast.walk(new_tree.body) if isinstance(n, ast.BoolOp)]
-    not_ops = [n for n in ast.walk(new_tree.body)
+    nodes = walk_nodes(new_tree)
+    bool_ops = [n for n in nodes if isinstance(n, ast.BoolOp)]
+    not_ops = [n for n in nodes
                if isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.Not)]
 
     if bool_ops and rng.random() < 0.5:
