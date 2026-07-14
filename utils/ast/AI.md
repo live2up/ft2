@@ -1,34 +1,26 @@
 # utils/ast 模块 AI 助手指南
 
-> **🚀 重点提示：本文档即 v2 权威规范**
-> `utils/ast` 当前为 **v2**（numba @njit 加速 + 缺失值 NaN 语义 + 函数补全），代码持续演进中。
-> 本文件描述 v2 **当前实现**，是与该模块交互的唯一事实来源。涉及表达式求值、截面排名、缺失值处理时，务必遵守文末「关键语义（必读）」一节。
-> 修改任何行为（尤其 NaN/排名语义）前，先读 `functions.py` / `dsl.py` 真实实现与同目录 `审核报告.md`，勿依赖记忆或历史文档。
-
-> **版本：v2 | 更新日期：2026-07-13**
->
-> [更新] 2026-07-13 同步 v2 代码现状：模块化重新排版（模块一~十一）；新增 ts_ar_resid 自回归残差；修复 ts_resid/ts_predict 的 NaN 窗口偏差 bug；cs_quantile 重写为行业标准；注册函数增至 92 个。
+> **本文档即 v2 权威规范**
+> `utils/ast` 当前为 **v2**。本文件描述 v2 当前实现，是与该模块交互的唯一事实来源。
+> 涉及表达式求值、截面排名、缺失值处理时，务必遵守文末「关键语义（必读）」一节。
 
 ## 模块定位
 
 `utils/ast` 是 ft2 项目的**公共 DSL 基础设施**，为 signals（择时信号）和 factor（因子轮动）两模块提供统一的表达式解析、求值、校验能力。
 
-## 五层架构
+## 架构
 
 | 层 | 文件 | 职责 |
 |---|---|---|
-| 语法层 | `dsl.py` | parse/evaluate/validate/安全校验 |
+| 语法层 | `dsl.py` | parse / evaluate / validate / 安全校验 |
 | 原语层+变量层 | `functions.py` | 92 函数注册表 + 63 变量注册表 + 元数据 dataclass |
 | 编排层 | `resolver.py` | CsResolver 截面函数嵌套解算 |
-| 规格层 | `spec.py` | AST构建器/规范化/LLM语法规格/表达式基类 |
-
-> 变量层已合并入 functions.py（`_VAR_REGISTRY`），不再有独立 variables.py。
-> [重构] 2026-07-08 `expr_base.py` 并入 `spec.py`（AstExpression 基类移入），`registry.py` 已删除；`variables.py` 仅保留 re-export 兼容。
+| 规格层 | `spec.py` | AST 构建器 / 规范化 / LLM 语法规格 / 表达式基类 |
 
 ## 核心元数据
 
 ```python
-# 函数规格 — 92 个 FUNC_REGISTRY 条目 (89 函数定义 + 4 旧名别名 ts_resi/ts_regression_residual/ts_rsquare/ts_logret)
+# 函数规格 — 92 个 FUNC_REGISTRY 条目 (89 函数定义 + 4 旧名别名)
 FunctionSpec(func, category, data_args, param_pool, param_ranges, data_vars)
 
 # 变量规格 — 63 个注册变量
@@ -46,13 +38,14 @@ from utils.ast import (
     parse_expression, evaluate, validate_expression,
     get_variables, get_functions,
     eval_colwise, cross_sectional_rank,
-    normalize_data_keys, ast_depth, ast_node_count, SAFE_CONSTANTS,
+    normalize_data_keys, ast_depth, ast_node_count,
+    DSLSecurityError, DSLSyntaxError,
 
     # 基类
     AstExpression,
 
     # 原语层
-    FUNC_REGISTRY, register_function, unregister_function,
+    FUNC_REGISTRY, SAFE_CONSTANTS, register_function, unregister_function,
     FunctionSpec, ParamRange, VarSpec,
     FUNC_CATEGORIES, VALID_FUNC_CATEGORIES, get_func_category,
 
@@ -67,7 +60,7 @@ from utils.ast import (
     make_var, make_call, make_compare, make_binop, make_const, make_unaryop,
     make_boolop, make_ifexp,
     normalize_expression, normalize_ast, describe_expression,
-    grammar_spec_for_llm, grammar_spec_compact,
+    grammar_spec_for_llm, grammar_spec_compact, AST_GRAMMAR_SPEC,
 )
 ```
 
@@ -137,7 +130,7 @@ unregister_function('my_signal')
 unregister_variable('MY_DATA')
 ```
 
-`category` 必须属于 `VALID_FUNC_CATEGORIES`，否则 `_register` 立即抛出 `ValueError`。
+`category` 必须属于 `VALID_FUNC_CATEGORIES`，否则注册时立即抛出 `ValueError`。
 
 ### 6. CsResolver（截面函数嵌套解算）
 
@@ -181,7 +174,7 @@ expanding_std(x, d)   expanding_percentile(x, d)
 
 # 截面函数 (需完整2D面板)
 cs_rank(x)  cs_zscore(x)  cs_scale(x, scale)
-cs_winsorize(x, std)  cs_quantile(x)  cs_normalize(x)
+cs_winsorize(x, std)  cs_quantile(x, q=0.5)  cs_normalize(x)
 
 # 数学运算
 abs(x)  log(x)  sqrt(x)  sign(x)  exp(x)  tanh(x)
@@ -206,43 +199,35 @@ persist(expr, n)  — 连续 n 日同向才触发
 
 ## 变量系统说明
 
-变量注册表 `_VAR_REGISTRY` 统一管理 63 个变量，分两类匹配模式：
+变量注册表统一管理 63 个变量，分两类匹配模式：
 
 - **精确匹配**（`is_prefix=False`）：只认变量名本身，拒绝后缀（如 `CLOSE` ✅, `CLOSE_5` ❌）
 - **前缀通配**（`is_prefix=True`）：允许 `prefix_xxx` 任意后缀（如 `REL` → `REL_CLOSE` ✅, `REL_AMOUNT` ✅）
 
-`VALID_VAR_PREFIXES` 和 `VAR_CATEGORIES` 由 `_VAR_REGISTRY` 自动推导，保持向后兼容。
+`VALID_VAR_PREFIXES` 和 `VAR_CATEGORIES` 由注册表自动推导，保持向后兼容。
 
 ## 注意事项
 
 - `ts_sum(cond, d)` 天然支持计数——比较运算输出 0/1
-- `ts_regression(y,x,d,rettype=2)` 残差是冠军信号核心
-- `cat_scale(x, scale)` 和 `cs_winsorize(x, std)` 的配置参数由 `ParamRange` 描述范围
+- `reg_resid(y,x,d)` 残差是常用核心（旧名 `ts_regression_residual` 已废弃）
+- `cs_scale(x, scale)` 和 `cs_winsorize(x, std)` 的配置参数由 `ParamRange` 描述范围
 - CsResolver 不需要任何配置，新增 cs_* 函数自动获得嵌套支持
 - `validate_expression()` 不依赖数据，只做语法+变量校验
 - `eval_colwise(strict=True)` 仅在调试时使用
 - `register_function` 的 `category` 参数必须属于 `VALID_FUNC_CATEGORIES`（5 个有效分类）
-- `register_variable` 新增 `category`/`is_prefix`/`description` 参数，旧式单参数调用仍兼容
+- `register_variable` 支持 `category`/`is_prefix`/`description` 参数，旧式单参数调用仍兼容
 
 ## 关键语义（必读）
 
-> 以下为 v2 numba 重构后的最终语义，是与该模块交互的唯一事实来源。修改任何行为（尤其 NaN/排名语义）前，务必先读 `functions.py` / `dsl.py` 真实实现与同目录 `审核报告.md`。
-
-### 性能：numba @njit 加速
-- ts_*/cs_* 的计算核心（`_ts_*_core` / `_cs_rank_core` 等）用 `@njit(cache=True)` 重写，cs_rank 约 28x 加速。
-- `_rolling` 保留为 Python fallback（用于 `_feature_hv` 等少数路径），仅作兼容；新代码应优先走 numba core。
-- 截面函数 cs_rank/cs_zscore/cs_scale/cs_winsorize 的 2D 路径走 numba core；1D 输入为兼容回退（cs_rank→0.5, cs_zscore→0 等），截面语义需 2D 面板。
+> 以下为 v2 最终语义，是与该模块交互的唯一事实来源。
 
 ### NaN / 缺失值语义（对齐 WQ 规范：NaN=缺失，不参与排名，不填充极值）
 - `cs_rank(x)` 与 `cross_sectional_rank(vals)`：值域 (0,1]，整行全 NaN 时返回 NaN。
 - `ts_rank(x, d)`：当前值 x[i] 为 NaN 时返回 NaN。
 - `ts_roc(x, d)`：x[t-d]≈0 时返回 NaN（不伪造变化率）。
-- 特征函数 `_feature_hv` / `_feature_bbwidth` / `_feature_vol_ratio` / `_feature_amt_ratio`：停牌/缺失导致的 NaN 透传返回 NaN。
+- 特征函数（`rsi` / `atr` / `amt_ratio` / `hv` 等）：停牌/缺失导致的 NaN 透传返回 NaN。
 - `ts_corr` / `ts_skew` / `ts_kurt`：std≈0 时返回 NaN（与 ts_zscore 一致）。
 - `ts_resid`/`ts_slope`/`ts_rsq`/`ts_intercept`/`ts_predict`：window<3 或当前值 NaN 时返回 NaN，不返回 0.0。
 
 ### 已废弃的别名（不要再使用）
 - `ts_resi` → 用 `ts_resid`；`ts_regression_residual` → 用 `reg_resid`；`ts_rsquare` → 用 `ts_rsq`。
-
-### 审核报告状态
-- 同目录 `审核报告.md`（2026-07-06）第一轮 P0/P1 已全部修复；第二轮发现的 P1-A/B/C/D（特征函数缺失值处理）已在 2026-07-09 修复；2026-07-13 修复 ts_resid/ts_predict 的 NaN 窗口偏差（window 含 NaN 时 cnt<window，修复后用 cnt-1 而非 window-1 计算预测时间）。剩余待处理项：P2-1/2/3（窗口含 NaN 时语义偏差，对干净数据无影响）、P2-7/8（性能，不影响正确性）、P3（文档/边界）。

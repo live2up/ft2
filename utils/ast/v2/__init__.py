@@ -12,7 +12,7 @@ utils/ast — 公共 AST 基础设施 (signals 和 factor 模块共享)
      normalize_data_keys() — 数据键 ALL_CAPS 规范化
 
   2. 原语+变量层  (functions.py)  → 定义"能算什么"+"能引用什么"
-     FUNC_REGISTRY          — 87 时序/截面/数学/特征函数
+     FUNC_REGISTRY          — 92 时序/截面/数学/特征函数
      FunctionSpec           — 函数元数据 (category/data_args/param_pool/param_ranges)
      ParamRange             — 参数值域约束 (dtype/min/max/pool)
      FUNC_CATEGORIES        — 按类别索引
