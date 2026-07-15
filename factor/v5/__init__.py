@@ -10,7 +10,7 @@ factor/v5 — 因子发现引擎 (基于 signals.v4 AST DSL + ft2.core Engine + 
 模块结构:
   base.py          — FactorLibrary + FactorMetadata
   engine.py        — FacEngine (ft2.core Engine 驱动, fast/full/vector 三模式, 统一返回 AccountAnalyzer)
-  expression.py    — FactorExpression (基于 signals.v4 AST DSL)
+  expression.py    — FactorExpression (基于 utils.ast.v2 AST DSL)
   gp_engine.py     — GP 因子组合优化引擎 (Python AST 原生, 种子驱动)
   validator.py     — IC/IR/Bootstrap 检验
   industry_fitness.py — 行业适应度 + FitnessCalculator 基类

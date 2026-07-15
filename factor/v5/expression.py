@@ -29,8 +29,7 @@ import ast
 import numpy as np
 from typing import Dict
 
-from utils.ast import AstExpression, CsResolver, normalize_data_keys
-from utils.ast.dsl import evaluate, eval_colwise
+from utils.ast.v2 import AstExpression, CsResolver, normalize_data_keys, evaluate, eval_colwise
 
 
 class _ExpressionFromAST:

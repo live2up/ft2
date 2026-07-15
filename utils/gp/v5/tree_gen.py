@@ -8,8 +8,8 @@ import copy
 import random
 import logging
 
-from utils.ast.dsl import ast_depth, walk_nodes
-from utils.ast.spec import make_var, make_const, make_compare, make_boolop, make_ifexp, make_unaryop
+from utils.ast.v2.dsl import ast_depth, walk_nodes
+from utils.ast.v2.spec import make_var, make_const, make_compare, make_boolop, make_ifexp, make_unaryop
 from .config import (
     GP_VARIABLES, GP_CONSTANTS,
     TreeGenConfig, get_full_default_weights,
@@ -89,7 +89,7 @@ def _random_call(cfg: TreeGenConfig, depth: int, weight_key: str) -> ast.Call:
         available = [f for f in cfg.func_allowlist if f in FUNC_REGISTRY]
         func_name = rng.choice(available) if available else rng.choice(list(FUNC_REGISTRY.keys()))
     else:
-        from utils.ast.functions import FUNC_REGISTRY
+        from utils.ast.v2.functions import FUNC_REGISTRY
         func_name = rng.choice(list(FUNC_REGISTRY.keys()))
 
     spec = _get_func_spec(func_name)

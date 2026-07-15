@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from utils.ast.dsl import parse_expression, ast_depth, ast_node_count
+from utils.ast.v2.dsl import parse_expression, ast_depth, ast_node_count
 
 logger = logging.getLogger(__name__)
 

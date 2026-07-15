@@ -9,7 +9,7 @@ factor/v5/llm/prompts.py — Prompt 模板系统
          漏列 sin/cos/gauss 等 6 个数学函数 / 变量仅 8 个), 任何 v2 更新自动生效。
 """
 
-from utils.ast import grammar_spec_compact
+from utils.ast.v2 import grammar_spec_compact
 
 # ════════════════════════════════════════════════════════════
 # 系统 Prompt — 角色/规范 (静态) + 原语表 (动态同步自 ast.v2)

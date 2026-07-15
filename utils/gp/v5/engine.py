@@ -15,7 +15,7 @@ import os
 from typing import Dict, List, Optional, Callable
 from dataclasses import fields as dataclass_fields
 
-from utils.ast.dsl import parse_expression, ast_depth, ast_node_count
+from utils.ast.v2.dsl import parse_expression, ast_depth, ast_node_count
 from .config import (
     GP_VARIABLES,
     TreeGenConfig, Individual, GenerationSnapshot,
