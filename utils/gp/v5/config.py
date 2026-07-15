@@ -190,6 +190,8 @@ DEFAULT_GP_CONFIG = {
     'seed_ratio': 0.15,
     # [注入] 随机注入比例 (15% 完全随机生成，维持多样性)
     'random_inject_ratio': 0.15,
+    # [并行] 默认 4 线程评估个体 (n_workers=min(workers, unevaluated))
+    'parallel_workers': 4,
     # [惩罚] 复杂度惩罚系数 (fitness *= (1 - penalty * node_count))
     'parsimony_penalty': 0.001,
     # [选择器] True=使用 ε-Lexicase 选择 (保留方向多样性)，False=锦标赛选择

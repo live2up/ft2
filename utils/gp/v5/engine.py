@@ -119,7 +119,7 @@ class GPEngine:
         self.history: List[Dict] = []
 
         # 缓存 (SQLite + 内存)
-        self._parallel_workers = config.get('parallel_workers', 0) if config else 0
+        self._parallel_workers = config.get('parallel_workers', 4) if config else 4
         self._canonicalize_memo: Dict[str, str] = {}
         self._canonicalize_lock = threading.Lock()
         # [重构] 2026-07-08 缓存路径独立参数，不再从 config 读取，避免与算法参数混淆。
