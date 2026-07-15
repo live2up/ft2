@@ -160,16 +160,27 @@ def register(name: str, impl, category: str, *,
              param_ranges: Optional[List[ParamRange]] = None,
              data_vars: Optional[List[str]] = None,
              description: str = '') -> None:
-    """统一注册函数 — impl 为 Callable 是原语, 为 str 是宏"""
+    """统一注册函数 — impl 为 Callable 是原语, 为 str 是宏
+
+    [重构] 2026-07-16 宏路径对齐原语:
+      - data_args 提前规范化 (两条路径一致, 修复 data_vars 在宏路径被忽略的 bug)
+      - data_vars 参与宏形参推导 (形参名 = data_vars[i].lower(), 与原语签名同构)
+      - _validate_macro_body 替代 _parse_macro_body (线程安全, 不修改全局 _VAR_REGISTRY)
+      - _compile_macro 用独立 _MACRO_NAMESPACE (不污染 functions 模块)
+    """
     name_lower = name.lower()
 
+    # [修复] 2026-07-16 统一提前规范化 data_args, 保障宏/原语两条路径一致
+    data_args = _normalize_data_args(data_args, data_vars)
+
     if isinstance(impl, str):
-        # 宏路径: 推导参数 → 解析校验 → 编译为 Python 函数
-        params = _infer_params(data_args, param_pool, param_ranges)
-        _parse_macro_body(impl, params)
+        # 宏路径: str → Callable (编译后与原语无差别)
+        params = _infer_params(data_args, param_pool, param_ranges, data_vars)
+        _validate_macro_body(impl, params)
         func = _compile_macro(name_lower, params, impl)
         macro_body = impl
     else:
+        # 原语路径: Callable 直接用
         func = impl
         macro_body = None
 
@@ -178,7 +189,7 @@ def register(name: str, impl, category: str, *,
             f"无效函数分类 '{category}' (函数 '{name_lower}')。"
             f"有效分类: {sorted(VALID_FUNC_CATEGORIES)}"
         )
-    data_args = _normalize_data_args(data_args, data_vars)
+    # 统一签名校验 (宏/原语走同一个 _check_param_arity)
     _check_param_arity(name_lower, func, data_args, param_pool, param_ranges)
     FUNC_REGISTRY[name_lower] = FunctionSpec(
         func=func, category=category, data_args=data_args,
@@ -346,6 +357,32 @@ def _register_builtin_macros() -> None:
 
 
 # ============================================================
+# 宏编译命名空间 (独立于 functions 模块, 支持隔离注销)
+# [新增] 2026-07-16 宏函数不再注入 _functions_mod.__dict__,
+#        避免污染原语模块; 注销时从独立 namespace 清理
+# ============================================================
+
+_MACRO_NAMESPACE: Dict[str, Any] = {}
+
+
+def _get_macro_namespace() -> Dict[str, Any]:
+    """获取宏编译命名空间 (延迟初始化, 包含所有原语函数)
+
+    宏体编译时需要访问原语函数 (如 ts_mean/ts_corr),
+    通过复制 functions 模块的可调用对象到独立 namespace 实现。
+    首次调用时初始化, 后续宏注册共享同一 namespace (支持宏调用宏)。
+    """
+    if not _MACRO_NAMESPACE:
+        # 复制 functions 模块的原语函数, 不包含 dunder 和模块属性
+        for k, v in vars(_functions_mod).items():
+            if callable(v) and not k.startswith('__'):
+                _MACRO_NAMESPACE[k] = v
+        # 补充 numpy (宏体可能用 np.where 等)
+        _MACRO_NAMESPACE['np'] = np
+    return _MACRO_NAMESPACE
+
+
+# ============================================================
 # 宏编译工具 (同文件, 无跨文件调用)
 # ============================================================
 
@@ -354,12 +391,24 @@ _MACRO_NAME_RE = re.compile(r'^[a-z][a-z0-9_]*$')
 
 def _infer_params(data_args: Optional[int],
                   param_pool: Optional[List],
-                  param_ranges: Optional[List[ParamRange]]) -> List[str]:
-    """按 x/y/d 规范自动推导参数名"""
+                  param_ranges: Optional[List[ParamRange]],
+                  data_vars: Optional[List[str]] = None) -> List[str]:
+    """推导宏的形参名 (对齐原语函数签名风格: snake_case)
+
+    优先级:
+      data_vars[i].lower()  → 语义形参名 (如 high/low/close, 与 _feature_atr 同构)
+      x/y/z/x4/...          → 自动推导 (无 data_vars 时)
+      d/d2/d3/...           → 窗口参数
+      ParamRange.name       → 范围参数 (原样)
+
+    [重构] 2026-07-16 接受 data_vars, 形参名与原语函数签名对齐
+    """
+    da = _normalize_data_args(data_args, data_vars)
     params = []
-    da = _normalize_data_args(data_args, None)
     for i in range(da):
-        if i < 3:
+        if data_vars and i < len(data_vars):
+            params.append(data_vars[i].lower())  # HIGH → high
+        elif i < 3:
             params.append(['x', 'y', 'z'][i])
         else:
             params.append(f'x{i+1}')
@@ -372,39 +421,99 @@ def _infer_params(data_args: Optional[int],
     return params
 
 
-def _parse_macro_body(body: str, params: List[str]) -> ast.Expression:
-    """解析宏体表达式, 临时放行 params 中的参数名"""
-    from .dsl import parse_expression  # 延迟导入, 避免循环
-    added = []
+def _validate_macro_body(body: str, params: List[str]) -> None:
+    """校验宏体 (线程安全, 不修改全局 _VAR_REGISTRY)
+
+    校验规则:
+      1. Python 语法 (ast.parse mode='eval')
+      2. AST 安全白名单 (复用 dsl 的节点校验, 跳过变量名校验)
+      3. 函数调用必须在 FUNC_REGISTRY
+      4. 变量引用必须 ⊆ params (形参) 或 SAFE_CONSTANTS
+
+    与原语的区别:
+      原语函数体是 Python 代码, 形参由函数签名决定, 自由变量是 import 的名字。
+      宏体是 DSL 表达式, 所有变量必须是形参 (不能引用数据变量或全局名)。
+      这保证宏的"参数-体"契约与原语一致: 调用方传入的实参唯一决定宏体行为。
+
+    [重构] 2026-07-16 替代 _parse_macro_body, 线程安全:
+      - 不再临时修改全局 _VAR_REGISTRY (消除竞态)
+      - 不再调用 _sync_var_backward_compat() (避免重复全表重建)
+      - 变量校验改为局部 param_set 查询
+    """
+    from .dsl import (FORBIDDEN_NODE_TYPES, ALLOWED_NODE_TYPES,
+                      DSLSecurityError, DSLSyntaxError)
+
     try:
-        for p in params:
-            upper = p.upper()
-            if upper not in _VAR_REGISTRY:
-                _VAR_REGISTRY[upper] = VarSpec(upper, category='宏参数',
-                                               description='宏参数占位符')
-                added.append(upper)
-        if added:
-            _sync_var_backward_compat()
-        return parse_expression(body)
-    finally:
-        for upper in added:
-            _VAR_REGISTRY.pop(upper, None)
-        if added:
-            _sync_var_backward_compat()
+        tree = ast.parse(body, mode='eval')
+    except SyntaxError as e:
+        raise DSLSyntaxError(
+            f"宏体语法错误: {e.msg} (行{e.lineno}, 列{e.offset})"
+        )
+
+    param_set = {p.lower() for p in params}
+
+    def _check(node):
+        # 节点白名单/黑名单 (复用 dsl 的常量)
+        for fb in FORBIDDEN_NODE_TYPES:
+            if isinstance(node, fb):
+                raise DSLSecurityError(
+                    f"宏体禁止节点: {type(node).__name__}。"
+                    f"只允许数学表达式和函数调用。"
+                )
+        if not any(isinstance(node, a) for a in ALLOWED_NODE_TYPES):
+            raise DSLSecurityError(
+                f"宏体不允许节点: {type(node).__name__}"
+            )
+
+        # 函数调用校验
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                if node.func.id not in FUNC_REGISTRY:
+                    raise DSLSecurityError(
+                        f"宏体引用未注册函数: '{node.func.id}'。"
+                        f"可用: {sorted(FUNC_REGISTRY.keys())}"
+                    )
+            else:
+                raise DSLSecurityError("宏体只允许直接函数调用")
+
+        # 变量引用校验: 必须是形参或安全常量
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            name = node.id
+            if name in SAFE_CONSTANTS:
+                return  # True/False/None/pi/e
+            if name.lower() in FUNC_REGISTRY:
+                return  # 函数名出现在 Name 节点 (罕见, 放行)
+            if name.lower() not in param_set:
+                raise DSLSecurityError(
+                    f"宏体引用未声明变量 '{name}'。"
+                    f"声明的形参: {sorted(param_set)}。"
+                    f"宏体只能引用形参, 不能引用数据变量 (由调用方传入)。"
+                )
+
+        for child in ast.iter_child_nodes(node):
+            _check(child)
+
+    _check(tree.body)
 
 
 def _compile_macro(name: str, params: List[str], body: str) -> Callable:
-    """把宏体编译为 Python 函数, 放入 functions 模块 globals()"""
+    """把宏体编译为 Python 函数, 注入独立 _MACRO_NAMESPACE
+
+    [重构] 2026-07-16 不再注入 _functions_mod.__dict__, 避免污染原语模块。
+           宏函数驻留 _MACRO_NAMESPACE, 注销时独立清理。
+           宏体可调用所有原语函数 (namespace 初始化时复制) 和已注册宏。
+    """
     if not _MACRO_NAME_RE.match(name):
         raise ValueError(
             f"宏名 '{name}' 不合法, 必须是 snake_case "
             f"(小写字母开头, 仅含 a-z0-9_)"
         )
+    ns = _get_macro_namespace()
     param_list = ', '.join(params)
     func_src = f"def {name}({param_list}):\n    return {body}"
-    exec(compile(func_src, f'<macro:{name}>', 'exec'), _functions_mod.__dict__)
-    func = _functions_mod.__dict__[name]
-    func.__doc__ = f"宏定义: {name}({param_list}) = {body}"
+    exec(compile(func_src, f'<macro:{name}>', 'exec'), ns)
+    func = ns[name]
+    func.__doc__ = f"宏: {name}({param_list}) = {body}"
     return func
 
 
@@ -429,7 +538,9 @@ def macro_to_str(name: str) -> str:
     spec = FUNC_REGISTRY.get(name_lower)
     if spec is None or spec.macro_body is None:
         raise KeyError(f"'{name}' 不是宏")
-    params = _infer_params(spec.data_args, spec.param_pool, spec.param_ranges)
+    # [修复] 2026-07-16 传入 data_vars, 形参名与编译时一致
+    params = _infer_params(spec.data_args, spec.param_pool, spec.param_ranges,
+                           spec.data_vars)
     return f"{name_lower}({', '.join(params)}) = {spec.macro_body}"
 
 
@@ -440,7 +551,8 @@ def unregister_macro(name: str) -> bool:
     if spec is None or spec.macro_body is None:
         return False
     unregister_function(name_lower)
-    _functions_mod.__dict__.pop(name_lower, None)
+    # [修复] 2026-07-16 从独立 _MACRO_NAMESPACE 清理, 而非 _functions_mod
+    _MACRO_NAMESPACE.pop(name_lower, None)
     return True
 
 
