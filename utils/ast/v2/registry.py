@@ -361,6 +361,14 @@ def _register_builtin_macros() -> None:
 # [新增] 2026-07-16 宏函数不再注入 _functions_mod.__dict__,
 #        避免污染原语模块; 注销时从独立 namespace 清理
 # ============================================================
+#
+# [阶段约定] 2026-07-16 线程安全契约 (使用方必读):
+#   阶段1 (启动期, 单线程): register/register_macro 写入 _MACRO_NAMESPACE
+#                          → 无写竞态, 安全
+#   阶段2 (运行期, 多线程): GP 并行调用 evaluate → FunctionSpec.__call__
+#                          → 只读 _MACRO_NAMESPACE, GIL 保护下安全
+#   禁止: 在阶段2 (GP 运行中) 动态注册新宏 → 会触发写竞态
+#   本约定由使用方保证, 不加运行时 assert (避免过度工程化)。
 
 _MACRO_NAMESPACE: Dict[str, Any] = {}
 
@@ -369,14 +377,19 @@ def _get_macro_namespace() -> Dict[str, Any]:
     """获取宏编译命名空间 (延迟初始化, 包含所有原语函数)
 
     宏体编译时需要访问原语函数 (如 ts_mean/ts_corr),
-    通过复制 functions 模块的可调用对象到独立 namespace 实现。
+    通过复制 FUNC_REGISTRY 的 func 字段到独立 namespace 实现。
     首次调用时初始化, 后续宏注册共享同一 namespace (支持宏调用宏)。
+
+    [修复] 2026-07-16 从 FUNC_REGISTRY 复制 (用注册名作 key),
+           而非从 functions 模块复制。原语注册名可能与函数对象名
+           不一致 (如 'tanh' 注册名 vs 'safe_tanh' 函数对象名),
+           从 functions 复制会导致宏体引用 'tanh' 时 NameError。
+           从 FUNC_REGISTRY 复制可同时覆盖: 原语/别名/内置宏, 一致性最佳。
     """
     if not _MACRO_NAMESPACE:
-        # 复制 functions 模块的原语函数, 不包含 dunder 和模块属性
-        for k, v in vars(_functions_mod).items():
-            if callable(v) and not k.startswith('__'):
-                _MACRO_NAMESPACE[k] = v
+        # 用注册名作 key, 覆盖所有原语 + 别名 + 已注册内置宏
+        for k, spec in FUNC_REGISTRY.items():
+            _MACRO_NAMESPACE[k] = spec.func
         # 补充 numpy (宏体可能用 np.where 等)
         _MACRO_NAMESPACE['np'] = np
     return _MACRO_NAMESPACE
@@ -511,6 +524,9 @@ def _compile_macro(name: str, params: List[str], body: str) -> Callable:
     ns = _get_macro_namespace()
     param_list = ', '.join(params)
     func_src = f"def {name}({param_list}):\n    return {body}"
+    # [显式化] 2026-07-16 exec 副作用: def 语句会把函数对象写入 ns (_MACRO_NAMESPACE),
+    #          使后续注册的宏能通过 name 引用本宏 (宏调用宏的基础)。
+    #          不加显式 ns[name] = func 赋值, 因为 exec 已完成写入, 冗余赋值反而掩盖机制。
     exec(compile(func_src, f'<macro:{name}>', 'exec'), ns)
     func = ns[name]
     func.__doc__ = f"宏: {name}({param_list}) = {body}"
