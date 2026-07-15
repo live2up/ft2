@@ -1761,41 +1761,9 @@ def _feature_amt_ratio(amount: np.ndarray, short: int = 5, long: int = 20) -> np
 # 两者互补。GP 生成器优先用 param_pool, 其次用 param_ranges 采样。
 # [调整] 2026-07-08 ParamConstraint → ParamRange, data_arity → data_args,
 # param_constraints → param_ranges
+# [重构] 2026-07-15 VarSpec/ParamRange/工具函数 抽出到 _common.py
 
-@dataclass
-class VarSpec:
-    """变量规格 — 描述变量名、所属类别和匹配模式。
-
-    Args:
-        name: 变量名 (ALL_CAPS, 如 'CLOSE', 'REL')
-        category: 所属类别 (如 '原始OHLCV', '相对基准')
-        is_prefix: True=前缀通配 (REL_CLOSE 通过), False=精确匹配 (只认 CLOSE)
-        description: 描述信息 (仅文档/调试)
-    """
-    name: str
-    category: str = '自定义'
-    is_prefix: bool = False
-    description: str = ''
-
-
-@dataclass
-class ParamRange:
-    """参数值域约束 — 描述 param_pool 无法覆盖的带范围参数。
-
-    用于函数签名中 param_pool 之外的额外参数 (如 ts_quantile 的 p, cs_scale 的 scale)。
-
-    Args:
-        name: 参数名 (仅用于文档/调试, 不参与生成逻辑)
-        dtype: 'int' 或 'float', 默认 'float'
-        min_val: 最小值 (含), None 表示无下界
-        max_val: 最大值 (含), None 表示无上界
-        pool: 离散候选列表。非 None 时优先于 min/max 采样
-    """
-    name: str
-    dtype: str = 'float'
-    min_val: Optional[float] = None
-    max_val: Optional[float] = None
-    pool: Optional[List[Any]] = None
+from ._common import VarSpec, ParamRange, _normalize_data_args, _count_pool_args
 
 
 @dataclass
@@ -1857,6 +1825,8 @@ def get_func_category(name: str) -> str:
     return spec.category if spec is not None else 'math_function'
 
 
+
+
 def _check_param_arity(name: str, func: Callable,
                        data_args: int,
                        param_pool: Optional[List[Any]],
@@ -1882,9 +1852,9 @@ def _check_param_arity(name: str, func: Callable,
     n_total = len(params)
 
     # spec 声明的总参数数
+    # [重构] 2026-07-15 提取 _count_pool_args 消除重复
     n_declared = data_args
-    if param_pool:
-        n_declared += len(param_pool[0]) if isinstance(param_pool[0], tuple) else 1
+    n_declared += _count_pool_args(param_pool)
     if param_ranges:
         n_declared += len(param_ranges)
 
@@ -1923,11 +1893,8 @@ def _register(name: str, func: Callable, category: str,
             f"无效函数分类 '{category}' (函数 '{name_lower}')。"
             f"有效分类: {sorted(VALID_FUNC_CATEGORIES)}"
         )
-    # data_vars 优先: 有固定变量时, data_args 自动推导
-    if data_vars is not None:
-        data_args = len(data_vars)
-    elif data_args is None:
-        data_args = 1
+    # [重构] 2026-07-15 提取 _normalize_data_args 消除重复
+    data_args = _normalize_data_args(data_args, data_vars)
     FUNC_REGISTRY[name_lower] = FunctionSpec(
         func=func, category=category,
         data_args=data_args, param_pool=param_pool,

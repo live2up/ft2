@@ -51,9 +51,13 @@ _MACRO_NAME_RE = re.compile(r'^[a-z][a-z0-9_]*$')
 # 引用 functions 模块 (用于 _compile_macro 的 exec namespace)
 # functions.py 的 globals() 包含所有原语函数 (ts_mean/ts_cov/...) 和 numpy
 from . import functions as _functions_mod
+from ._common import (
+    ParamRange, VarSpec,
+    _normalize_data_args, _count_pool_args,
+)
 from .functions import (
     register_function, unregister_function,
-    ParamRange, VarSpec, _VAR_REGISTRY, _sync_var_backward_compat,
+    _VAR_REGISTRY, _sync_var_backward_compat,
 )
 from .dsl import parse_expression
 
@@ -116,19 +120,18 @@ def _infer_params(data_args: Optional[int],
     """
     params = []
     # 数据参数: x, y, z
-    # [修复] 2026-07-15 data_args=0 是有效值 (无数据参数), 不能用 `or 1` (0 is falsy)
-    da = data_args if data_args is not None else 1
+    # [重构] 2026-07-15 提取 _normalize_data_args 消除重复
+    da = _normalize_data_args(data_args, None)
     for i in range(da):
         if i < 3:
             params.append(['x', 'y', 'z'][i])
         else:
             params.append(f'x{i+1}')
     # param_pool 参数
-    if param_pool:
-        first = param_pool[0]
-        n = len(first) if isinstance(first, tuple) else 1
-        for i in range(n):
-            params.append('d' if i == 0 else f'd{i+1}')
+    # [重构] 2026-07-15 提取 _count_pool_args 消除重复
+    n_pool = _count_pool_args(param_pool)
+    for i in range(n_pool):
+        params.append('d' if i == 0 else f'd{i+1}')
     # param_ranges 参数
     if param_ranges:
         for pr in param_ranges:
@@ -264,9 +267,10 @@ def register_macro(name: str, body: str,
     )
 
     # 5. 存 MacroSpec (用于自省/文档/注销)
+    # [重构] 2026-07-15 提取 _normalize_data_args 消除重复
     MACRO_REGISTRY[name_lower] = MacroSpec(
         name=name_lower, params=params, body_str=body, body_tree=body_tree,
-        category=category, data_args=data_args if data_args is not None else 1,
+        category=category, data_args=_normalize_data_args(data_args, data_vars),
         param_pool=param_pool, param_ranges=param_ranges,
         data_vars=data_vars, description=description,
     )
