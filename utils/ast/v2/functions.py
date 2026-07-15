@@ -1823,6 +1823,7 @@ class FunctionSpec:
     param_pool: Optional[List[Any]] = None
     param_ranges: Optional[List[ParamRange]] = None
     data_vars: Optional[List[str]] = None
+    description: str = ''  # [新增] 2026-07-15 函数描述 (可选, 与 MacroSpec 看齐)
 
     def __call__(self, *args, **kwargs):
         # [兼容] 保持 FUNC_REGISTRY[name](...) 可直接调用
@@ -1907,7 +1908,8 @@ def _register(name: str, func: Callable, category: str,
               data_args: Optional[int] = None,
               param_pool: Optional[List[Any]] = None,
               param_ranges: Optional[List[ParamRange]] = None,
-              data_vars: Optional[List[str]] = None) -> None:
+              data_vars: Optional[List[str]] = None,
+              description: str = '') -> None:
     """统一注册内置/自定义函数，同时维护 FUNC_REGISTRY 与 FUNC_CATEGORIES。
 
     [规范] 2026-07-08 data_vars 非空时, data_args 自动取 len(data_vars),
@@ -1931,6 +1933,7 @@ def _register(name: str, func: Callable, category: str,
         data_args=data_args, param_pool=param_pool,
         param_ranges=param_ranges,
         data_vars=data_vars,
+        description=description,
     )
     # [新增] 2026-07-13 参数完整性校验: 签名参数数 vs spec 声明 (防 GP 生成缺参数调用)
     # 2026-07-13 fail-fast: 不匹配直接 raise ValueError, 注册时立即暴露
@@ -2064,6 +2067,64 @@ _register('ts_resi', ts_resid, 'ts_function', param_pool=[10, 20])
 _register('ts_regression_residual', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_args=2, param_pool=[5, 10])
 _register('ts_rsquare', ts_rsq, 'ts_function', param_pool=[10, 20])
 _register('ts_logret', lambda x: safe_log(x / ts_delay(x, 1)), 'math_function')  # [废弃] 改用 logret
+
+
+# ============================================================
+# 内置宏注册 (宏引擎逻辑在 macros.py, 注册调用集中在此)
+# ============================================================
+#
+# 宏定义引擎 (MacroSpec/MACRO_REGISTRY/register_macro/_compile_macro 等)
+# 已拆分到 macros.py, 此处只保留内置宏的注册调用。
+#
+# 设计理由:
+#   - functions.py 已较大, 宏引擎逻辑独立到 macros.py 便于维护
+#   - 内置宏注册留在 functions.py, 与原语注册集中管理 (原语在上, 宏在下)
+#   - _register_builtin_macros 延迟导入 register_macro, 避免循环导入
+#
+# [新增] 2026-07-15 宏定义层, 路径A: exec 编译为 Python 函数
+# [重构] 2026-07-15 宏引擎拆出到 macros.py, 此处只保留注册调用
+# [重构] 2026-07-15 移到原语注册区之后, 原语在上宏在下
+# ============================================================
+
+_BUILTIN_MACROS_REGISTERED = False  # 防止重复注册
+
+
+def _register_builtin_macros() -> None:
+    """注册内置宏定义 (延迟调用, 避免循环导入)
+
+    由 __init__.py 在所有模块加载完成后调用。
+    宏引擎逻辑在 macros.py, 此处延迟导入。
+    """
+    global _BUILTIN_MACROS_REGISTERED
+    if _BUILTIN_MACROS_REGISTERED:
+        return
+    _BUILTIN_MACROS_REGISTERED = True
+
+    # 延迟导入, 避免循环依赖 (macros.py → functions.py)
+    from .macros import register_macro
+
+    # ── 风险指标 ──
+    register_macro('beta', 'ts_cov(x, y, d) / (ts_std(y, d) ** 2)',
+                   category='ts_function', data_args=2, param_pool=[20, 60],
+                   description='Beta系数: Cov(资产,市场) / Var(市场)')
+
+    register_macro('sharpe', 'ts_mean(x, d) / ts_std(x, d)',
+                   category='ts_function', data_args=1, param_pool=[20, 60],
+                   description='时序夏普比率: 均值 / 标准差')
+
+    register_macro('info_ratio', 'ts_mean(x - y, d) / ts_std(x - y, d)',
+                   category='ts_function', data_args=2, param_pool=[20, 60],
+                   description='信息比率: 超额收益均值 / 跟踪误差')
+
+    register_macro('ts_deviate', '(x - ts_mean(x, d)) / ts_std(x, d)',
+                   category='ts_function', data_args=1, param_pool=[20, 60],
+                   description='偏离度: (当前值 - 均值) / 标准差')
+
+    # ── 量价复合 ──
+    register_macro('vol_price_corr', 'ts_corr(ts_roc(x, d), ts_roc(y, d), d)',
+                   category='ts_function', data_args=2, param_pool=[10, 20],
+                   description='量价相关: ROC(x) 与 ROC(y) 的相关系数')
+
 
 # ============================================================
 # 模块十: 安全常量 + 变量层 (合并自 variables.py)
@@ -2244,6 +2305,7 @@ def register_function(
     param_pool: Optional[List[Any]] = None,
     param_ranges: Optional[List[ParamRange]] = None,
     data_vars: Optional[List[str]] = None,
+    description: str = '',
 ) -> None:
     """临时注册自定义函数到表达式引擎，并加入 GP 权重池。
 
@@ -2264,6 +2326,7 @@ def register_function(
                   用于 param_pool 无法覆盖的参数 (如浮点比例、连续范围)。
         data_vars: 固定变量名列表。非 None 时 GP 直接填入这些变量名，
                   而非生成随机子树。例如 natr 的 data_vars=['HIGH','LOW','CLOSE']。
+        description: 函数描述 (可选, 与 MacroSpec 看齐)。
     """
     name_lower = name.lower()
     if name_lower in FUNC_REGISTRY:
@@ -2275,7 +2338,7 @@ def register_function(
     # [重构] 2026-07-07 统一走 _register，保证 FUNC_REGISTRY 与 FUNC_CATEGORIES 同步
     _register(name_lower, func, category, data_args=data_args,
               param_pool=param_pool, param_ranges=param_ranges,
-              data_vars=data_vars)
+              data_vars=data_vars, description=description)
 
 
 def unregister_function(name: str) -> bool:
@@ -2288,3 +2351,4 @@ def unregister_function(name: str) -> bool:
                 cat_names.remove(name_lower)
                 break
     return removed
+

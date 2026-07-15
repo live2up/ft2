@@ -31,6 +31,7 @@ utils/ast — 公共 AST 基础设施 (signals 和 factor 模块共享)
      grammar_spec_for_llm() — 语法规格 (供 LLM prompt)
 
   兼容层: variables.py (内容已并入 functions.py, 仅 re-export)
+  宏定义层: macros.py (引擎逻辑) + functions.py 模块十二 (内置宏注册)
 
   依赖方向: 语法 ← 原语+变量 ← 编排 ← 规格
 ═══════════════════════════════════════════════════════════════
@@ -68,6 +69,15 @@ from .functions import (
     VALID_VAR_PREFIXES, is_valid_variable,
     register_variable, unregister_variable,
     VAR_CATEGORIES, get_var_category,
+)
+
+# ── 宏定义层 (macros.py) ──
+# [新增] 2026-07-15 路径A: exec 编译, 参数自动推导 x/y/d
+# [重构] 2026-07-15 引擎逻辑从 functions.py 拆出到 macros.py
+from .macros import (
+    MacroSpec, MACRO_REGISTRY,
+    register_macro, unregister_macro,
+    list_macros, macro_to_str,
 )
 
 # ── 编排层 (resolver.py) ──
@@ -117,6 +127,11 @@ __all__ = [
     'register_variable', 'unregister_variable',
     'VAR_CATEGORIES', 'get_var_category',
 
+    # macros — 宏定义层
+    'MacroSpec', 'MACRO_REGISTRY',
+    'register_macro', 'unregister_macro',
+    'list_macros', 'macro_to_str',
+
     # resolver — 编排层
     'CsResolver', '_get_cs_functions',
     '_has_any_cs', '_is_outer_cs_rank_call',
@@ -130,3 +145,10 @@ __all__ = [
     'grammar_spec_for_llm', 'grammar_spec_compact',
     'AST_GRAMMAR_SPEC',
 ]
+
+# ============================================================
+# 注册内置宏 (在所有模块加载完成后调用, 避免循环导入)
+# [新增] 2026-07-15
+# ============================================================
+from .functions import _register_builtin_macros
+_register_builtin_macros()
