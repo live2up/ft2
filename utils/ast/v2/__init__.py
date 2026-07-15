@@ -56,28 +56,17 @@ from .dsl import (
     DSLSecurityError, DSLSyntaxError,
 )
 
-# ── 原语层 (functions.py) ──
-from .functions import (
+# ── 注册层 (registry.py) ──
+# [重构] 2026-07-15 方案E: 统一 register 入口, 融合 _common/macros/functions 模块9-11
+from .registry import (
     FUNC_REGISTRY, SAFE_CONSTANTS,
     FunctionSpec, ParamRange, VarSpec,
-    register_function, unregister_function,
+    register, register_function, register_macro, unregister_function,
     FUNC_CATEGORIES, VALID_FUNC_CATEGORIES, get_func_category,
-)
-
-# ── 变量层 (functions.py) ──
-from .functions import (
     VALID_VAR_PREFIXES, is_valid_variable,
     register_variable, unregister_variable,
     VAR_CATEGORIES, get_var_category,
-)
-
-# ── 宏定义层 (macros.py) ──
-# [新增] 2026-07-15 路径A: exec 编译, 参数自动推导 x/y/d
-# [重构] 2026-07-15 引擎逻辑从 functions.py 拆出到 macros.py
-from .macros import (
-    MacroSpec, MACRO_REGISTRY,
-    register_macro, unregister_macro,
-    list_macros, macro_to_str,
+    is_macro, list_macros, macro_to_str, unregister_macro,
 )
 
 # ── 编排层 (resolver.py) ──
@@ -116,21 +105,15 @@ __all__ = [
     # base — AST 表达式基类
     'AstExpression',
 
-    # functions — 原语层
+    # registry — 注册层 (函数+宏+变量, 统一管理)
     'FUNC_REGISTRY', 'SAFE_CONSTANTS',
     'FunctionSpec', 'ParamRange', 'VarSpec',
-    'register_function', 'unregister_function',
+    'register', 'register_function', 'register_macro', 'unregister_function',
     'FUNC_CATEGORIES', 'VALID_FUNC_CATEGORIES', 'get_func_category',
-
-    # variables — 变量层
     'VALID_VAR_PREFIXES', 'is_valid_variable',
     'register_variable', 'unregister_variable',
     'VAR_CATEGORIES', 'get_var_category',
-
-    # macros — 宏定义层
-    'MacroSpec', 'MACRO_REGISTRY',
-    'register_macro', 'unregister_macro',
-    'list_macros', 'macro_to_str',
+    'is_macro', 'list_macros', 'macro_to_str', 'unregister_macro',
 
     # resolver — 编排层
     'CsResolver', '_get_cs_functions',
@@ -150,5 +133,5 @@ __all__ = [
 # 注册内置宏 (在所有模块加载完成后调用, 避免循环导入)
 # [新增] 2026-07-15
 # ============================================================
-from .functions import _register_builtin_macros
+from .registry import _register_builtin_macros
 _register_builtin_macros()

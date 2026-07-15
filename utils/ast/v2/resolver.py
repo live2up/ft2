@@ -25,7 +25,7 @@ import copy
 import numpy as np
 from typing import Dict, Set, Optional
 
-from .functions import FUNC_REGISTRY
+from .registry import FUNC_REGISTRY
 from .dsl import normalize_data_keys, evaluate, eval_colwise, cross_sectional_rank
 
 # ============================================================

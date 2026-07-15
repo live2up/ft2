@@ -24,7 +24,7 @@ import ast
 import operator
 from typing import Optional, List, Union
 
-from .functions import FUNC_REGISTRY, is_valid_variable, SAFE_CONSTANTS
+from .registry import FUNC_REGISTRY, is_valid_variable, SAFE_CONSTANTS
 from .dsl import parse_expression, get_variables, get_functions, ast_node_count
 from .resolver import _has_any_cs, _is_outer_cs_rank_call
 
@@ -264,7 +264,7 @@ def describe_expression(tree: ast.Expression) -> dict:
     variables = get_variables(tree)
     functions = get_functions(tree)
 
-    from .functions import get_func_category
+    from .registry import get_func_category
     func_categories = {f: get_func_category(f) for f in functions}
 
     depth = _ast_depth(tree.body)
@@ -394,7 +394,7 @@ def grammar_spec_for_llm() -> str:
 
 def grammar_spec_compact() -> str:
     """返回紧凑版语法规格 (减少 token)"""
-    from .functions import FUNC_CATEGORIES, VAR_CATEGORIES
+    from .registry import FUNC_CATEGORIES, VAR_CATEGORIES
 
     lines = [
         "# AST DSL Compact Grammar",
