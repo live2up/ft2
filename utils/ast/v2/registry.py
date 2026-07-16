@@ -16,7 +16,7 @@ utils/ast/v2/registry.py — 注册管理 + 宏引擎 + 变量注册
 
 依赖方向 (无循环):
   functions.py (纯原语) ← registry.py ← dsl.py
-  registry.py 单向依赖 functions.py (取原语做 exec namespace + _register 调用)
+  registry.py 单向依赖 functions.py (取原语做 exec namespace + register 调用)
   _parse_macro_body 延迟导入 dsl.py 的 parse_expression (避免循环)
 =============================================================================
 """
@@ -27,7 +27,7 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-# 取原语函数做 exec namespace + _register 调用
+# 取原语函数做 exec namespace + register 调用
 from . import functions as _functions_mod
 from .functions import *  # noqa: F401,F403  导入原语函数名 (ts_mean/ts_cov/...)
 # [修复] 2026-07-15 import * 不导入 _ 开头的名字, 需显式导入特征函数
@@ -203,124 +203,120 @@ def register(name: str, impl, category: str, *,
         FUNC_CATEGORIES[category].append(name_lower)
 
 
-# 向后兼容别名
-_register = register
-
-
 # ============================================================
 # 内置原语注册 (~90 个)
 # ============================================================
 
 # ── 时序 (ts_) ──
-_register('ts_mean', ts_mean, 'ts_function', param_pool=[5, 10, 20, 60])
-_register('ts_std', ts_std, 'ts_function', param_pool=[10, 20, 60])
-_register('ts_sum', ts_sum, 'ts_function', param_pool=[5, 10, 20])
-_register('ts_max', ts_max, 'ts_function', param_pool=[10, 20])
-_register('ts_min', ts_min, 'ts_function', param_pool=[10, 20])
-_register('ts_median', ts_median, 'ts_function', param_pool=[10, 20])
-_register('ts_delta', ts_delta, 'ts_function', param_pool=[1, 5, 10, 20])
-_register('ts_delay', ts_delay, 'ts_function', param_pool=[1, 5, 10, 20])
-_register('ts_rank', ts_rank, 'ts_function', param_pool=[5, 10, 20, 60])
-_register('ts_corr', ts_corr, 'ts_function', data_args=2, param_pool=[10, 20, 60])
-_register('ts_skew', ts_skew, 'ts_function', param_pool=[20, 60])
-_register('ts_kurt', ts_kurt, 'ts_function', param_pool=[20, 60])
-_register('ts_argmax', ts_argmax, 'ts_function', param_pool=[10, 20])
-_register('ts_argmin', ts_argmin, 'ts_function', param_pool=[10, 20])
-_register('ts_roc', ts_roc, 'ts_function', param_pool=[5, 10, 20])
-_register('ts_cov', ts_cov, 'ts_function', data_args=2, param_pool=[5, 10, 20])
-_register('ts_var', lambda x, d: ts_std(x, d) ** 2, 'ts_function', param_pool=[10, 20])
-_register('logret', lambda x: safe_log(x / ts_delay(x, 1)), 'math_function')
-_register('ts_zscore', ts_zscore, 'ts_function', param_pool=[10, 20, 60])
-_register('ts_autocorr', ts_autocorr, 'ts_function', param_pool=[(1, 10), (5, 20), (10, 60)])
-_register('ts_step', ts_step, 'ts_function', param_pool=[5, 10, 20])
-_register('ts_hump', ts_hump, 'ts_function', param_pool=[10, 20])
-_register('ts_scale', ts_scale, 'ts_function', param_pool=[10, 20])
-_register('ts_quantile', ts_quantile, 'ts_function', param_pool=[5, 10, 20],
-          param_ranges=[ParamRange('p', 'float', 0.0, 1.0)])
-_register('ts_av_diff', ts_av_diff, 'ts_function', param_pool=[10, 20])
-_register('ts_decay_linear', ts_decay_linear, 'ts_function', param_pool=[5, 10, 20])
-_register('ts_product', ts_product, 'ts_function', param_pool=[10, 20])
+register('ts_mean', ts_mean, 'ts_function', param_pool=[5, 10, 20, 60])
+register('ts_std', ts_std, 'ts_function', param_pool=[10, 20, 60])
+register('ts_sum', ts_sum, 'ts_function', param_pool=[5, 10, 20])
+register('ts_max', ts_max, 'ts_function', param_pool=[10, 20])
+register('ts_min', ts_min, 'ts_function', param_pool=[10, 20])
+register('ts_median', ts_median, 'ts_function', param_pool=[10, 20])
+register('ts_delta', ts_delta, 'ts_function', param_pool=[1, 5, 10, 20])
+register('ts_delay', ts_delay, 'ts_function', param_pool=[1, 5, 10, 20])
+register('ts_rank', ts_rank, 'ts_function', param_pool=[5, 10, 20, 60])
+register('ts_corr', ts_corr, 'ts_function', data_args=2, param_pool=[10, 20, 60])
+register('ts_skew', ts_skew, 'ts_function', param_pool=[20, 60])
+register('ts_kurt', ts_kurt, 'ts_function', param_pool=[20, 60])
+register('ts_argmax', ts_argmax, 'ts_function', param_pool=[10, 20])
+register('ts_argmin', ts_argmin, 'ts_function', param_pool=[10, 20])
+register('ts_roc', ts_roc, 'ts_function', param_pool=[5, 10, 20])
+register('ts_cov', ts_cov, 'ts_function', data_args=2, param_pool=[5, 10, 20])
+register('ts_var', lambda x, d: ts_std(x, d) ** 2, 'ts_function', param_pool=[10, 20])
+register('logret', lambda x: safe_log(x / ts_delay(x, 1)), 'math_function')
+register('ts_zscore', ts_zscore, 'ts_function', param_pool=[10, 20, 60])
+register('ts_autocorr', ts_autocorr, 'ts_function', param_pool=[(1, 10), (5, 20), (10, 60)])
+register('ts_step', ts_step, 'ts_function', param_pool=[5, 10, 20])
+register('ts_hump', ts_hump, 'ts_function', param_pool=[10, 20])
+register('ts_scale', ts_scale, 'ts_function', param_pool=[10, 20])
+register('ts_quantile', ts_quantile, 'ts_function', param_pool=[5, 10, 20],
+         param_ranges=[ParamRange('p', 'float', 0.0, 1.0)])
+register('ts_av_diff', ts_av_diff, 'ts_function', param_pool=[10, 20])
+register('ts_decay_linear', ts_decay_linear, 'ts_function', param_pool=[5, 10, 20])
+register('ts_product', ts_product, 'ts_function', param_pool=[10, 20])
 # ── 双变量回归 reg_ ──
-_register('reg_slope', lambda y, x, d: regression(y, x, d, 0), 'ts_function', data_args=2, param_pool=[5, 10])
-_register('reg_intercept', lambda y, x, d: regression(y, x, d, 1), 'ts_function', data_args=2, param_pool=[5, 10])
-_register('reg_resid', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_args=2, param_pool=[5, 10])
-_register('reg_predict', lambda y, x, d: regression(y, x, d, 3), 'ts_function', data_args=2, param_pool=[5, 10])
-_register('reg_rsq', lambda y, x, d: regression(y, x, d, 4), 'ts_function', data_args=2, param_pool=[5, 10])
-_register('ts_slope', ts_slope, 'ts_function', param_pool=[10, 20])
-_register('ts_intercept', ts_intercept, 'ts_function', param_pool=[10, 20])
-_register('ts_resid', ts_resid, 'ts_function', param_pool=[10, 20])
-_register('ts_predict', ts_predict, 'ts_function', param_pool=[10, 20])
-_register('ts_rsq', ts_rsq, 'ts_function', param_pool=[10, 20])
-_register('ts_ar_resid', ts_ar_resid, 'ts_function', param_pool=[3, 5, 10])
+register('reg_slope', lambda y, x, d: regression(y, x, d, 0), 'ts_function', data_args=2, param_pool=[5, 10])
+register('reg_intercept', lambda y, x, d: regression(y, x, d, 1), 'ts_function', data_args=2, param_pool=[5, 10])
+register('reg_resid', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_args=2, param_pool=[5, 10])
+register('reg_predict', lambda y, x, d: regression(y, x, d, 3), 'ts_function', data_args=2, param_pool=[5, 10])
+register('reg_rsq', lambda y, x, d: regression(y, x, d, 4), 'ts_function', data_args=2, param_pool=[5, 10])
+register('ts_slope', ts_slope, 'ts_function', param_pool=[10, 20])
+register('ts_intercept', ts_intercept, 'ts_function', param_pool=[10, 20])
+register('ts_resid', ts_resid, 'ts_function', param_pool=[10, 20])
+register('ts_predict', ts_predict, 'ts_function', param_pool=[10, 20])
+register('ts_rsq', ts_rsq, 'ts_function', param_pool=[10, 20])
+register('ts_ar_resid', ts_ar_resid, 'ts_function', param_pool=[3, 5, 10])
 
 # ── 扩张统计 (expanding_) ──
-_register('expanding_mean', expanding_mean, 'ts_function', param_pool=[20, 60])
-_register('expanding_median', expanding_median, 'ts_function', param_pool=[20, 60])
-_register('expanding_std', expanding_std, 'ts_function', param_pool=[20, 60])
-_register('expanding_percentile', expanding_percentile, 'ts_function', param_pool=[(0.1, 20), (0.5, 20), (0.9, 20)])
+register('expanding_mean', expanding_mean, 'ts_function', param_pool=[20, 60])
+register('expanding_median', expanding_median, 'ts_function', param_pool=[20, 60])
+register('expanding_std', expanding_std, 'ts_function', param_pool=[20, 60])
+register('expanding_percentile', expanding_percentile, 'ts_function', param_pool=[(0.1, 20), (0.5, 20), (0.9, 20)])
 
 # ── 截面 (cs_) ──
-_register('cs_rank', cs_rank, 'cs_function')
-_register('cs_zscore', cs_zscore, 'cs_function')
-_register('cs_scale', cs_scale, 'cs_function',
-          param_ranges=[ParamRange('scale', 'float', 0.5, 2.0)])
-_register('cs_winsorize', cs_winsorize, 'cs_function',
-          param_ranges=[ParamRange('std', 'float', 2.0, 5.0)])
-_register('cs_quantile', cs_quantile, 'cs_function')
-_register('cs_normalize', cs_normalize, 'cs_function')
+register('cs_rank', cs_rank, 'cs_function')
+register('cs_zscore', cs_zscore, 'cs_function')
+register('cs_scale', cs_scale, 'cs_function',
+         param_ranges=[ParamRange('scale', 'float', 0.5, 2.0)])
+register('cs_winsorize', cs_winsorize, 'cs_function',
+         param_ranges=[ParamRange('std', 'float', 2.0, 5.0)])
+register('cs_quantile', cs_quantile, 'cs_function')
+register('cs_normalize', cs_normalize, 'cs_function')
 
 # ── 数学 ──
-_register('abs', safe_abs, 'math_function')
-_register('log', safe_log, 'math_function')
-_register('sqrt', safe_sqrt, 'math_function')
-_register('sign', safe_sign, 'math_function')
-_register('exp', safe_exp, 'math_function')
-_register('tanh', safe_tanh, 'math_function')
-_register('sigmoid', safe_sigmoid, 'math_function')
-_register('relu', safe_relu, 'math_function')
-_register('softsign', safe_softsign, 'math_function')
-_register('sin', lambda x: np.sin(x), 'math_function')
-_register('cos', lambda x: np.cos(x), 'math_function')
-_register('gauss', safe_gauss, 'math_function')
-_register('p4', safe_p4, 'math_function')
-_register('neg', safe_neg, 'math_function')
-_register('square_sigmoid', safe_square_sigmoid, 'math_function')
-_register('signed_power', signed_power, 'math_function',
-          param_ranges=[ParamRange('exponent', 'float', 0.5, 4.0)])
-_register('max', safe_max, 'math_function', data_args=2)
-_register('min', safe_min, 'math_function', data_args=2)
+register('abs', safe_abs, 'math_function')
+register('log', safe_log, 'math_function')
+register('sqrt', safe_sqrt, 'math_function')
+register('sign', safe_sign, 'math_function')
+register('exp', safe_exp, 'math_function')
+register('tanh', safe_tanh, 'math_function')
+register('sigmoid', safe_sigmoid, 'math_function')
+register('relu', safe_relu, 'math_function')
+register('softsign', safe_softsign, 'math_function')
+register('sin', lambda x: np.sin(x), 'math_function')
+register('cos', lambda x: np.cos(x), 'math_function')
+register('gauss', safe_gauss, 'math_function')
+register('p4', safe_p4, 'math_function')
+register('neg', safe_neg, 'math_function')
+register('square_sigmoid', safe_square_sigmoid, 'math_function')
+register('signed_power', signed_power, 'math_function',
+         param_ranges=[ParamRange('exponent', 'float', 0.5, 4.0)])
+register('max', safe_max, 'math_function', data_args=2)
+register('min', safe_min, 'math_function', data_args=2)
 
 # ── 信号 ──
-_register('persist', persist, 'ts_function', param_pool=[3, 5, 10])
+register('persist', persist, 'ts_function', param_pool=[3, 5, 10])
 
 # ── 特征计算 ──
-_register('rsi', _feature_rsi, 'ta_function', param_pool=[14, 20])
-_register('atr', _feature_atr, 'ta_function', data_args=3, param_pool=[14], data_vars=['HIGH', 'LOW', 'CLOSE'])
-_register('atr_sma', _feature_atr_sma, 'ta_function', data_args=3, param_pool=[14], data_vars=['HIGH', 'LOW', 'CLOSE'])
-_register('bb_width', _feature_bbwidth, 'ta_function', param_pool=[20])
-_register('stddev', _feature_stddev, 'ta_function', param_pool=[10, 20])
-_register('adx', _feature_adx, 'ta_function', data_args=3, param_pool=[14, 20], data_vars=['HIGH', 'LOW', 'CLOSE'])
-_register('cci', _feature_cci, 'ta_function', data_args=3, param_pool=[14, 20], data_vars=['HIGH', 'LOW', 'CLOSE'])
-_register('macd', _feature_macd, 'ta_function', param_pool=[(12, 26, 9)])
-_register('trima', _feature_trima, 'ta_function', param_pool=[40])
-_register('ema', _feature_ema, 'ta_function', param_pool=[5, 10, 20, 60])
-_register('wilder_smooth', _wilder_smooth, 'feature_function', param_pool=[10, 20])
-_register('tsf', _feature_tsf, 'ta_function', param_pool=[10, 20])
-_register('kama', _feature_kama, 'ta_function', param_pool=[30])
-_register('wma', _feature_wma, 'ta_function', param_pool=[5, 10, 20, 60])
-_register('dema', _feature_dema, 'ta_function', param_pool=[10, 20])
-_register('hv', _feature_hv, 'ta_function', param_pool=[20, 60])
-_register('natr', _feature_natr, 'ta_function', data_args=3, param_pool=[5, 14], data_vars=['HIGH', 'LOW', 'CLOSE'])
-_register('var', _feature_var, 'ta_function', param_pool=[10, 20])
-_register('linearreg', _feature_linearreg, 'ta_function', param_pool=[10, 20])
-_register('vol_ratio', _feature_vol_ratio, 'ta_function', param_pool=[(5, 20)], data_vars=['CLOSE', 'VOLUME'])
-_register('amt_ratio', _feature_amt_ratio, 'ta_function', param_pool=[(5, 20)], data_vars=['AMOUNT'])
+register('rsi', _feature_rsi, 'ta_function', param_pool=[14, 20])
+register('atr', _feature_atr, 'ta_function', data_args=3, param_pool=[14], data_vars=['HIGH', 'LOW', 'CLOSE'])
+register('atr_sma', _feature_atr_sma, 'ta_function', data_args=3, param_pool=[14], data_vars=['HIGH', 'LOW', 'CLOSE'])
+register('bb_width', _feature_bbwidth, 'ta_function', param_pool=[20])
+register('stddev', _feature_stddev, 'ta_function', param_pool=[10, 20])
+register('adx', _feature_adx, 'ta_function', data_args=3, param_pool=[14, 20], data_vars=['HIGH', 'LOW', 'CLOSE'])
+register('cci', _feature_cci, 'ta_function', data_args=3, param_pool=[14, 20], data_vars=['HIGH', 'LOW', 'CLOSE'])
+register('macd', _feature_macd, 'ta_function', param_pool=[(12, 26, 9)])
+register('trima', _feature_trima, 'ta_function', param_pool=[40])
+register('ema', _feature_ema, 'ta_function', param_pool=[5, 10, 20, 60])
+register('wilder_smooth', _wilder_smooth, 'feature_function', param_pool=[10, 20])
+register('tsf', _feature_tsf, 'ta_function', param_pool=[10, 20])
+register('kama', _feature_kama, 'ta_function', param_pool=[30])
+register('wma', _feature_wma, 'ta_function', param_pool=[5, 10, 20, 60])
+register('dema', _feature_dema, 'ta_function', param_pool=[10, 20])
+register('hv', _feature_hv, 'ta_function', param_pool=[20, 60])
+register('natr', _feature_natr, 'ta_function', data_args=3, param_pool=[5, 14], data_vars=['HIGH', 'LOW', 'CLOSE'])
+register('var', _feature_var, 'ta_function', param_pool=[10, 20])
+register('linearreg', _feature_linearreg, 'ta_function', param_pool=[10, 20])
+register('vol_ratio', _feature_vol_ratio, 'ta_function', param_pool=[(5, 20)], data_vars=['CLOSE', 'VOLUME'])
+register('amt_ratio', _feature_amt_ratio, 'ta_function', param_pool=[(5, 20)], data_vars=['AMOUNT'])
 
 # ── 旧名别名 ──
-_register('ts_resi', ts_resid, 'ts_function', param_pool=[10, 20])
-_register('ts_regression_residual', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_args=2, param_pool=[5, 10])
-_register('ts_rsquare', ts_rsq, 'ts_function', param_pool=[10, 20])
-_register('ts_logret', lambda x: safe_log(x / ts_delay(x, 1)), 'math_function')
+register('ts_resi', ts_resid, 'ts_function', param_pool=[10, 20])
+register('ts_regression_residual', lambda y, x, d: regression(y, x, d, 2), 'ts_function', data_args=2, param_pool=[5, 10])
+register('ts_rsquare', ts_rsq, 'ts_function', param_pool=[10, 20])
+register('ts_logret', lambda x: safe_log(x / ts_delay(x, 1)), 'math_function')
 
 
 # ============================================================
