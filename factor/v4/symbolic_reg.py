@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # 0. 注册 sr_log: 保留符号的 log (避免 log(-1.4) 语义错误)
 # ============================================================
-from utils.ast.functions import register_function
+# [修改] 2026-07-16 factor/v4 固定引用 utils.ast.v1, 保持与原始算法一致
+from utils.ast.v1 import register_function
 
 # safe_log 取绝对值丢掉符号: log(-1.4) 实际算 log(1.4), 语义错误
 # sr_log: sign(x) * log(|x| + eps), 保留符号信息

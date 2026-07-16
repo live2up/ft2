@@ -270,7 +270,8 @@ def validate_translation(v3_expr: str, v4_expr: str) -> Tuple[bool, str]:
         (success, error_message)
     """
     try:
-        from utils.ast.dsl import parse_expression
+        # [修改] 2026-07-16 factor/v4 固定引用 utils.ast.v1, 保持与原始算法一致
+        from utils.ast.v1 import parse_expression
         tree = parse_expression(v4_expr)
         if tree is None:
             return False, "解析返回 None"
@@ -325,7 +326,8 @@ def register_sma():
         return
 
     import numpy as np
-    from utils.ast import register_function
+    # [修改] 2026-07-16 factor/v4 固定引用 utils.ast.v1, 保持与原始算法一致
+    from utils.ast.v1 import register_function
 
     def sma_v4(x, window, k=1):
         """SMA(x, window, k): 前值SMA*(1-k/window) + x*k/window

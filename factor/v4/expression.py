@@ -29,9 +29,10 @@ import ast
 import numpy as np
 from typing import Dict
 
-from utils.ast.expr_base import AstExpression
-from utils.ast.dsl import evaluate, eval_colwise
-from utils.ast import CsResolver, normalize_data_keys
+# [修改] 2026-07-16 factor/v4 固定引用 utils.ast.v1, 保持与原始算法一致
+from utils.ast.v1 import AstExpression
+from utils.ast.v1 import evaluate, eval_colwise
+from utils.ast.v1 import CsResolver, normalize_data_keys
 
 
 class _ExpressionFromAST:

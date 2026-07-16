@@ -40,7 +40,8 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
-from utils.ast.dsl import parse_expression, ast_depth, ast_node_count
+# [修改] 2026-07-16 factor/v4 固定引用 utils.ast.v1, 保持与原始算法一致
+from utils.ast.v1 import parse_expression, ast_depth, ast_node_count
 from .expression import _ExpressionFromAST
 
 logger = logging.getLogger(__name__)
