@@ -53,7 +53,7 @@ cs_rank(x)           截面排名 → 0~1 (值越大排名越高)
 cs_zscore(x)         截面标准化 (去均值除标准差)
 cs_scale(x)          截面缩放到 0~1
 cs_winsorize(x, limit) 缩尾到 ±limit 倍标准差
-
+cs_normalize(x)      截面 L2 归一化
 
 ### 特征计算 (从 OHLCV 实时算, 基于 TA-Lib)
 rsi(CLOSE, period)          RSI (0~100映射到0~1)

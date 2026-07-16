@@ -38,7 +38,7 @@ import random
 import logging
 import numpy as np
 from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, fields as dataclass_fields
+from dataclasses import dataclass
 
 from utils.ast.dsl import parse_expression, ast_depth, ast_node_count
 from .expression import _ExpressionFromAST
@@ -152,31 +152,6 @@ DEFAULT_TREE_GEN_CONFIG = TreeGenConfig(
     feature_weights={'feature_1arg': 0.5, 'feature_3arg': 0.3, 'ratio': 0.2},
 )
 _TREE_GEN_CONFIG: TreeGenConfig = DEFAULT_TREE_GEN_CONFIG
-
-# 权重填充 — 用户没设的 key 自动填 0.1 (不重点看，但不完全禁止)
-# var_weights 的默认 key 集 = GP_VARIABLES (6个标准变量)
-# 其他权重字段的默认 key 集 = 对应 DEFAULT_TREE_GEN_CONFIG 的 key
-_FILL_VAR_KEYS = GP_VARIABLES[:]  # ['CLOSE','OPEN','HIGH','LOW','VOLUME','AMOUNT']
-_FILL_TS_KEYS = list(TS_FUNCTIONS.keys())
-_FILL_MATH_KEYS = MATH_FUNCTIONS[:]
-_FILL_FEATURE_KEYS = list(DEFAULT_TREE_GEN_CONFIG.feature_weights.keys())
-_FILL_GROUP_KEYS = list(DEFAULT_TREE_GEN_CONFIG.group_weights.keys())
-
-
-def _fill_weights(user_weights, default_keys, fill_value=0.1):
-    """填充权重: 用户设了的用用户值，没设的填 0.1"""
-    filled = {}
-    for key in default_keys:
-        if user_weights and key in user_weights:
-            filled[key] = user_weights[key]
-        else:
-            filled[key] = fill_value
-    # 用户可能加了额外 key (如预计算变量名)
-    if user_weights:
-        for key in user_weights:
-            if key not in filled:
-                filled[key] = user_weights[key]
-    return filled
 
 DEFAULT_GP_CONFIG = {
     'population_size': 200,
@@ -460,7 +435,7 @@ def _grow_tree(depth: int, prefer_variable: bool = False) -> ast.AST:
     if depth <= 1 or (prefer_variable and random.random() < 0.7):
         return _random_terminal()
 
-    # 从 TreeGenConfig 读函数大类权重 (默认=DEFAULT_TREE_GEN_CONFIG，永远有值)
+    # 从 TreeGenConfig 读函数大类权重
     gw = _TREE_GEN_CONFIG.group_weights
     groups = list(gw.keys())
     gweights = [gw[g] for g in groups]
@@ -695,27 +670,8 @@ class GPEngine:
         # 种子
         self.seed_expressions = seed_expressions or []
 
-        # [新增] 2026-07-03 树生成概率配置 (用户没设的 key 自动填 0.1)
-        if tree_gen_config:
-            filled = {}
-            for field in dataclass_fields(TreeGenConfig):
-                user_val = getattr(tree_gen_config, field.name)
-                default_val = getattr(DEFAULT_TREE_GEN_CONFIG, field.name)
-                if user_val is None:
-                    # 用户没设 → 用默认 (group/ts/math/feature 有默认值, var 为 None)
-                    filled[field.name] = default_val
-                else:
-                    key_set = {
-                        'group_weights': _FILL_GROUP_KEYS,
-                        'ts_weights': _FILL_TS_KEYS,
-                        'math_weights': _FILL_MATH_KEYS,
-                        'feature_weights': _FILL_FEATURE_KEYS,
-                        'var_weights': _FILL_VAR_KEYS,
-                    }.get(field.name, [])
-                    filled[field.name] = _fill_weights(user_val, key_set)
-            self.tree_gen_config = TreeGenConfig(**filled)
-        else:
-            self.tree_gen_config = None
+        # [新增] 2026-07-03 树生成概率配置
+        self.tree_gen_config = tree_gen_config
 
         # 数据形状
         self._shape = None
@@ -896,7 +852,8 @@ class GPEngine:
         """运行 GP 搜索"""
         global _TREE_GEN_CONFIG
         _old_config = _TREE_GEN_CONFIG
-        _TREE_GEN_CONFIG = self.tree_gen_config or DEFAULT_TREE_GEN_CONFIG
+        if self.tree_gen_config:
+            _TREE_GEN_CONFIG = self.tree_gen_config
         try:
             self._initialize_population()
             for gen in range(self.generations):
