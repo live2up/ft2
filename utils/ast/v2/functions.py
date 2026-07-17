@@ -343,22 +343,19 @@ def _ts_min_core(x, d):
 
 @njit(cache=True)
 def _ts_median_core(x, d):
-    """[重构] 2026-07-06 numba @njit 加速: 滚动中位数, 收集有效值后排序取中位"""
+    """[重构] 2026-07-06 numba @njit 加速: 滚动中位数, 收集有效值后排序取中位
+    [修复] 2026-07-17 P2-7/P3-6: 预分配 buf, 单遍收集+计数, 消除内层分配和双重遍历"""
     n = len(x)
     r = np.full(n, np.nan)
+    buf = np.empty(d)  # [修复] P2-7: 预分配, 内层复用
     for i in range(d - 1, n):
         cnt = 0
         for j in range(i - d + 1, i + 1):
             if not np.isnan(x[j]):
+                buf[cnt] = x[j]
                 cnt += 1
         if cnt > 0:
-            valid = np.empty(cnt)
-            k = 0
-            for j in range(i - d + 1, i + 1):
-                if not np.isnan(x[j]):
-                    valid[k] = x[j]
-                    k += 1
-            sorted_v = np.sort(valid)
+            sorted_v = np.sort(buf[:cnt])
             mid = cnt // 2
             if cnt % 2 == 1:
                 r[i] = sorted_v[mid]
@@ -377,9 +374,11 @@ def _ts_rank_core(x, d):
     [分歧] ft2 输出范围 (0, 1], 最低得 1/cnt 而非 0。这是为避免 0 值被下游算子
            静默忽略, 保留最小区分度。对相对排名无影响。
     [重构] 2026-07-06 numba @njit 加速
-    [修复] 2026-07-06 当前值 x[i] 为 NaN 时返回 NaN (原用 valid[cnt-1] 返回过期排名, 污染截面)"""
+    [修复] 2026-07-06 当前值 x[i] 为 NaN 时返回 NaN (原用 valid[cnt-1] 返回过期排名, 污染截面)
+    [修复] 2026-07-17 P2-7/P3-6: 预分配 buf, 单遍收集+计数, 消除内层分配和双重遍历"""
     n = len(x)
     r = np.full(n, np.nan)
+    buf = np.empty(d)  # [修复] P2-7: 预分配, 内层复用
     for i in range(d - 1, n):
         # [修复] 当前值为 NaN 时无法计算排名, 保持 NaN
         if np.isnan(x[i]):
@@ -387,15 +386,10 @@ def _ts_rank_core(x, d):
         cnt = 0
         for j in range(i - d + 1, i + 1):
             if not np.isnan(x[j]):
+                buf[cnt] = x[j]
                 cnt += 1
         if cnt > 0:
-            valid = np.empty(cnt)
-            k = 0
-            for j in range(i - d + 1, i + 1):
-                if not np.isnan(x[j]):
-                    valid[k] = x[j]
-                    k += 1
-            sorted_v = np.sort(valid)
+            sorted_v = np.sort(buf[:cnt])
             # [修复] 用 x[i] (当前值) 而非 valid[cnt-1] (最后有效值)
             pos = np.searchsorted(sorted_v, x[i])
             r[i] = (pos + 1) / cnt
@@ -536,9 +530,8 @@ def _ts_skew_core(x, d):
     算法: 总体偏度 g1 = m3/m2^1.5 → Fisher-Pearson 样本修正 G1 = g1 * sqrt(n*(n-1))/(n-2)
     返回: 值域无界, 有效值<3 返回 NaN
     [对齐] pandas/scipy skew(bias=False): Fisher-Pearson 样本偏度
-    [分歧] 使用总体方差 ddof=0 计算 m2, 与 ddof=1 的 ts_std 不一致。
-           标准做法应统一 ddof, 但当前公式与 m3/m4 分母保持一致 (均为 cnt)。
-            对排名类因子无影响, 对阈值类用法有 ~7.4% 偏差 (n=20 时)。 (审核报告 P2-3)
+    [说明] m2/m3 均用总体矩 (分母 cnt, ddof=0), 这是偏度/峰度标准定义的要求,
+           与 ts_std (ddof=1) 的差异是统计量定义不同, 非不一致。
     [修复] 2026-07-06 统一为 Fisher-Pearson 样本修正"""
     n = len(x)
     r = np.full(n, np.nan)
@@ -577,9 +570,8 @@ def _ts_kurt_core(x, d):
     算法: 总体超额峰度 g2 = m4/m2^2 - 3 → Fisher 样本修正 G2 = (n-1)/((n-2)(n-3)) * ((n+1)*g2+6)
     返回: 值域无界, 有效值<4 返回 NaN
     [对齐] pandas/scipy kurt(bias=False): Fisher 样本超额峰度 (正态分布=0)
-    [分歧] 使用总体方差 ddof=0 计算 m2, 与 ddof=1 的 ts_std 不一致。
-           标准做法应统一 ddof, 但当前公式与 m3/m4 分母保持一致 (均为 cnt)。
-            对排名类因子无影响, 对阈值类用法有偏差 (审核报告 P2-3)。
+    [说明] m2/m4 均用总体矩 (分母 cnt, ddof=0), 这是峰度标准定义的要求,
+           与 ts_std (ddof=1) 的差异是统计量定义不同, 非不一致。
     [修复] 2026-07-06 统一为 Fisher 样本超额峰度修正"""
     n = len(x)
     r = np.full(n, np.nan)
@@ -635,30 +627,24 @@ def _ts_scale_core(x, d):
 def _ts_decay_linear_core(x, d):
     """线性衰减加权均值: 近期数据权重更高。
 
-    算法: 收集窗口内有效值 → 按出现顺序分配权重 [1,2,...,cnt] → 加权平均
+    算法: 窗口内按绝对时间位置分配权重 [1,2,...,d], 跳过 NaN 后加权平均
     返回: 加权均值, 全 NaN 窗口返回 NaN
     [对齐] WQ101 decay_linear(x,d): 线性时间加权, 近期权重高
-    [分歧] ft2 权重按有效值出现顺序分配; WQ101/DolphinDB 按绝对时间位置分配。
-            窗口含 NaN 时两者结果不同 (例如 [NaN, a, b, NaN, c] 的权重分配不同)。
-            当前实现更简洁, 且对干净数据无差异, 故保留。
+    [修复] 2026-07-17 P2-1: 权重改为按绝对时间位置 j-(i-d+1)+1 分配,
+           而非有效值出现顺序 k=1,2,...,cnt。窗口含 NaN 时对齐 WQ 语义。
     [重构] 2026-07-06 numba @njit 加速"""
     n = len(x)
     r = np.full(n, np.nan)
     for i in range(d - 1, n):
-        cnt = 0
+        wsum = 0.0
+        wsum_x = 0.0
         for j in range(i - d + 1, i + 1):
             if not np.isnan(x[j]):
-                cnt += 1
-        if cnt > 0:
-            wsum = 0.0
-            wsum_x = 0.0
-            k = 1
-            for j in range(i - d + 1, i + 1):
-                if not np.isnan(x[j]):
-                    w = float(k)
-                    wsum += w
-                    wsum_x += x[j] * w
-                    k += 1
+                # [修复] P2-1: 按绝对时间位置分配权重, 跳过 NaN 位置但保留时间间隔
+                w = float(j - (i - d + 1) + 1)
+                wsum += w
+                wsum_x += x[j] * w
+        if wsum > 0.0:
             r[i] = wsum_x / wsum
     return r
 
@@ -688,24 +674,20 @@ def _ts_quantile_core(x, d, p):
     返回: 值域 [min, max], 有效值<1 返回 NaN
     [注意] WQ101 原始公式集无 ts_quantile 算子 (分位数由 rank/percentile 排名实现)
            本函数采用 nearest-rank 方法, 与 np.percentile linear 插值不同
-    [修复] 2026-07-06 用 ceil(p*cnt)-1 替代 floor(p*cnt), 并限制范围"""
+    [修复] 2026-07-06 用 ceil(p*cnt)-1 替代 floor(p*cnt), 并限制范围
+    [修复] 2026-07-17 P2-7/P3-6: 预分配 buf, 单遍收集+计数, 消除内层分配和双重遍历"""
     n = len(x)
     r = np.full(n, np.nan)
+    buf = np.empty(d)  # [修复] P2-7: 预分配, 内层复用
     for i in range(d - 1, n):
         cnt = 0
         for j in range(i - d + 1, i + 1):
             if not np.isnan(x[j]):
+                buf[cnt] = x[j]
                 cnt += 1
         if cnt > 0:
-            # 收集有效值
-            valid = np.empty(cnt)
-            k = 0
-            for j in range(i - d + 1, i + 1):
-                if not np.isnan(x[j]):
-                    valid[k] = x[j]
-                    k += 1
             # 排序取 nearest-rank (1-indexed: ceil(p*cnt), 转 0-indexed: -1)
-            sorted_v = np.sort(valid)
+            sorted_v = np.sort(buf[:cnt])
             # [修复] ceil(p*cnt)-1 替代 floor(p*cnt), 并限制范围
             idx = int(np.ceil(p * cnt)) - 1
             if idx < 0:
@@ -930,7 +912,7 @@ def _regression_core(y, x, d, rettype):
 def _ts_linear_reg_core(x, window, rettype, fill_value):
     """单变量 x~t 趋势线性回归: x = a + b*t + eps。
 
-    算法: 对时间 t=[0,1,...,cnt-1] 和有效值 x 做最小二乘 → 截距 a, 斜率 b
+    算法: 对绝对时间位置 t=[0,1,...,window-1] 和有效值 x 做最小二乘 → 截距 a, 斜率 b
     返回: rettype 指定类型
         - 0: 斜率 b (趋势强度)
         - 1: 截距 a
@@ -938,9 +920,10 @@ def _ts_linear_reg_core(x, window, rettype, fill_value):
         - 3: 预测值 a + b*(window-1)
         - 4: R²
     冷启动/NaN: window<3 或当前值 NaN 返回 fill_value
-    [分歧] 窗口含 NaN 时, 有效值被重新编号为 t=[0,1,...,cnt-1], 时间轴被压缩。
-            WQ101 标准实现通常保留原始时间位置, 因此 NaN 会导致斜率失真。
-            当前实现更简洁, 且对干净数据无差异, 故保留。 (审核报告 P2-2)
+    [对齐] WQ101: 用绝对时间位置拟合, NaN 位置跳过但不压缩时间轴
+    [修复] 2026-07-17 P2-2: 时间轴从压缩序号 [0,cnt-1] 改为绝对位置 [0,window-1],
+           消除窗口含 NaN 时斜率被放大的问题 (如 [x0,NaN,x2] 原算 (x2-x0)/1, 现算 (x2-x0)/2)。
+           同时合并 P2-7: 消除内层 valid 数组分配, 单遍累加。
     [重构] 2026-07-06 numba @njit 加速
     [修复] 2026-07-06 window<3 尊重 fill_value, rettype=2/3 用 x[i] 和 window-1"""
     n = len(x)
@@ -952,52 +935,47 @@ def _ts_linear_reg_core(x, window, rettype, fill_value):
         # [修复] 当前值 x[i] 为 NaN 时无法计算残差/预测, 保持 fill_value
         if np.isnan(x[i]):
             continue
+        # [修复] P2-2: 用绝对时间位置 t=j-(i-window+1) 累加, 不收集 valid 数组 (合并 P2-7)
         cnt = 0
+        sum_t = 0.0
+        sum_x = 0.0
+        sum_tx = 0.0
+        sum_tt = 0.0
         for j in range(i - window + 1, i + 1):
             if not np.isnan(x[j]):
+                t = float(j - (i - window + 1))  # 绝对时间位置 [0, window-1]
+                sum_t += t
+                sum_x += x[j]
+                sum_tx += t * x[j]
+                sum_tt += t * t
                 cnt += 1
         if cnt >= 3:
-            valid = np.empty(cnt)
-            k = 0
-            for j in range(i - window + 1, i + 1):
-                if not np.isnan(x[j]):
-                    valid[k] = x[j]
-                    k += 1
-            # t = [0, 1, ..., cnt-1]
-            mean_t = (cnt - 1) / 2.0
-            mean_x = 0.0
-            for k in range(cnt):
-                mean_x += valid[k]
-            mean_x /= cnt
-            sum_t_dev_sq = 0.0
-            sum_tx_dev = 0.0
-            for k in range(cnt):
-                t_dev = k - mean_t
-                sum_t_dev_sq += t_dev * t_dev
-                sum_tx_dev += t_dev * (valid[k] - mean_x)
-            var_t = sum_t_dev_sq / (cnt - 1)
-            cov_tx = sum_tx_dev / (cnt - 1)
+            mean_t = sum_t / cnt
+            mean_x = sum_x / cnt
+            # OLS: var_t 和 cov_tx 用原始求和 (n 在分子分母约掉, 无需除法)
+            var_t = sum_tt - cnt * mean_t * mean_t
+            cov_tx = sum_tx - cnt * mean_t * mean_x
             if var_t > 1e-15:
                 b = cov_tx / var_t
                 a = mean_x - b * mean_t
+                t_current = float(window - 1)  # 当前时刻的绝对时间位置
                 if rettype == 0:
                     r[i] = b
                 elif rettype == 1:
                     r[i] = a
                 elif rettype == 2:
-                    # [修复] 2026-07-12 预测时间用 cnt-1 而非 window-1 (有NaN时 cnt<window, window-1 外推偏差)
-                    predicted = a + b * (cnt - 1)
-                    r[i] = x[i] - predicted
+                    r[i] = x[i] - (a + b * t_current)
                 elif rettype == 3:
-                    # [修复] 2026-07-12 预测时间用 cnt-1 而非 window-1
-                    r[i] = a + b * (cnt - 1)
+                    r[i] = a + b * t_current
                 elif rettype == 4:
                     ss_res = 0.0
                     ss_tot = 0.0
-                    for k in range(cnt):
-                        pred = a + b * k
-                        ss_res += (valid[k] - pred) ** 2
-                        ss_tot += (valid[k] - mean_x) ** 2
+                    for j in range(i - window + 1, i + 1):
+                        if not np.isnan(x[j]):
+                            t = float(j - (i - window + 1))
+                            pred = a + b * t
+                            ss_res += (x[j] - pred) ** 2
+                            ss_tot += (x[j] - mean_x) ** 2
                     if ss_tot > 1e-10:
                         r[i] = 1.0 - ss_res / ss_tot
                     else:
@@ -1384,7 +1362,21 @@ def expanding_mean(x, min_p=20):    return _expanding(x, np.mean, max(1, int(min
 def expanding_median(x, min_p=20):  return _expanding(x, np.median, max(1, int(min_p)))
 def expanding_std(x, min_p=20):     return _expanding(x, lambda a: np.std(a, ddof=1), max(1, int(min_p)))
 def expanding_percentile(x, p, min_p=20):
-    return _expanding(x, lambda a: np.percentile(a, p * 100), max(1, int(min_p)))
+    """扩展窗口分位数值 (nearest-rank, 与 ts_quantile 方法一致)。
+
+    [修复] 2026-07-17 P2-8: 从 np.percentile (linear 插值) 改为 nearest-rank,
+           统一与 ts_quantile 的分位数定义, 消除同文件内分位数方法不一致。
+    """
+    def _nearest_rank(a):
+        sorted_a = np.sort(a)
+        cnt = len(a)
+        idx = int(np.ceil(p * cnt)) - 1
+        if idx < 0:
+            idx = 0
+        elif idx > cnt - 1:
+            idx = cnt - 1
+        return sorted_a[idx]
+    return _expanding(x, _nearest_rank, max(1, int(min_p)))
 
 
 # ============================================================
@@ -1394,37 +1386,43 @@ def expanding_percentile(x, p, min_p=20):
 def cs_rank(x):
     """截面排名: 并列值取最小排名, 归一化到 (0, 1]。
 
-    算法: 2D 面板调用 _cs_rank_core; 1D 输入返回全 0.5 (截面排名需至少 2 个值)
+    算法: 2D 面板调用 _cs_rank_core
     返回: 值域 (0, 1], 全 NaN 行保持 NaN
     [对齐] WQ101 rank(x): 截面排名, 最低得 0, 最高得 1
     [分歧] ft2 输出范围 (0, 1], 最低得 1/N 而非 0。这是为避免 0 值被下游算子
            静默忽略, 保留最小区分度。对相对排名无影响。
     [对齐] DolphinDB rank(): method='min' 竞争排名
-    [修复] 2026-07-06 numba @njit 加速 (~28x), 替代 scipy rankdata"""
+    [修复] 2026-07-06 numba @njit 加速 (~28x), 替代 scipy rankdata
+    [修复] 2026-07-17 P2-5: 1D 输入统一 raise, 截面函数需 2D 面板"""
     x = np.asarray(x, float)
-    if x.ndim == 1: return np.full_like(x, 0.5)
+    if x.ndim == 1:
+        raise ValueError("cs_rank 需 2D 面板, 收到 1D. 截面函数需完整跨品种数据.")
     return _cs_rank_core(x)
 
 def cs_zscore(x):
-    """[重构] 2026-07-06 numba @njit 加速 (2D); 1D 保持原逻辑返回 zeros"""
+    """[重构] 2026-07-06 numba @njit 加速 (2D)
+    [修复] 2026-07-17 P2-5: 1D 输入统一 raise, 截面函数需 2D 面板"""
     x = np.asarray(x, float)
-    if x.ndim == 1: return np.zeros_like(x)
+    if x.ndim == 1:
+        raise ValueError("cs_zscore 需 2D 面板, 收到 1D. 截面函数需完整跨品种数据.")
     return _cs_zscore_core(x)
 
 def cs_scale(x, scale=1.0):
     """截面缩放: sum(abs(x)) = scale
-    [重构] 2026-07-06 numba @njit 加速 (2D); 1D 保持原逻辑"""
+    [重构] 2026-07-06 numba @njit 加速 (2D)
+    [修复] 2026-07-17 P2-5: 1D 输入统一 raise, 截面函数需 2D 面板"""
     x = np.asarray(x, float)
-    if x.ndim == 1: return x / (np.sum(np.abs(x)) + 1e-10) * scale
+    if x.ndim == 1:
+        raise ValueError("cs_scale 需 2D 面板, 收到 1D. 截面函数需完整跨品种数据.")
     return _cs_scale_core(x, float(scale))
 
 def cs_winsorize(x, std=4.0):
     """截面缩尾: 按 +/-std 截尾 (样本标准差, ddof=1)
-    [重构] 2026-07-06 numba @njit 加速 (2D); 1D 保持原逻辑整体截尾"""
+    [重构] 2026-07-06 numba @njit 加速 (2D)
+    [修复] 2026-07-17 P2-5: 1D 输入统一 raise, 截面函数需 2D 面板"""
     x = np.asarray(x, float)
     if x.ndim == 1:
-        m, s = np.mean(x), np.std(x, ddof=1)
-        return np.clip(x, m - std * s, m + std * s)
+        raise ValueError("cs_winsorize 需 2D 面板, 收到 1D. 截面函数需完整跨品种数据.")
     return _cs_winsorize_core(x, float(std))
 
 def cs_normalize(x, use_std=False):
@@ -1447,10 +1445,11 @@ def cs_quantile(x, q=0.5, interpolation='linear'):
         demeaned = returns - cs_quantile(returns, 0.5)  # 减去截面中位数
 
     [修复] 2026-07-12 对齐行业标准, 替代原 RINT 实现
+    [修复] 2026-07-17 P2-5: 1D 输入统一 raise, 截面函数需 2D 面板
     """
     x = np.asarray(x, float)
     if x.ndim == 1:
-        return np.full_like(x, np.nan)
+        raise ValueError("cs_quantile 需 2D 面板, 收到 1D. 截面函数需完整跨品种数据.")
     n_rows, n_cols = x.shape
     out = np.full((n_rows, n_cols), np.nan)
     for i in range(n_rows):

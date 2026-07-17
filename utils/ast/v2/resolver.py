@@ -75,7 +75,9 @@ class CsResolver:
         if self._N == 0:
             # 1D 数据, 直接求值
             result = evaluate(tree, data_norm)
-            return np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
+            # [修复] 2026-07-17 P2-E 同源: 保留 NaN (冷启动/缺失), 仅 inf→NaN,
+            #        对齐 eval_colwise 的 WQ101 规范, 不再把 NaN 静默转 0 产生假信号
+            return np.where(np.isinf(result), np.nan, result)
 
         self._counter = 0
 
