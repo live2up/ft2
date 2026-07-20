@@ -334,12 +334,15 @@ class AuroraArchive:
       - 替换规则: φ 空间内相互不被 fitness-dominates 的个体都保留
     """
 
-    def __init__(self, max_size: int = 300, k_neighbors: int = 10):
+    def __init__(self, max_size: int = 300, k_neighbors: int = 10,
+                 sig_quota: int = 5):
         self.max_size = max_size
         self.k_neighbors = k_neighbors
+        self.sig_quota = sig_quota  # 每个 signature 最多占用的槽位数
         self._individuals: List[EncodedIndividual] = []
-        self._phi_cache: Optional[np.ndarray] = None  # (N, latent_dim)
-        self._stats_cache: Optional[np.ndarray] = None  # (N, input_dim)
+        self._phi_cache: Optional[np.ndarray] = None
+        self._stats_cache: Optional[np.ndarray] = None
+        self._sig_counts: Dict[str, int] = {}  # signature → count
 
     def __len__(self) -> int:
         return len(self._individuals)
@@ -372,11 +375,8 @@ class AuroraArchive:
     def try_add(self, individual: EncodedIndividual) -> bool:
         """尝试将个体加入 archive, DNS 局部竞争决定去留。
 
-        1. archive 未满 → 直接加入
-        2. archive 已满 → 在 φ 空间找 k 近邻, 检查支配关系
-           - 如果个体被某个近邻支配 (距离近且 fitness 低) → 拒绝
-           - 如果个体支配某个近邻 → 替换它
-           - 否则 → 随机替换一个近邻
+        1. archive 未满 → 直接加入 (但也检查 sig_quota)
+        2. archive 已满 → 在 φ 空间找 k 近邻 + 签名保护
         """
         if individual.phi is None:
             return False
@@ -384,58 +384,136 @@ class AuroraArchive:
         # 容量未满
         if len(self._individuals) < self.max_size:
             self._individuals.append(individual)
-            self._phi_cache = None  # 延迟重建
+            sig = individual.signature or ''
+            self._sig_counts[sig] = self._sig_counts.get(sig, 0) + 1
+            self._phi_cache = None
             return True
 
         # 容量已满 → DNS 局部竞争
         return self._dns_replace(individual)
 
     def _dns_replace(self, candidate: EncodedIndividual) -> bool:
-        """DNS 局部竞争: 在 φ 空间找 k 近邻, 按支配关系决定替换"""
+        """DNS 局部竞争 + signature 多样性保护。
+
+        [增强] 2026-07-20 加入 sig_quota 保护:
+          - 每个 signature 最多占 sig_quota 个槽位
+          - 候选者有新签名 → 优先替换 nearby 中签名过量的个体
+          - 候选者签名已过量 → 必须显著优于同签名最差个体才替换
+          - 禁止替换某签名的最后一个代表 (保护灭绝级多样性)
+        """
         if self._phi_cache is None:
             self._rebuild_cache()
         if self._phi_cache is None or len(self._phi_cache) < 1:
             self._individuals.append(candidate)
+            sig = candidate.signature or ''
+            self._sig_counts[sig] = self._sig_counts.get(sig, 0) + 1
             return True
 
-        # 计算 candidate 到所有 archive 个体的 φ 距离
+        cand_sig = candidate.signature or ''
+        cand_count = self._sig_counts.get(cand_sig, 0)
+
+        # 计算 k 近邻
         phi_c = candidate.phi.reshape(1, -1)
         dists = np.sum((self._phi_cache - phi_c) ** 2, axis=1)
         k = min(self.k_neighbors, len(dists))
         neighbor_idx = np.argpartition(dists, k)[:k]
 
-        # 检查支配关系
+        # ── 签名多样性检查 ──
+        # 统计 k 近邻中各签名的出现次数
+        neighbor_sigs: Dict[str, List[int]] = {}
+        for ni in neighbor_idx:
+            ns = self._individuals[ni].signature or ''
+            neighbor_sigs.setdefault(ns, []).append(ni)
+
+        # 判断: 候选者签名是否在近邻中已经过量
+        same_sig_neighbors = neighbor_sigs.get(cand_sig, [])
+        same_sig_count = len(same_sig_neighbors)
+
+        # ── 规则 1: 候选者是新签名 → 优先替换过量签名 ──
+        if same_sig_count == 0 and cand_count < self.sig_quota:
+            # 找近邻中签名最多的那个 (overrepresented)
+            over_sig = max(neighbor_sigs.items(), key=lambda x: len(x[1]))
+            over_indices = over_sig[1]
+            # 确保不删最后一个代表
+            if self._sig_counts.get(over_sig[0], 0) > 1:
+                over_indices.sort(key=lambda i: self._individuals[i].fitness)
+                replace_idx = over_indices[0]  # 最低 fitness 的
+            else:
+                # 每个签名都有唯一代表 → 替换最远且同签名有过剩的
+                for ni in sorted(neighbor_idx, key=lambda i: -dists[i]):
+                    ns = self._individuals[ni].signature or ''
+                    if self._sig_counts.get(ns, 0) > 1:
+                        replace_idx = ni
+                        break
+                else:
+                    replace_idx = neighbor_idx[np.argmax(dists[neighbor_idx])]
+            self._do_replace(replace_idx, candidate)
+            return True
+
+        # ── 规则 2: 候选者签名已过量 → 必须显著优于才能替换 ──
+        if cand_count >= self.sig_quota:
+            if same_sig_neighbors:
+                worst_same = min(same_sig_neighbors,
+                                 key=lambda i: self._individuals[i].fitness)
+                # 需要 5% 以上的提升才替换
+                if candidate.fitness > self._individuals[worst_same].fitness * 1.05:
+                    self._do_replace(worst_same, candidate)
+                    return True
+            return False
+
+        # ── 规则 3: 正常 DNS (候选者签名未过量) ──
+        # 检查是否被近邻支配
         dominated_by = False
         for ni in neighbor_idx:
             neighbor = self._individuals[ni]
             if neighbor.fitness > candidate.fitness and dists[ni] < np.median(dists):
-                # neighbor 更近且 fitness 更高 → candidate 被支配
                 dominated_by = True
                 break
 
         if dominated_by:
-            return False  # 被支配, 拒绝
+            return False
 
-        # candidate 不被支配 → 找可以替换的目标
-        # 优先替换: φ 接近且 fitness 更低的个体
+        # 找替换目标: 优先替换签名过量且 fitness 更低的近邻
         targets = []
         for ni in neighbor_idx:
             neighbor = self._individuals[ni]
+            ns = neighbor.signature or ''
             if candidate.fitness > neighbor.fitness:
-                targets.append((ni, dists[ni]))
+                # 加权: 签名过量 +1, 距离近 +1
+                over_sig_bonus = 2.0 if self._sig_counts.get(ns, 0) > self.sig_quota else 0.0
+                score = neighbor.fitness + over_sig_bonus * 0.5
+                targets.append((ni, score))
 
         if targets:
-            # 替换 fitness 最低的邻近个体
-            targets.sort(key=lambda x: self._individuals[x[0]].fitness)
-            replace_idx = targets[0][0]
-        else:
-            # 所有近邻 fitness 都更高 → 随机替换最远的近邻
-            farthest = neighbor_idx[np.argmax(dists[neighbor_idx])]
-            replace_idx = farthest
+            targets.sort(key=lambda x: x[1])  # 低分优先
+            # 确保不删最后一个代表 (除非候选者就是同签名)
+            for ni, _ in targets:
+                ns = self._individuals[ni].signature or ''
+                if self._sig_counts.get(ns, 0) <= 1 and ns != cand_sig:
+                    continue
+                self._do_replace(ni, candidate)
+                return True
 
-        self._individuals[replace_idx] = candidate
-        self._phi_cache = None
+        # 所有近邻都更好 → 找签名过量且最远的替换
+        for ni in sorted(neighbor_idx, key=lambda i: -dists[i]):
+            ns = self._individuals[ni].signature or ''
+            if self._sig_counts.get(ns, 0) > 1:
+                self._do_replace(ni, candidate)
+                return True
+
+        # 所有签名都只有一个代表 → 随机替换最远的
+        farthest = neighbor_idx[np.argmax(dists[neighbor_idx])]
+        self._do_replace(farthest, candidate)
         return True
+
+    def _do_replace(self, idx: int, candidate: EncodedIndividual):
+        """执行替换并更新签名计数"""
+        old_sig = self._individuals[idx].signature or ''
+        new_sig = candidate.signature or ''
+        self._sig_counts[old_sig] = max(0, self._sig_counts.get(old_sig, 1) - 1)
+        self._sig_counts[new_sig] = self._sig_counts.get(new_sig, 0) + 1
+        self._individuals[idx] = candidate
+        self._phi_cache = None
 
     def get_all(self) -> List[EncodedIndividual]:
         return list(self._individuals)
@@ -466,9 +544,14 @@ class AuroraArchive:
         self._individuals = survivors
         self._phi_cache = None
         self._stats_cache = None
+        self._sig_counts = {}
+        for ind in self._individuals:
+            sig = ind.signature or ''
+            self._sig_counts[sig] = self._sig_counts.get(sig, 0) + 1
+
         logger.info(
-            f"[AURORA] 灭绝: {len(survivors)}/{retain_n + len(others) + 1} "
-            f"个体存活 (保留 {retention:.0%})"
+            f"[AURORA] 灭绝: {len(survivors)} 个体存活 "
+            f"(保留 {retention:.0%}), {len(self._sig_counts)} 个签名方向"
         )
 
 
@@ -532,9 +615,11 @@ class AURORAEngine(GPEngine):
         )
 
         # Archive
+        self._sig_quota = ac.get('sig_quota', 5)
         self.archive = AuroraArchive(
             max_size=self._archive_size,
             k_neighbors=self._dns_k,
+            sig_quota=self._sig_quota,
         )
 
         # 状态
@@ -554,11 +639,14 @@ class AURORAEngine(GPEngine):
     # ── 编码 ──
 
     def _encode_individual(self, ind: EncodedIndividual, factor_values: np.ndarray):
-        """对单个个体提取统计 + 编码为 φ"""
+        """对单个个体提取统计 + 编码为 φ + 计算签名"""
         if factor_values is None:
             return
         ind.stats = extract_factor_stats(factor_values)
         ind.phi = self.encoder.encode(ind.stats.reshape(1, -1)).ravel()
+        # [修复] 2026-07-20 计算签名 (sig_quota 多样性保护依赖此字段)
+        if not ind.signature and ind.expression_str:
+            ind.signature = self._expr_signature(ind.expression_str)
 
     def _encode_population(self, population: List[EncodedIndividual],
                            factor_values_map: Dict[str, np.ndarray]):

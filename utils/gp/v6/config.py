@@ -386,6 +386,8 @@ AURA_DEFAULT_CONFIG = {
     'archive_size': 300,
     # [Archive] DNS 局部竞争的邻居数 k
     'dns_k_neighbors': 10,
+    # [Archive] 每个签名最多占用槽位数 (0=不限制) — sig_quota 签名多样性保护
+    'sig_quota': 5,
     # [编码器] 输入维度 (因子统计特征数)
     'encoder_input_dim': 8,
     # [编码器] 潜在空间维度
