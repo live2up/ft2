@@ -341,20 +341,10 @@ class GPEngine:
 
     @staticmethod
     def _structural_skeleton(expr_str: str) -> str:
-        """提取表达式结构骨架：变量→X，常数→C，保留函数名和嵌套结构。
-
-        [新增] 2026-07-20 P0-1 结构签名：解决单变量 GP 全部收敛到同一树形的问题。
-        原签名 m:t:v 只区分用了哪些函数/变量，无法区分嵌套结构：
-          ts_rank(X/ts_max(X,20),60) 和 ts_rank(ts_roc(X,5),60)
-        两者 m:none|t:ts_rank 签名相同，但树形完全不同。
-        骨架保留嵌套结构，让 Lexicase 能区分不同树形。
-        """
+        """结构骨架：变量→X，常数→C，保留嵌套关系。"""
         import re
-        # 替换所有大写变量名为 X（保留函数名，函数名都是小写）
-        skeleton = re.sub(r'\b[A-Z][A-Z_0-9]+\b', 'X', expr_str)
-        # 替换所有数字常数为 C
-        skeleton = re.sub(r'\b\d+(?:\.\d+)?\b', 'C', skeleton)
-        return skeleton
+        skel = re.sub(r'\b[A-Z][A-Z_0-9]+\b', 'X', expr_str)
+        return re.sub(r'\b\d+(?:\.\d+)?\b', 'C', skel)
 
     @staticmethod
     def _expr_signature(expr_str: str) -> str:
@@ -375,16 +365,14 @@ class GPEngine:
                 'signal_function')
         )) or 'none'
         var_counts = Counter(re.findall(r'\b([A-Z][A-Z_0-9]+)\b', expr_str))
-        # [优化] 2026-07-08 保留变量频次编码 v:count，提升方向追踪精度。
-        # 旧: "CLOSE+OPEN" 丢失频次; 新: "CLOSE:3+OPEN:1" 用于加权。
         vars_sig = '+'.join(f'{v}:{c}' for v, c in var_counts.most_common(4)) or 'none'
-        # [新增] 2026-07-20 P0-1 结构签名 s: 捕捉树形骨架，让不同嵌套结构有不同签名
-        struct_sig = GPEngine._structural_skeleton(expr_str)
-        # 截断到 80 字符，保持签名紧凑
-        if len(struct_sig) > 80:
+        # [新增] 2026-07-20 结构骨架: 变量→X, 常数→C, 保留嵌套关系
+        # 让 Lexicase 按树形分组而非仅按函数名，解决单变量收敛到同一结构的问题
+        skel = GPEngine._structural_skeleton(expr_str)
+        if len(skel) > 80:
             import hashlib
-            struct_sig = struct_sig[:40] + '..' + hashlib.md5(struct_sig.encode()).hexdigest()[:8]
-        return f"m:{math_sig}|t:{ts_sig}|v:{vars_sig}|s:{struct_sig}"
+            skel = skel[:40] + '..' + hashlib.md5(skel.encode()).hexdigest()[:8]
+        return f"m:{math_sig}|t:{ts_sig}|v:{vars_sig}|s:{skel}"
 
     def direction_report(self, min_fitness: float = 0.3) -> str:
         if not self.direction_log:
