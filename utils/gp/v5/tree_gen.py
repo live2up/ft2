@@ -257,15 +257,41 @@ def _random_tree_explore(user_cfg: TreeGenConfig, max_depth: int = 6) -> ast.Exp
 # 变异算子
 # ============================================================
 
+def _make_explore_config(cfg: TreeGenConfig) -> TreeGenConfig:
+    """创建无偏置探索配置：全量函数等权重，仅保留白名单约束。
+
+    [新增] 2026-07-20 P0-2 变异用全空间：打破"变异强化主导方向"的正反馈。
+    原 _mutate_subtree 用用户偏置权重(cfg)生成替换子树 → 变异只在已有方向内微调。
+    现在用全量等权探索配置 → 变异能引入完全不同的函数/结构，真正起到探索作用。
+    """
+    from .config import get_full_default_weights
+    full_defaults = get_full_default_weights()
+    return TreeGenConfig(
+        mode=cfg.mode,
+        group_weights=full_defaults['group_weights'],
+        ts_weights=full_defaults['ts_weights'],
+        math_weights=full_defaults['math_weights'],
+        var_allowlist=cfg.var_allowlist if cfg else None,
+        func_allowlist=cfg.func_allowlist if cfg else None,
+        rng=cfg.rng,
+    )
+
+
 def _mutate_subtree(cfg: TreeGenConfig, tree: ast.Expression, max_depth: int = 4) -> ast.Expression:
-    """子树替换变异"""
+    """子树替换变异
+
+    [修改] 2026-07-20 P0-2: 替换子树用无偏置全空间生成，不再使用用户偏置权重。
+    原理：如果用户权重偏 ts_rank(×3)，变异也只能生成 ts_rank 子树 →
+    种群收敛后变异失去探索能力。用全空间等权生成让变异成为真正的多样性来源。
+    """
     rng = cfg.rng
     new_tree = copy.deepcopy(tree)
     candidates = _collect_replaceable(new_tree)
     if not candidates:
         return new_tree
     target = rng.choice(candidates)
-    replacement = _grow_tree(cfg, rng.randint(1, max_depth))
+    explore_cfg = _make_explore_config(cfg)
+    replacement = _grow_tree(explore_cfg, rng.randint(1, max_depth))
     _replace_subtree(new_tree, target, replacement)
     ast.fix_missing_locations(new_tree)
     return _simplify_ast(new_tree)
