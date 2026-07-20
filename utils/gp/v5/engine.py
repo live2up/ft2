@@ -20,7 +20,7 @@ from .config import (
     GP_VARIABLES,
     TreeGenConfig, Individual, GenerationSnapshot,
     DEFAULT_TREE_GEN_CONFIG, DEFAULT_GP_CONFIG,
-    _fill_weights,
+    _fill_weights, _filter_funcs_by_var_scope,
     get_full_default_weights, _get_funcs_by_group, _get_fill_keys,
 )
 from .ast_utils import (
@@ -226,6 +226,12 @@ class GPEngine:
                 # [重构] 2026-07-07 用 _get_fill_keys 动态获取 key 集合，不再依赖 _FILL_TS_KEYS 等硬编码常量
                 key_set = _get_fill_keys(field.name)
                 filled[field.name] = _fill_weights(user_val, key_set)
+        # [新增] 2026-07-20 变量范围自动过滤：var_allowlist 有值时，
+        # 排除 data_vars 超限的函数（如 atr_sma 需要 HIGH/LOW/CLOSE）
+        if filled.get('var_allowlist'):
+            filled['ts_weights'], filled['math_weights'] = _filter_funcs_by_var_scope(
+                filled['ts_weights'], filled['math_weights'], filled['var_allowlist']
+            )
         return TreeGenConfig(**filled)
 
     # ── 适应度评估 ──

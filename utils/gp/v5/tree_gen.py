@@ -12,7 +12,7 @@ from utils.ast.v2.dsl import ast_depth, walk_nodes
 from utils.ast.v2.spec import make_var, make_const, make_compare, make_boolop, make_ifexp, make_unaryop
 from .config import (
     GP_VARIABLES, GP_CONSTANTS,
-    TreeGenConfig, get_full_default_weights,
+    TreeGenConfig, get_full_default_weights, _filter_funcs_by_var_scope,
 )
 from .ast_utils import (
     _collect_replaceable, _replace_subtree, _simplify_ast, _parent_map,
@@ -233,15 +233,21 @@ def _random_tree_explore(user_cfg: TreeGenConfig, max_depth: int = 6) -> ast.Exp
     """ε-greedy 探索通道: 无视用户权重，用默认全空间生成树（含自定义注册函数）
 
     [修复] 2026-07-09 传递 var_allowlist / func_allowlist，避免探索通道生成白名单外变量。
+    [修复] 2026-07-20 同步应用 _filter_funcs_by_var_scope，防止 data_vars 超限函数从探索通道漏入。
     """
     user_mode = user_cfg.mode if user_cfg else None
     full_defaults = get_full_default_weights()
+    ts_w = full_defaults['ts_weights']
+    math_w = full_defaults['math_weights']
+    allowlist = user_cfg.var_allowlist if user_cfg else None
+    if allowlist:
+        ts_w, math_w = _filter_funcs_by_var_scope(ts_w, math_w, allowlist)
     explore_cfg = TreeGenConfig(
         mode=user_mode,
         group_weights=full_defaults['group_weights'],
-        ts_weights=full_defaults['ts_weights'],
-        math_weights=full_defaults['math_weights'],
-        var_allowlist=user_cfg.var_allowlist if user_cfg else None,
+        ts_weights=ts_w,
+        math_weights=math_w,
+        var_allowlist=allowlist,
         func_allowlist=user_cfg.func_allowlist if user_cfg else None,
         rng=user_cfg.rng,
     )

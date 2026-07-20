@@ -88,6 +88,63 @@ DEFAULT_TREE_GEN_CONFIG = TreeGenConfig(
 
 _FILL_GROUP_KEYS = list(DEFAULT_TREE_GEN_CONFIG.group_weights.keys())
 
+
+def _filter_funcs_by_var_scope(ts_weights: dict, math_weights: dict,
+                                var_allowlist: set) -> tuple:
+    """自动排除 data_vars 超限的函数。
+
+    [新增] 2026-07-20 配合 var_allowlist 使用：
+    当用户限定变量范围时，自动禁用内部注入超限变量的函数。
+    例：var_allowlist={'REL_HIGH'}, atr_sma 的 data_vars=['HIGH','LOW','CLOSE']
+    → LOW/CLOSE 不在 allowlist → atr_sma 权重置 0。
+
+    这是严格模式——var_allowlist 是硬白名单，一切变量出入都必须遵守。
+    如果要逐步开放多类变量，应使用 var_weights 权重聚焦（非黑名单式的偏置），
+    而非 var_allowlist：
+      - var_allowlist → 严格单变量/少变量探索
+      - var_weights   → 偏置但不禁止，自然过渡到多变量
+
+    原理：_build_call_args 用 data_vars 直接注入变量，绕过 _random_variable
+    的 allowlist 检查。与其在生成层拦截，不如直接从函数池排除。
+    """
+    if not var_allowlist:
+        return ts_weights, math_weights
+
+    from utils.ast.v2.registry import FUNC_REGISTRY
+
+    def _in_scope(func_name: str) -> bool:
+        spec = FUNC_REGISTRY.get(func_name)
+        if spec and spec.data_vars:
+            return all(v in var_allowlist for v in spec.data_vars)
+        return True  # 无 data_vars 的函数不受限
+
+    filtered_ts = {}
+    excluded_ts = []
+    for f, w in (ts_weights or {}).items():
+        if w > 0 and not _in_scope(f):
+            excluded_ts.append(f)
+        else:
+            filtered_ts[f] = w
+
+    filtered_math = {}
+    excluded_math = []
+    for f, w in (math_weights or {}).items():
+        if w > 0 and not _in_scope(f):
+            excluded_math.append(f)
+        else:
+            filtered_math[f] = w
+
+    if excluded_ts or excluded_math:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"[GP] var_allowlist={var_allowlist} → "
+            f"自动排除函数: {sorted(excluded_ts + excluded_math)}"
+        )
+
+    return filtered_ts, filtered_math
+
+
 def _fill_weights(user_weights, default_keys, fill_value=0):
     """填充权重: 用户设了的用用户值，没设的填 fill_value (默认 0=禁止)"""
     filled = {}
