@@ -831,14 +831,12 @@ const PerfChart = {
         });
 
         // [新增] 2026-06-02 区间切换按钮 + 日期输入框
-        let _zoomJumping = false;
         const dateStart = ref('');
         const dateEnd = ref('');
         const jumpToRange = (range) => {
             if (!chartInstance || !datesRef.value.length) return;
             selectedRange.value = range;
             const n = datesRef.value.length;
-            _zoomJumping = true;
             if (range === 'all') {
                 chartInstance.dispatchAction({ type: 'dataZoom', start: 0, end: 100 });
                 return;
@@ -872,7 +870,7 @@ const PerfChart = {
             }
             if (startIdx >= endIdx) return;
             selectedRange.value = null;
-            _zoomJumping = true;
+            // [修复] 2026-07-21 使用 dispatchAction 触发 dataZoom 事件
             const sp = (startIdx / n) * 100;
             const ep = ((endIdx + 1) / n) * 100;
             chartInstance.dispatchAction({ type: 'dataZoom', start: sp, end: ep });
@@ -1034,7 +1032,7 @@ const PerfChart = {
                 if (statsEl) {
                     statsEl.innerHTML = statsHTML;
                 }
-                // [新增] 更新日期输入框
+                // [修复] 2026-07-21 拖动图表时同步更新日期输入框
                 dateStart.value = dates[startIdx];
                 dateEnd.value = dates[endIdx];
 
@@ -1112,11 +1110,12 @@ const PerfChart = {
 
             // dataZoom 事件
             chartInstance.on('datazoom', (params) => {
-                if (_zoomJumping) { _zoomJumping = false; }
-                else selectedRange.value = null;  // 手动拖拽 → 取消按钮高亮
+                selectedRange.value = null;  // 手动拖拽 → 取消按钮高亮
                 const opt = chartInstance.getOption();
                 const zoom = opt.dataZoom.find(z => z.type === 'slider') || opt.dataZoom[0];
-                if (zoom) updateChartData(zoom.start, zoom.end);
+                if (zoom) {
+                    updateChartData(zoom.start, zoom.end);
+                }
             });
         };
 
@@ -1148,9 +1147,9 @@ const PerfChart = {
                         <button @click="jumpToRange('3m')" :class="{ active: selectedRange === '3m' }">近3个月</button>
                         <button @click="jumpToRange('6m')" :class="{ active: selectedRange === '6m' }">半年</button>
                         <button @click="jumpToRange('1y')" :class="{ active: selectedRange === '1y' }">1年</button>
-                        <input type="date" class="perf-date-input" v-model="dateStart" @change="jumpToDateRange" title="起始日期">
+                        <input type="date" class="perf-date-input" v-model="dateStart" @keydown.enter="jumpToDateRange" min="1990-01-01" max="2099-12-31" title="起始日期">
                         <span class="perf-date-sep">至</span>
-                        <input type="date" class="perf-date-input" v-model="dateEnd" @change="jumpToDateRange" title="结束日期">
+                        <input type="date" class="perf-date-input" v-model="dateEnd" @keydown.enter="jumpToDateRange" min="1990-01-01" max="2099-12-31" title="结束日期">
                     </div>
                     <div class="chart-container chart-container-main"
                          ref="chartRef" :id="'perf-chart-' + chartId"
