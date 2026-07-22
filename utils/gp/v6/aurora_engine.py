@@ -343,6 +343,9 @@ class AuroraArchive:
         self._phi_cache: Optional[np.ndarray] = None
         self._stats_cache: Optional[np.ndarray] = None
         self._sig_counts: Dict[str, int] = {}  # signature → count
+        # [新增] 2026-07-21 混合距离权重: φ距离占比。
+        # α=0.3 ~ 编码器未成熟(签名主导); α=1.0 → 纯 φ 距离(编码器成熟)。
+        self.mix_alpha: float = 1.0
 
     def __len__(self) -> int:
         return len(self._individuals)
@@ -371,6 +374,20 @@ class AuroraArchive:
         if not self._individuals:
             return None
         return rng.choice(self._individuals)
+
+    # [新增] 2026-07-21 方向感知选择：签名→个体索引
+    # 签名等权采样保证每个结构方向获得均等繁殖机会，
+    # 解决均匀随机采样下常见签名垄断子代生成的问题。
+    def build_sig_index(self) -> Dict[str, List[EncodedIndividual]]:
+        """构建签名 → 个体列表的索引，供方向感知选择使用。"""
+        sig_map: Dict[str, List[EncodedIndividual]] = {}
+        for ind in self._individuals:
+            sig = ind.signature or 'unknown'
+            if sig not in sig_map:
+                sig_map[sig] = []
+            sig_map[sig].append(ind)
+        self._sig_index = sig_map
+        return sig_map
 
     def try_add(self, individual: EncodedIndividual) -> bool:
         """尝试将个体加入 archive, DNS 局部竞争决定去留。
@@ -413,8 +430,27 @@ class AuroraArchive:
         cand_count = self._sig_counts.get(cand_sig, 0)
 
         # 计算 k 近邻
+        # [增强] 2026-07-21 混合距离 = α×φ距离 + (1-α)×签名距离
+        # 冷启动期(α<1)用签名兜底: 不同签名的个体不因 φ 未成熟而被误判为近邻。
+        # 随编码器训练次数增长, α→1.0, 逐步过渡到纯 φ 距离。
         phi_c = candidate.phi.reshape(1, -1)
-        dists = np.sum((self._phi_cache - phi_c) ** 2, axis=1)
+        phi_dists = np.sum((self._phi_cache - phi_c) ** 2, axis=1)
+        alpha = getattr(self, 'mix_alpha', 1.0)
+        if alpha < 1.0:
+            # 签名距离: 同签名=0, 不同签名=1
+            sig_dists = np.array([
+                0.0 if (self._individuals[i].signature or '') == cand_sig else 1.0
+                for i in range(len(self._individuals))
+            ])
+            # 归一化 φ 距离到 [0,1] 区间, 与签名距离量纲对齐
+            phi_range = phi_dists.max() - phi_dists.min()
+            if phi_range > 1e-10:
+                phi_norm = (phi_dists - phi_dists.min()) / phi_range
+            else:
+                phi_norm = phi_dists
+            dists = alpha * phi_norm + (1.0 - alpha) * sig_dists
+        else:
+            dists = phi_dists
         k = min(self.k_neighbors, len(dists))
         neighbor_idx = np.argpartition(dists, k)[:k]
 
@@ -621,20 +657,54 @@ class AURORAEngine(GPEngine):
             k_neighbors=self._dns_k,
             sig_quota=self._sig_quota,
         )
+        # [新增] 2026-07-21 冷启动: 初始签名主导, 随训练过渡到 φ 主导
+        self.archive.mix_alpha = 0.3
 
         # 状态
         self._gen_best_individual: Optional[EncodedIndividual] = None
         self._encoder_losses: List[float] = []
+        # [新增] 2026-07-21 编码器训练次数, 用于计算 mix_alpha 成熟度
+        self._encoder_train_count: int = 0
 
     # ── 选择覆写 ──
 
-    def _select_parent(self) -> Individual:
-        """AURORA: 从 archive 均匀随机采样父代"""
-        parent = self.archive.uniform_sample(self.tree_gen_config.rng)
-        if parent is not None:
-            return parent
-        # fallback: archive 为空时用锦标赛
-        return super()._select_parent()
+    # [优化] 2026-07-21 方向感知选择：签名等权 → softmax fitness 加权
+    # 纯等权（1/N_sigs）导致好方向被稀释（冠军 fit 从 1.174→0.676），
+    # 改用 softmax(max_fitness / T) 在多样性和质量间取平衡。
+    # T=0.1: 好方向强加权；T=0.5: 温和偏置；T=1.0: 趋近等权。
+    _sig_select_temperature: float = 0.3
+
+    def _select_parent(self, exclude_sig: str = None) -> Individual:
+        """方向感知选择：签名按 fitness 加权，签名内均匀采样。
+
+        exclude_sig: 交叉时排除 p1 的签名，鼓励跨方向结构重组。
+        """
+        sig_map = getattr(self.archive, '_sig_index', None) or {}
+        if not sig_map:
+            # fallback: 签名索引未构建或为空 → 用锦标赛
+            return super()._select_parent()
+
+        # 排除指定签名（交叉时跨方向配对用）
+        candidates = sig_map
+        if exclude_sig and len(sig_map) > 1:
+            candidates = {k: v for k, v in sig_map.items() if k != exclude_sig}
+            if not candidates:
+                candidates = sig_map  # 只有一个签名方向时回退
+
+        rng = self.tree_gen_config.rng
+
+        # [优化] 2026-07-21 改用 softmax(fitness / T) 加权而非纯等权
+        # P(sig) ∝ exp(max_fitness(sig) / T)，T 越小好方向权重越大
+        sigs = list(candidates.keys())
+        max_fits = np.array([max(ind.fitness for ind in candidates[s]) for s in sigs])
+        # 平移数值稳定性 + softmax
+        max_fits = max_fits - max_fits.max()
+        T = self._sig_select_temperature
+        probs = np.exp(max_fits / max(T, 1e-6))
+        probs = probs / probs.sum()
+
+        sig = rng.choices(sigs, weights=probs.tolist(), k=1)[0]
+        return rng.choice(candidates[sig])
 
     # ── 编码 ──
 
@@ -667,7 +737,10 @@ class AURORAEngine(GPEngine):
             r = rng.random()
             if r < self.crossover_prob and len(self.archive) >= 2:
                 p1 = self._select_parent()
-                p2 = self._select_parent()
+                # [优化] 2026-07-21 交叉时排除 p1 签名 → 跨方向重组
+                # 同方向交叉只产出"同族变体"，跨方向才产生结构创新
+                # 例: ts_kurt + ts_predict → ts_predict(-ts_kurt(...)) = 1.174
+                p2 = self._select_parent(exclude_sig=p1.signature)
                 if p1 is not None and p2 is not None:
                     child = self._crossover(p1, p2)
                 else:
@@ -696,6 +769,16 @@ class AURORAEngine(GPEngine):
 
     # ── 编码器训练 ──
 
+    def _encoder_maturity(self) -> float:
+        """编码器成熟度: 训练次数 → mix_alpha。
+        
+        0 次: 0.30 (签名主导) → 1 次: 0.50 → 2: 0.70 → 3: 0.85 → 4+: 1.0 (纯φ)
+        每次 +0.15~0.20, 约 4 次训练后完全过渡到纯 φ 距离。
+        """
+        milestones = [0.30, 0.50, 0.70, 0.85, 1.0]
+        idx = min(self._encoder_train_count, len(milestones) - 1)
+        return milestones[idx]
+
     def _train_encoder_step(self):
         """用当前 archive 数据训练编码器"""
         individuals = self.archive.get_all()
@@ -707,6 +790,10 @@ class AURORAEngine(GPEngine):
         losses = self.encoder.fit(valid, steps=self._enc_steps,
                                   lr=self._enc_lr)
         self._encoder_losses.extend(losses)
+
+        # [新增] 2026-07-21 追踪训练次数 + 更新混合距离权重
+        self._encoder_train_count += 1
+        self.archive.mix_alpha = self._encoder_maturity()
 
         # 重新编码
         for ind in valid:
@@ -737,6 +824,9 @@ class AURORAEngine(GPEngine):
         self._initialize_archive()
 
         for gen in range(self.generations):
+            # [新增] 2026-07-21 每代重建签名索引，供方向感知选择使用
+            self.archive.build_sig_index()
+
             # 1. 生成子代
             children = self._generate_children(gen, self._children_per_gen)
 
@@ -746,19 +836,11 @@ class AURORAEngine(GPEngine):
             evaluated = [ind for ind in self.population if ind.fitness > -999]
 
             # 3+4. 编码 + DNS 归档
-            factor_values_map = {}  # 这里需要 evaluator 求值
-            for ind in evaluated:
-                # 重新求值拿到 factor_values (用于统计提取)
-                if self._evaluator and ind.expression_str:
-                    try:
-                        fv = self._evaluator(self.data, ind.tree)
-                        factor_values_map[ind.expression_str] = fv
-                    except Exception:
-                        pass
-
+            # [优化] 2026-07-21 复用 _evaluate_individual 中缓存的因子值，
+            #   避免每代对同一表达式重复求值。省掉 ~50% 评估耗时。
             for ind in evaluated:
                 enc_ind = EncodedIndividual.from_individual(ind)
-                fv = factor_values_map.get(ind.expression_str)
+                fv = getattr(ind, '_factor_values', None)
                 self._encode_individual(enc_ind, fv)
                 self.archive.try_add(enc_ind)
 
@@ -845,17 +927,15 @@ class AURORAEngine(GPEngine):
         self._evaluate_population()
 
         # 提取统计 + 编码 + 归档
+        # [优化] 2026-07-21 复用 _evaluate_individual 中缓存的因子值
         for ind in self.population:
             if ind.fitness <= -999:
                 continue
             enc_ind = ind if isinstance(ind, EncodedIndividual) \
                       else EncodedIndividual.from_individual(ind)
-            if self._evaluator and enc_ind.expression_str:
-                try:
-                    fv = self._evaluator(self.data, enc_ind.tree)
-                    self._encode_individual(enc_ind, fv)
-                except Exception:
-                    pass
+            fv = getattr(ind, '_factor_values', None)
+            if fv is not None:
+                self._encode_individual(enc_ind, fv)
             self.archive.try_add(enc_ind)
 
         # 初始编码器训练
@@ -873,8 +953,17 @@ class AURORAEngine(GPEngine):
 
     def top(self, n: int = 10) -> List[Individual]:
         individuals = self.archive.get_all()
-        return sorted([i for i in individuals if i.fitness > -999],
-                      key=lambda x: x.fitness, reverse=True)[:n]
+        # [修复] 2026-07-21 按表达式去重: 同一个表达式可能被多次独立发现,
+        # 旧逻辑只按 fitness 排序导致 Top-N 全是重复表达式。
+        seen: set = set()
+        unique = []
+        for i in sorted([i for i in individuals if i.fitness > -999],
+                        key=lambda x: x.fitness, reverse=True):
+            expr = i.expression_str
+            if expr not in seen:
+                seen.add(expr)
+                unique.append(i)
+        return unique[:n]
 
     def report(self) -> str:
         if not self.history:

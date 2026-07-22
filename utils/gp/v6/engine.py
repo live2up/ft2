@@ -76,7 +76,7 @@ class GPEngine:
         self.elite_count = max(1, int(self.population_size * cfg['elite_ratio']))
         self.seed_ratio = cfg['seed_ratio']
         self.random_inject_count = max(1, int(self.population_size * cfg['random_inject_ratio']))
-        self._save_random_inject: int = self.random_inject_count
+        # [删除] 2026-07-21 _save_random_inject — 仅被已删除的 _adapt_operators 使用
         self.parsimony_penalty = cfg['parsimony_penalty']
 
         # [新增] 2026-07-08 年龄机制: 防止种群老龄化，保持多样性
@@ -143,53 +143,18 @@ class GPEngine:
                                           source=self._source,
                                           session_id=session_id)
 
-        # 方向演化追踪
-        self.direction_log: Dict[str, List[float]] = {}
-        self._direction_best_expr: Dict[str, tuple] = {}
-        self._direction_per_sig_snapshot: Dict[str, int] = {}
+        # [删除] 2026-07-21 清理 v5 死代码:
+        #   方向演化追踪/stagnation检测/ε-Lexicase/Motif/快照/岛屿模型
+        #   v6 用 AURORA Archive + DNS + 方向感知选择替代
 
-        # 停滞检测
-        self._stagnation_counter: int = 0
-        self._last_best_fitness: float = -999.0
-        self._save_crossover_prob: float = self.crossover_prob
-        self._save_mutation_prob: float = self.mutation_prob
-        self._stagnation_threshold: int = 3
-
-        # ε-greedy 探索
-        self._explore_ratio: float = config.get('explore_ratio', 0.15) if config else 0.15
-
-        # [新增] 2026-07-08 ε-Lexicase: 允许 fitness 差距 ε 内的个体同为代表，保留多样性
+        # 但仍保留 _use_lexicase 标志:
+        #   AURORAEngine._select_parent 在 archive 空时 fallback 到 GPEngine._select_parent,
+        #   需要此标志决定走 tournament 还是 lexicase
         self._use_lexicase: bool = config.get('lexicase', False) if config else False
-        self._epsilon: float = config.get('epsilon', 0.05) if config else 0.05
-        # [新增] 2026-07-09 方向配额精英参数: 每个方向最多保留 N 个代表
-        # None = 不限制（纯 fitness 排序，等同原始 lexicase）
-        self._elite_max_per_sig: Optional[int] = config.get('elite_max_per_sig', 1) if config else 1
+        self._num_islands: int = config.get('num_islands', 1) if config else 1
 
-        # [新增] 2026-07-08 Motif 库: 提取高频子树作为高质量种子
-        self._motif_enabled: bool = cfg.get('motif_enabled', True)
-        self._motif_update_every: int = cfg.get('motif_update_every', 3)
-        self._motif_min_fitness: float = cfg.get('motif_min_fitness', 0.0)
-        self._motif_max_depth: int = max(1, int(self.max_depth * cfg.get('motif_max_depth_ratio', 0.5)))
-        self._motif_inject_count: int = cfg.get('motif_inject_count', 5)
-        # Motif 库结构: {canonical_key: {"count": int, "fitness_sum": float, "expr": str, "depth": int}}
-        self._motif_library: Dict[str, Dict] = {}
-
-        # [新增] 2026-07-08 每代快照（替代零散 _sig_index 等）
-        self._snap: Optional[GenerationSnapshot] = None
-
-        # [新增] 2026-07-09 岛屿模型参数
-        self._num_islands: int = max(1, cfg.get('num_islands', 1))
-        self._migrate_every: int = cfg.get('migrate_every', 5)
-        self._migrate_count: int = cfg.get('migrate_count', 2)
-        self._islands: List[List[Individual]] = []
-        self._island_size: int = max(1, self.population_size // self._num_islands)
-
-        # [新增] 2026-07-09 岛屿模式强制开启 lexicase 选择
-        # 理由: 岛屿模式目的是隔离演化维持多样性, lexicase 是方向多样性转化为选择多样性的核心保障,
-        #       两者必须搭配; 用户在岛屿模式下设 lexicase=False 属于误用, 自动纠正.
-        if self._num_islands > 1 and not self._use_lexicase:
-            self._use_lexicase = True
-            logger.info("[GP] 岛屿模式自动开启 lexicase 选择（多样性保障）")
+        # ε-greedy 探索 (仍被 _fill_one_population → _initialize_archive 使用)
+        self._explore_ratio: float = config.get('explore_ratio', 0.15) if config else 0.15
 
     # ── 配置构建 ──
 
@@ -262,6 +227,13 @@ class GPEngine:
         if cached is not None:
             ind.fitness, ind.depth, ind.node_count = cached
             raw_fitness = cached[0]
+            # [修复] 2026-07-21 缓存命中时仍需求值，供 AURORA 编码阶段复用
+            # 不调 evaluator → _factor_values 缺失 → 种子被 archive 误拒
+            try:
+                if self._evaluator:
+                    ind._factor_values = self._evaluator(self.data, ind.tree)
+            except Exception:
+                ind._factor_values = None
         else:
             if not self._quick_filter(ind):
                 return -999.0
@@ -269,6 +241,8 @@ class GPEngine:
             try:
                 if self._evaluator:
                     factor_values = self._evaluator(self.data, ind.tree)
+                    # [新增] 2026-07-21 缓存因子值，供 AURORA 编码阶段复用，省掉重复求值
+                    ind._factor_values = factor_values
                 else:
                     return -999.0
             except Exception as e:
@@ -464,116 +438,12 @@ class GPEngine:
         lines.append(f"{'='*60}")
         return '\n'.join(lines)
 
-    def _update_direction_weights(self):
-        """EMA 闭环方向权重更新"""
-        cfg = self.tree_gen_config
-        if not cfg or not cfg.adaptive:
-            return
+    # [删除] 2026-07-21 _update_direction_weights — v5 自适应权重 EMA 闭环
+    #   v6 用 AURORA softmax(fitness/T) 方向感知选择替代, 不修改生成层权重
 
-        new_records: Dict[str, List[float]] = {}
-        total_entries = 0
-        for sig, fits in self.direction_log.items():
-            offset = self._direction_per_sig_snapshot.get(sig, 0)
-            new_fits = fits[offset:]
-            if new_fits:
-                new_records[sig] = new_fits
-                total_entries += len(new_fits)
-            self._direction_per_sig_snapshot[sig] = len(fits)
+    # [删除] 2026-07-21 _normalize_weights — v5 自适应权重辅助, v6 不需要
 
-        if total_entries < 10:
-            return
-
-        sig_scores = {}
-        for sig, fits in new_records.items():
-            if not fits:
-                continue
-            best = max(fits)
-            sig_scores[sig] = best * np.log1p(len(fits))
-
-        if not sig_scores:
-            return
-
-        max_score = max(sig_scores.values())
-        if max_score <= 0.1:
-            return
-
-        var_scores: Dict[str, float] = {}
-        ts_scores: Dict[str, float] = {}
-        math_scores: Dict[str, float] = {}
-
-        for sig, score in sig_scores.items():
-            norm_score = score / max_score
-            parts = {}
-            for p in sig.split('|'):
-                if ':' in p:
-                    k, v = p.split(':', 1)
-                    parts[k] = v.split('+') if v != 'none' else []
-            # [优化] 2026-07-08 解析 v:count 编码，按频次加权。
-            for item in parts.get('v', []):
-                if ':' in item:
-                    v, cnt = item.split(':')
-                    var_scores[v] = var_scores.get(v, 0) + norm_score * float(cnt)
-                else:
-                    var_scores[item] = var_scores.get(item, 0) + norm_score
-            # ts_scores / math_scores 仍按原始逻辑（无频次编码）
-            for f in parts.get('t', []):
-                ts_scores[f] = ts_scores.get(f, 0) + norm_score
-            for f in parts.get('m', []):
-                math_scores[f] = math_scores.get(f, 0) + norm_score
-
-        lr = cfg.adaptive_lr
-        var_w = cfg.var_weights
-        if var_w and var_scores:
-            for v in var_w:
-                old = var_w.get(v, 0)
-                score = var_scores.get(v, 0)
-                var_w[v] = (1 - lr) * old + lr * score * 3.0
-            self._normalize_weights(var_w, min_w=0.05)
-        ts_w = cfg.ts_weights
-        if ts_w and ts_scores:
-            for f in ts_w:
-                old = ts_w.get(f, 0)
-                score = ts_scores.get(f, 0)
-                ts_w[f] = (1 - lr) * old + lr * score * 3.0
-            self._normalize_weights(ts_w, min_w=0.05)
-        mw = cfg.math_weights
-        if mw and math_scores:
-            for f in mw:
-                old = mw.get(f, 0)
-                score = math_scores.get(f, 0)
-                mw[f] = (1 - lr) * old + lr * score * 3.0
-            self._normalize_weights(mw, min_w=0.05)
-
-    @staticmethod
-    def _normalize_weights(weights: Dict[str, float], min_w: float = 0.05):
-        if not weights:
-            return
-        total = sum(weights.values())
-        if total <= 0:
-            for k in weights:
-                weights[k] = 1.0 / len(weights)
-            return
-        for k in weights:
-            weights[k] = max(min_w, weights[k] / total)
-
-    def _adapt_operators(self, gen_best_fitness: float):
-        """AW-MEP 风格停滞检测 + 算子自适应"""
-        if gen_best_fitness > self._last_best_fitness + 1e-4:
-            self._stagnation_counter = 0
-            self._last_best_fitness = gen_best_fitness
-            self.crossover_prob = self._save_crossover_prob
-            self.mutation_prob = self._save_mutation_prob
-            self.random_inject_count = self._save_random_inject
-        else:
-            self._stagnation_counter += 1
-            if self._stagnation_counter >= self._stagnation_threshold:
-                self.mutation_prob = min(0.5, self.mutation_prob * 1.3)
-                self.crossover_prob = max(0.2, self.crossover_prob * 0.85)
-                if self._stagnation_counter >= 5:
-                    self.random_inject_count = min(
-                        int(self.population_size * 0.3),
-                        self.random_inject_count * 2,
-                    )
+    # [删除] 2026-07-21 _adapt_operators — v5 停滞检测 + 算子自适应, v6 不需要
 
     # ── Motif 库管理 ──
 
@@ -1083,16 +953,8 @@ class GPEngine:
         }
         self.history.append(gen_stats)
 
-        self._snap = self._build_snapshot(gen)
-
-        cfg = self.tree_gen_config
-        if cfg and cfg.adaptive and gen > 0 and gen % cfg.adaptive_every == 0:
-            self._update_direction_weights()
-
-        if self._motif_enabled and gen > 0 and gen % self._motif_update_every == 0:
-            self._update_motif_library()
-
-        self._adapt_operators(gen_best.fitness)
+        # [删除] 2026-07-21 移除 v5 自适应权重/停滞检测/Motif/方向追踪
+        #   v6 用 AURORA Archive + 方向感知选择替代, 这些代码从未被调用
 
         if callback:
             callback(gen, gen_best, gen_stats)

@@ -8,6 +8,10 @@
  *   优化: 布局间距紧凑化
  * v2.2 — 2026-06-16
  *   重构: ChartToolbar 统一渲染组件，消除6处 toolbar 模板重复
+ * v2.3 — 2026-07-22
+ *   修复: PerfChart 日期输入框双向同步(@keydown.enter + dispatchAction)
+ *   重构: 提取模块级函数 getColors/buildAreaStyle/lineSeries，消除多处重复
+ *   清理: 删除 getColorsLocal 空转发、hasBenchmark 未使用 computed、scatter var 残留
  *
  * v2.0 — 2026-05-17
  *   新增: 滚动轴(line/area/bar/kline)、全屏(五个组件)
@@ -63,6 +67,32 @@ const COMMON_CHART_OPTIONS = {
 // [重构] 2026-05-30 Grid legend 高度（px），与后端 notebook.py legend_h 同步
 const GRID_LEGEND_HEIGHT = 28;
 
+// [新增] 2026-07-21 统一配色获取函数，消除 useChart/GridChart 重复
+function getColors(chartType) {
+    const colorPalettes = window.colorPalettes;
+    if (!colorPalettes) return DEFAULT_COLORS.map(c => c);
+    const group = chartType ? (colorPalettes.typeToGroup?.[chartType] || 'chart') : 'chart';
+    const paletteKey = colorPalettes.groups?.[group] || colorPalettes.global;
+    const palette = colorPalettes.palettes?.[paletteKey];
+    return palette ? palette.colors.map(c => c) : DEFAULT_COLORS.map(c => c);
+}
+
+// [新增] 2026-07-21 统一 areaStyle 渐变构建，消除多处重复
+function buildAreaStyle(color) {
+    return { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+        colorStops: [{ offset: 0, color: color + '60' }, { offset: 1, color: color + '10' }] } };
+}
+
+// [新增] 2026-07-21 统一 line/area 系列样式，消除 PerfChart 中 5 处重复
+function lineSeries(name, data, opts = {}) {
+    return { name, type: 'line', smooth: true, symbol: 'none', data,
+        ...(opts.xAxisIndex !== undefined ? { xAxisIndex: opts.xAxisIndex } : {}),
+        ...(opts.yAxisIndex !== undefined ? { yAxisIndex: opts.yAxisIndex } : {}),
+        ...(opts.lineStyle ? { lineStyle: opts.lineStyle } : {}),
+        ...(opts.itemStyle ? { itemStyle: opts.itemStyle } : {}),
+        ...(opts.areaStyle ? { areaStyle: opts.areaStyle } : {}) };
+}
+
 // [重构] 2026-05-30 共享图表配置规则：常规 chart 和 Grid chart 统一标准
 // 输入即输出原则：不做 time 类型转换，category 直接显示原始字符串
 const CHART_AXIS_RULES = {
@@ -84,8 +114,7 @@ const CHART_AXIS_RULES = {
                     base.showSymbol = false;
                     if (chartType === 'area') {
                         const c = (colors[i % colors.length] || '#e74c3c');
-                        base.areaStyle = { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-                            colorStops: [{ offset: 0, color: c + '60' }, { offset: 1, color: c + '10' }] } };
+                        base.areaStyle = buildAreaStyle(c);
                     }
                 }
                 if (chartType === 'bar') {
@@ -139,7 +168,6 @@ function applyGridAxisRules(option) {
             if (!x.type && x.data) x.type = 'category';
             // [修复] 2026-05-30 折线/面积图从起点开始（boundaryGap:false），柱状图/K线留白（true）
             const xSeries = (option.series || []).filter(s => (s.xAxisIndex ?? 0) === idx);
-            const firstType = xSeries[0]?.type || 'line';
             const isBarOrKline = xSeries.length > 0 && xSeries.every(s => s.type === 'bar' || s.type === 'candlestick');
             x.boundaryGap = isBarOrKline;  // bar/K线 true，line/area 等 false
             x.axisLabel = { margin: 8, ...(x.axisLabel || {}) };
@@ -175,14 +203,7 @@ function useChart(props, chartOptions = {}) {
     const chartRef = ref(null);
     let chartInstance = null;
 
-    const getColors = (chartType) => {
-        const colorPalettes = window.colorPalettes;
-        if (!colorPalettes) return DEFAULT_COLORS;
-        const group = colorPalettes.typeToGroup?.[chartType] || 'chart';
-        const paletteKey = colorPalettes.groups?.[group] || colorPalettes.global;
-        const palette = colorPalettes.palettes?.[paletteKey];
-        return palette ? palette.colors : DEFAULT_COLORS;
-    };
+    // [重构] 2026-07-22 删除 getColorsLocal 空转发，直接调用模块级 getColors
 
     const extractData = (charts) => {
         if (!charts?.series?.[0]) return null;
@@ -254,7 +275,7 @@ function useChart(props, chartOptions = {}) {
         chartInstance?.dispose();
     });
 
-    return { chartRef, initChart, updateChart, getChartOption, getColors, extractData, refreshChart: initChart };
+    return { chartRef, initChart, updateChart, getChartOption, extractData, refreshChart: initChart };
 }
 
 // [提取] 2026-05-18 全屏 composable，消除 GenericChart/HeatmapChart/StackedChart/GridChart 中的重复
@@ -392,7 +413,7 @@ const GenericChart = {
                         if (chartType === 'line' || chartType === 'area') {
                             baseOption.smooth = true;
                             baseOption.showSymbol = false;
-                            if (chartType === 'area') baseOption.areaStyle = { color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: colors[i % colors.length] + '60' }, { offset: 1, color: colors[i % colors.length] + '10' }] } };
+                            if (chartType === 'area') baseOption.areaStyle = buildAreaStyle(colors[i % colors.length]);
                         }
                         if (isBarChart) baseOption.itemStyle = { color: rawSeries.length === 1 && !s.stack ? function(params) { return params.value >= 0 ? colors[0] : colors[1]; } : colors[i % colors.length], borderRadius: [4, 4, 0, 0] };
                         if (chartType === 'bar') baseOption.label = { show: showBarLabel.value, position: 'top' };
@@ -409,11 +430,11 @@ const GenericChart = {
                     option.grid = CHART_AXIS_RULES.grid.build(showDataZoom.value);
 
                     // [新增] 2026-06-16 气泡图：检测 value.length === 3 自动启用
-                    var isBubble = false;
-                    var sizeMin = Infinity, sizeMax = -Infinity;
+                    let isBubble = false;
+                    let sizeMin = Infinity, sizeMax = -Infinity;
                     (option.series || []).forEach(function(s) {
                         (s.data || []).forEach(function(d) {
-                            var v = (d && d.value) || d;
+                            const v = (d && d.value) || d;
                             if (Array.isArray(v) && v.length >= 3) {
                                 isBubble = true;
                                 if (v[2] < sizeMin) sizeMin = v[2];
@@ -425,7 +446,7 @@ const GenericChart = {
                     if (isBubble) {
                         option.series.forEach(function(s) {
                             s.symbolSize = function(val) {
-                                var size = (val && val[2]) || 0;
+                                const size = (val && val[2]) || 0;
                                 return 8 + (size - sizeMin) / Math.max(sizeMax - sizeMin, 1) * 40;
                             };
                         });
@@ -439,7 +460,7 @@ const GenericChart = {
                     option.tooltip = {
                         trigger: 'item',
                         formatter: function(p) {
-                            var v = p.data;
+                            const v = p.data;
                             if (v && v.name !== undefined && Array.isArray(v.value)) {
                                 return v.name + ' (' + v.value[0] + ', ' + v.value[1] + ')';
                             }
@@ -727,6 +748,7 @@ const StackedChart = {
                 const tooltipFormatter = buildTooltipFormatter(rawData, totals, showRaw, showPercentStack);
                 
                 let displaySeries, yAxisConfig;
+                const isBarChart = chartType === 'bar';
                 
                 if (normalize) {
                     // 【归一化模式】数据转为百分比，Y轴固定0-100
@@ -738,14 +760,12 @@ const StackedChart = {
                     
                     // 【关键修复】堆叠柱状图必须强制从0开始，否则小数值系列（如72 vs 172）会被压缩看不见
                     // scale: true 会让Y轴自适应最小值，导致小数值几乎不可见
-                    const isBarChart = chartType === 'bar';
-                    yAxisConfig = { 
-                        type: 'value', 
+                    yAxisConfig = {
+                        type: 'value',
                         scale: !isBarChart,              // 柱状图禁用自适应，强制从0开始
                         boundaryGap: isBarChart ? [0, '10%'] : ['10%', '10%']  // 柱状图底部无间隙
                     };
                 }
-                const isBarChart = chartType === 'bar';
                 const legendCount = series.length;
                 const legendType = legendCount > 10 ? 'scroll' : 'plain';
                 const option = {
@@ -770,15 +790,7 @@ const StackedChart = {
                             baseOption.smooth = true;
                             baseOption.showSymbol = false;
                             if (chartType === 'area') {
-                                baseOption.areaStyle = {
-                                    color: {
-                                        type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-                                        colorStops: [
-                                            { offset: 0, color: colors[i % colors.length] + '60' },
-                                            { offset: 1, color: colors[i % colors.length] + '10' }
-                                        ]
-                                    }
-                                };
+                                baseOption.areaStyle = buildAreaStyle(colors[i % colors.length]);
                             }
                         }
                         if (isBarChart) baseOption.itemStyle = { color: colors[i % colors.length], borderRadius: [4, 4, 0, 0] };
@@ -824,11 +836,6 @@ const PerfChart = {
         const { isFullscreen, toggleFullscreen } = useFullscreen();
         const datesRef = ref([]);            // [新增] 日期数组，供区间跳转使用
         const selectedRange = ref('all');    // [新增] 当前选中区间
-
-        const hasBenchmark = computed(() => {
-            const series = props.cell.content?.charts?.series || [];
-            return series.length > 1;
-        });
 
         // [新增] 2026-06-02 区间切换按钮 + 日期输入框
         const dateStart = ref('');
@@ -951,12 +958,8 @@ const PerfChart = {
                 const fullStratDD = new Array(startIdx).fill(null).concat(stratDD);
 
                 const seriesData = [
-                    { name: stratName, type: 'line', smooth: true, symbol: 'none',
-                      xAxisIndex: 0, yAxisIndex: 0, data: fullStratRets,
-                      lineStyle: { width: 2 }, areaStyle: { opacity: 0.05 } },
-                    { name: '回撤', type: 'line', smooth: true, symbol: 'none',
-                      xAxisIndex: 1, yAxisIndex: 1, data: fullStratDD,
-                      lineStyle: { width: 2, color: '#e74c3c' }, itemStyle: { color: '#e74c3c' } }
+                    lineSeries(stratName, fullStratRets, { xAxisIndex: 0, yAxisIndex: 0, lineStyle: { width: 2 }, areaStyle: { opacity: 0.05 } }),
+                    lineSeries('回撤', fullStratDD, { xAxisIndex: 1, yAxisIndex: 1, lineStyle: { width: 2, color: '#e74c3c' }, itemStyle: { color: '#e74c3c' } })
                 ];
 
                 let visibleBenchRets = null;
@@ -974,15 +977,9 @@ const PerfChart = {
                     const fullExcessRets = new Array(startIdx).fill(null).concat(excessRets);
 
                     seriesData.push(
-                        { name: benchName, type: 'line', smooth: true, symbol: 'none',
-                          xAxisIndex: 0, yAxisIndex: 0, data: fullBenchRets,
-                          lineStyle: { width: 2 } },
-                        { name: '超额', type: 'line', smooth: true, symbol: 'none',
-                          xAxisIndex: 0, yAxisIndex: 0, data: fullExcessRets,
-                          lineStyle: { width: 2, type: 'dashed' } },
-                        { name: benchName + '回撤', type: 'line', smooth: true, symbol: 'none',
-                          xAxisIndex: 1, yAxisIndex: 1, data: fullBenchDD,
-                          lineStyle: { width: 2, color: '#1890ff' }, itemStyle: { color: '#1890ff' } }
+                        lineSeries(benchName, fullBenchRets, { xAxisIndex: 0, yAxisIndex: 0, lineStyle: { width: 2 } }),
+                        lineSeries('超额', fullExcessRets, { xAxisIndex: 0, yAxisIndex: 0, lineStyle: { width: 2, type: 'dashed' } }),
+                        lineSeries(benchName + '回撤', fullBenchDD, { xAxisIndex: 1, yAxisIndex: 1, lineStyle: { width: 2, color: '#1890ff' }, itemStyle: { color: '#1890ff' } })
                     );
                 }
 
@@ -1133,7 +1130,7 @@ const PerfChart = {
             chartInstance?.dispose();
         });
 
-        return { chartRef, chartId, isFullscreen, toggleFullscreen, hasBenchmark, selectedRange, jumpToRange, jumpToDateRange, dateStart, dateEnd, toolbarButtons: computed(() => [
+        return { chartRef, chartId, isFullscreen, toggleFullscreen, selectedRange, jumpToRange, jumpToDateRange, dateStart, dateEnd, toolbarButtons: computed(() => [
             { id: 'fs', label: '⛶', title: isFullscreen.value ? '退出全屏' : '全屏', active: isFullscreen.value, onClick: toggleFullscreen },
         ]) };
     },
@@ -1187,13 +1184,7 @@ const GridChart = {
         );
         const { isFullscreen, toggleFullscreen } = useFullscreen();
 
-        const getColors = () => {
-            const colorPalettes = window.colorPalettes;
-            if (!colorPalettes) return DEFAULT_COLORS;
-            const paletteKey = colorPalettes.groups?.chart || colorPalettes.global;
-            const palette = colorPalettes.palettes?.[paletteKey];
-            return palette ? palette.colors : DEFAULT_COLORS;
-        };
+        // [重构] 2026-07-21 改用模块级 getColors，消除重复
 
         const buildGridOption = () => {
             const charts = props.cell.content?.charts;
